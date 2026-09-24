@@ -3,7 +3,11 @@ name: ci
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -20,3 +24,46 @@ jobs:
       # Model-free suite: supervisor loop, memory contracts, CLI, HTTPS server
       # (uses fake codegraph binaries and scripted agent sessions).
       - run: npm test
+
+  # The npm package behind `npx github:beiyanpiki/pir` and
+  # `npm i -g github:beiyanpiki/pir` (no npm registry publish): pack the
+  # files whitelist from package.json with the freshly built dist/, smoke-test
+  # that exact tarball the way npx installs it, upload it as a workflow
+  # artifact, and on v* tags attach it to the GitHub release so pinned
+  # installs can use
+  #   npm i -g github:beiyanpiki/pir/releases/download/vX.Y.Z/pir-X.Y.Z.tgz
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Pack the npm tarball
+        run: npm pack
+      - name: Smoke-test the tarball (the npx install path)
+        run: |
+          mkdir /tmp/pir-smoke && cd /tmp/pir-smoke
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE"/pir-*.tgz
+          PIR_NO_WIZARD=1 npx --no-install pir version
+          PIR_NO_WIZARD=1 npx --no-install pir skill path
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pir-npm-package
+          path: pir-*.tgz
+          if-no-files-found: error
+      - name: Attach the tarball to the release (v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --generate-release-notes --title "$tag"
+          gh release upload "$tag" pir-*.tgz --clobber

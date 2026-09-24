@@ -72,32 +72,81 @@ Key invariants:
 
 ## Installation
 
-**Docker (recommended, both for humans and agents):**
+**npx — straight from GitHub, no npm publish, no install:**
+
+```bash
+npx -y github:beiyanpiki/pir find --json
+# or keep it:                       (Node >= 22.5; the git install builds itself)
+npm i -g github:beiyanpiki/pir     # provides `pir`
+```
+
+CI builds and smoke-tests this exact package on every push (`package` job in
+[ci.yml](.github/workflows/ci.yml)), uploads it as a workflow artifact, and
+attaches `pir-<version>.tgz` to the GitHub release on `v*` tags for pinned
+installs.
+
+On the first interactive run `pir` starts a short setup wizard and writes
+`~/.pir/config.json` (chmod 600): **local mode** (default — review in the
+current repo with this machine's pi credentials) or **remote mode** (forward
+everything to a `pir serve` instance; `find` ships your local state as a git
+bundle, so unpushed/uncommitted code reviews fine). Non-interactive runs fall
+back to local defaults with a one-line hint. Manage later:
+
+```bash
+pir config show                                   # effective config (token masked)
+pir config set mode remote                        # + server.url / server.token / server.insecure
+pir config wizard                                 # re-run the setup wizard
+pir --local find --json                           # one-off override, either direction
+pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
+```
+
+**Skill for your coding agent:** `pir skill install` drops a ready-made
+LLM skill (`skills/pir/SKILL.md` in this repo) into `~/.agents/skills/pir/`,
+teaching the agent when and how to drive the CLI — install, modes, JSON
+protocol, feedback loop, troubleshooting. `pir skill print` dumps it for any
+other agent framework.
+
+**Docker (recommended for the service side):**
 
 ```bash
 docker pull ghcr.io/beiyanpiki/pir:main
 # interactive QA deployment of the HTTPS service:
-sh docker/deploy.sh          # asks token / API key / port / TLS, then verifies
+sh docker/deploy.sh          # asks token / provider+model+key / port / TLS, then verifies
 ```
 
-**Local CLI:**
+**From a checkout (extension + CLI):**
 
 ```bash
 npm i -g .                   # provides `pir`
 pi install $(pwd)            # Pi extension: /review-* commands
 ```
 
-**Model access (official Zhipu GLM):** pi's built-in `zai-coding-cn` provider
-targets the official coding endpoint. Store your bigmodel key:
+**Model access (any pi provider):** pir runs on every provider Pi supports —
+anthropic, openai, google, deepseek, moonshotai, zai-coding-cn, minimax,
+openrouter, xai, groq, and the rest of the catalog. Browse it:
+
+```bash
+pir models                   # models you have credentials for
+pir models --all glm         # full catalog, fuzzy-filtered
+pir models --ids --provider deepseek   # one provider/model per line
+```
+
+Store credentials in `~/.pi/agent/auth.json` (chmod 600), one entry per
+provider:
 
 ```jsonc
-// ~/.pi/agent/auth.json (chmod 600)
-{ "zai-coding-cn": { "type": "api_key", "key": "<your bigmodel key>" } }
+{
+  "zai-coding-cn": { "type": "api_key", "key": "<your bigmodel key>" },
+  "anthropic": { "type": "api_key", "key": "sk-ant-..." }
+}
 ```
 
 and default the model in `~/.pi/agent/settings.json`
-(`defaultProvider: "zai-coding-cn"`, `defaultModel: "glm-5.3-flash"`,
-`defaultThinkingLevel: "low"` — GLM accepts low/high/max only).
+(`defaultProvider`/`defaultModel`/`defaultThinkingLevel`). Precedence for the
+review/verify sessions: `--model <provider>/<model>` flag (fuzzy ids work) >
+`PIR_MODEL` env > `~/.pir/config.json` `model` > pi settings. In Docker, inject credentials per provider
+instead: `-e PI_API_KEY__deepseek=sk-...` (or `PI_AUTH_JSON` with the full
+map) plus `PI_DEFAULT_PROVIDER`/`PI_DEFAULT_MODEL` for the default.
 
 ## For LLMs
 
@@ -133,7 +182,7 @@ exit-code contract in [docs/for-llm.md](docs/for-llm.md).
 ## Development
 
 ```bash
-npm run build && npm test   # 48 model-free tests (scripted agent sessions)
+npm run build && npm test   # 50 model-free tests (scripted agent sessions)
 PIR_EVAL=1 node tests/eval/run-eval.js   # evaluation suite (needs a model)
 ```
 

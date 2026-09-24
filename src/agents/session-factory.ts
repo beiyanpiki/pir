@@ -1,53 +1,31 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import process from "node:process";
 import {
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
-  getAgentDir,
   ModelRuntime,
   resolveCliModel,
   SessionManager,
   type CreateAgentSessionOptions,
 } from "@earendil-works/pi-coding-agent";
+import { readPiStartupModel } from "./pi-models.js";
 import type { AgentHandle, AgentSessionFactory, ReviewTool, SessionConfig } from "./types.js";
 
 type SessionModel = NonNullable<CreateAgentSessionOptions["model"]>;
 type SessionThinkingLevel = NonNullable<CreateAgentSessionOptions["thinkingLevel"]>;
 
-interface PiStartupModel {
+interface ValidatedStartupModel {
   modelSpec?: string;
   thinking?: SessionThinkingLevel;
 }
 
 /**
- * Sub-sessions deliberately load resources from an EMPTY agentDir (no user
- * extensions), so they cannot see the user's startup model selection. This
- * reads the real ~/.pi/agent/settings.json so reviewer/verifier sessions use
- * the same default model as interactive pi.
- */
-function readPiStartupModel(): PiStartupModel {
-  try {
-    const settings = JSON.parse(readFileSync(path.join(getAgentDir(), "settings.json"), "utf8")) as {
-      defaultProvider?: string;
-      defaultModel?: string;
-      defaultThinkingLevel?: string;
-    };
-    const prefix = settings.defaultProvider ? `${settings.defaultProvider}/` : "";
-    const modelSpec = settings.defaultModel ? `${prefix}${settings.defaultModel}` : undefined;
-    const raw = settings.defaultThinkingLevel;
-    const thinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(raw ?? "")
-      ? (raw as SessionThinkingLevel)
-      : undefined;
-    return { modelSpec, thinking };
-  } catch {
-    return {};
-  }
-}
-
-/**
- * The ONLY module that imports the pi SDK. Sub-sessions run with:
+ * One of the two modules that import the pi SDK (with pi-models.ts) — keep it
+ * that way so the pi dependency stays confined to src/agents/. Sub-sessions
+ * run with:
  * - SessionManager.inMemory() — no persisted conversation, disposed afterwards
  * - an empty agentDir resource loader — user extensions/skills never load
  * - a builtin-tool allowlist — read-only builtins plus our custom tools
@@ -55,16 +33,29 @@ function readPiStartupModel(): PiStartupModel {
  */
 export class PiSessionFactory implements AgentSessionFactory {
   private runtimePromise: Promise<ModelRuntime> | null = null;
-  private startupModel: PiStartupModel | null = null;
+  private startupModelCache: ValidatedStartupModel | null = null;
 
   private runtime(): Promise<ModelRuntime> {
     this.runtimePromise ??= ModelRuntime.create();
     return this.runtimePromise;
   }
 
-  private defaultModel(): PiStartupModel {
-    this.startupModel ??= readPiStartupModel();
-    return this.startupModel;
+  /**
+   * Default model from the real ~/.pi/agent/settings.json (sub-sessions load
+   * an empty agentDir, so they cannot see the interactive startup selection);
+   * the thinking level is validated against pi's whitelist.
+   */
+  private startupModel(): ValidatedStartupModel {
+    this.startupModelCache ??= (() => {
+      const raw = readPiStartupModel();
+      const thinking = ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        raw.thinking ?? "",
+      )
+        ? (raw.thinking as SessionThinkingLevel)
+        : undefined;
+      return { modelSpec: raw.modelSpec, thinking };
+    })();
+    return this.startupModelCache;
   }
 
   async createSession(config: SessionConfig): Promise<AgentHandle> {
@@ -74,7 +65,8 @@ export class PiSessionFactory implements AgentSessionFactory {
 
     let model: SessionModel | undefined;
     let thinkingLevel: SessionThinkingLevel | undefined;
-    const requested = config.model ?? this.defaultModel().modelSpec;
+    // Precedence: --model flag > PIR_MODEL env > pi settings defaults.
+    const requested = config.model ?? process.env.PIR_MODEL ?? this.startupModel().modelSpec;
     if (requested) {
       const runtime = await this.runtime();
       const cliProvider = requested.includes("/") ? requested.slice(0, requested.indexOf("/")) : undefined;
@@ -82,7 +74,7 @@ export class PiSessionFactory implements AgentSessionFactory {
       const resolved = resolveCliModel({
         cliProvider,
         cliModel,
-        cliThinking: this.defaultModel().thinking,
+        cliThinking: this.startupModel().thinking,
         modelRuntime: runtime,
       });
       if (resolved.error || !resolved.model) {

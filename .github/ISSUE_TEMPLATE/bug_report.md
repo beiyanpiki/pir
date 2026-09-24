@@ -16,7 +16,7 @@ $ pir ...
 
 - pir version (`pir version`):
 - Deployment: local CLI / docker exec / HTTPS service (serve) / remote client
-- Model provider (e.g. zai-coding-cn glm-5.3-flash):
+- Model provider/model (e.g. anthropic/claude-opus-4-8, zai-coding-cn/glm-5.3-flash):
 - codegraph: installed+indexed / not installed (degraded mode)
 - OS / Node version (for non-docker):
 

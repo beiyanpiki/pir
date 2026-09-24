@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -7,12 +9,14 @@ import { createTempGitRepo } from "../fixtures/helpers.js";
 
 const execFileAsync = promisify(execFile);
 const CLI = path.resolve("dist/cli/cli.js");
+// Keep the CLI away from the developer's real ~/.pir/config.json.
+const CONFIG_DIR = mkdtempSync(path.join(tmpdir(), "pir-cli-cfg-"));
 
 async function pir(args, opts = {}) {
   const { stdout, stderr } = await execFileAsync(process.execPath, [CLI, ...args], {
     cwd: opts.cwd ?? process.cwd(),
     encoding: "utf8",
-    env: opts.env ? { ...process.env, ...opts.env } : process.env,
+    env: { ...process.env, PIR_CONFIG_DIR: CONFIG_DIR, PIR_NO_WIZARD: "1", ...opts.env },
   });
   return { stdout, stderr, code: 0 };
 }
@@ -119,5 +123,42 @@ test("pir exit codes: usage error exits 2, unknown finding exits 3", async () =>
     assert.equal(runtime.code, 3);
   } finally {
     repo.cleanup();
+  }
+});
+
+test("pir models lists the full pi catalog with --all", async () => {
+  const json = await pir(["models", "--json", "--all"]);
+  const parsed = JSON.parse(json.stdout);
+  assert.equal(parsed.command, "models");
+  assert.ok(Array.isArray(parsed.data.models) && parsed.data.models.length > 0);
+  const anthropic = parsed.data.models.find((m) => m.provider === "anthropic");
+  assert.ok(anthropic, "catalog contains anthropic");
+  assert.equal(typeof anthropic.contextWindow, "number");
+  assert.equal(typeof anthropic.maxTokens, "number");
+  assert.equal(typeof anthropic.authenticated, "boolean");
+
+  const ids = await pir(["models", "--ids", "--all", "--provider", "anthropic"]);
+  const lines = ids.stdout.trim().split("\n").filter(Boolean);
+  assert.ok(lines.length > 0);
+  assert.ok(lines.every((l) => l.startsWith("anthropic/")));
+
+  const search = await pir(["models", "--ids", "--all", "--provider", "anthropic", "claude-opus"]);
+  const searched = search.stdout.trim().split("\n").filter(Boolean);
+  assert.ok(searched.length > 0);
+  assert.ok(searched.every((l) => l.startsWith("anthropic/") && l.includes("claude-opus")));
+});
+
+test("pir models without --all only lists authenticated models (or guidance)", async () => {
+  const ids = await pir(["models", "--ids"]);
+  const lines = ids.stdout.trim().split("\n").filter(Boolean);
+  // With credentials present every line is provider/model; without any, the
+  // machine-mode output is empty and the hint goes to stderr.
+  assert.ok(lines.every((l) => /^[^\s/]+\/[^\s]+$/.test(l)));
+
+  const table = await pir(["models"]);
+  if (lines.length === 0) {
+    assert.match(table.stdout, /No authenticated models/);
+  } else {
+    assert.match(table.stdout, /^provider\s+model/);
   }
 });

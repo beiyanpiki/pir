@@ -1,6 +1,6 @@
 {
   "name": "pir",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi-based code review engine with Repository Memory — local CLI, Pi extension (/review-* commands), and an agent-friendly HTTPS service (pir serve) that reviews even unpushed code via git bundles",
   "type": "module",
   "bin": {
@@ -8,6 +8,11 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "skills",
+    "docs/for-llm.md"
+  ],
   "pi": {
     "extensions": [
       "./dist/extension/index.js"
@@ -31,6 +36,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "pretest": "npm run build",
     "test": "node --test tests/unit/*.test.js tests/integration/*.test.js",
     "test:unit": "node --test tests/unit/*.test.js",

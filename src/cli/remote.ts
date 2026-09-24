@@ -147,7 +147,7 @@ function relay(result: RelayResult, argv: string[]): number {
   return result.code ?? 0;
 }
 
-/** Remove transport-only flags (--server URL, --token VALUE, --insecure) before forwarding. */
+/** Remove transport-only flags (--server URL, --token VALUE, --insecure, --local, --no-wizard) before forwarding. */
 function stripClientFlags(argv: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -157,7 +157,7 @@ function stripClientFlags(argv: string[]): string[] {
       continue;
     }
     if (token.startsWith("--server=") || token.startsWith("--token=")) continue;
-    if (token === "--insecure") continue;
+    if (token === "--insecure" || token === "--local" || token === "--no-wizard") continue;
     out.push(token);
   }
   return out;

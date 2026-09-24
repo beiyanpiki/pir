@@ -3,8 +3,17 @@
 #   sh docker/deploy.sh        # interactive QA deployment (recommended)
 #   # or by hand:
 #   echo "PIR_SERVER_TOKEN=$(openssl rand -hex 16)" >> .env
-#   echo "BIGMODEL_API_KEY=<key>" >> .env
+#   echo "PI_AUTH_JSON={\"<provider>\":{\"type\":\"api_key\",\"key\":\"<key>\"}}" >> .env
+#   echo "PI_DEFAULT_PROVIDER=<provider>" >> .env
+#   echo "PI_DEFAULT_MODEL=<model>" >> .env
 #   docker compose up -d
+#
+# Any provider supported by pi works (anthropic, openai, deepseek,
+# zai-coding-cn, moonshotai-cn, ...; browse with `docker run --rm <image>
+# models --all`). For docker-exec flows per-provider keys are simpler:
+#   docker run -e PI_API_KEY__<provider>=<key> ...
+# (compose cannot enumerate PI_API_KEY__* vars — use PI_AUTH_JSON here, or add
+# the lines yourself.)
 #
 # Reviews arrive either as client-side git bundles (POST /v1/review — local
 # unpushed state, no server credentials needed) or through repos registered
@@ -18,7 +27,10 @@ services:
     init: true
     environment:
       - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in .env}
-      - BIGMODEL_API_KEY=${BIGMODEL_API_KEY:?set BIGMODEL_API_KEY in .env}
+      - PI_AUTH_JSON=${PI_AUTH_JSON:-}
+      - PI_DEFAULT_PROVIDER=${PI_DEFAULT_PROVIDER:-}
+      - PI_DEFAULT_MODEL=${PI_DEFAULT_MODEL:-}
+      - PI_DEFAULT_THINKING=${PI_DEFAULT_THINKING:-}
       - PIR_REPOS_ROOT=/data/repos
       - PIR_STATE_ROOT=/data/state
     volumes:

@@ -51,11 +51,13 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
   pi.registerCommand("review-memory", {
     description: "Repository memory: status | bootstrap | refresh",
     getArgumentCompletions: (prefix) => {
-      const options = ["status", "bootstrap", "refresh"].filter((o) => o.startsWith(prefix));
+      const options = ["status", "bootstrap", "refresh", "--model"].filter((o) => o.startsWith(prefix));
       return options.length > 0 ? options.map((value) => ({ value, label: value })) : null;
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const [sub = "status"] = tokenizeArgs(args);
+      const tokens = tokenizeArgs(args);
+      const [sub = "status"] = tokens;
+      const model = extractFlag(tokens, "--model");
       const app = await createAppContext(ctx.cwd);
       try {
         if (sub === "status") {
@@ -67,11 +69,12 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
         } else if (sub === "bootstrap") {
           ctx.ui.setStatus("review", "bootstrapping memory…");
           const result = await memoryBootstrap(app, {
+            model,
             onProgress: (m) => ctx.ui.setStatus("review", m),
           });
           ctx.ui.notify(`bootstrap done: ${result.modulesSummarized} modules, ${result.featuresCreated} features, ${result.entitiesCreated} entities`, "info");
         } else if (sub === "refresh") {
-          const result = await memoryRefresh(app);
+          const result = await memoryRefresh(app, { model });
           ctx.ui.notify(`refresh done: ${result.changedFiles.length} changed files, ${result.entitiesRefreshed} entities refreshed, ${result.staleMarked} marked stale`, "info");
         } else {
           ctx.ui.notify(`usage: /review-memory status|bootstrap|refresh`, "warning");

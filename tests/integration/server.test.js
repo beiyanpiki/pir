@@ -115,17 +115,22 @@ test("server: cwd guard rejects escapes and injects the workspace default", asyn
 });
 
 test("remote CLI: pir --server relays argv, output and exit code", async (t) => {
-  const { base } = await withServer(t);
+  const { base, repo } = await withServer(t);
+  const env = { ...process.env, PIR_NO_WIZARD: "1" };
 
-  const { stdout, stderr } = await execFileAsync(process.execPath, [
-    CLI, "--server", base, "--token", TOKEN, "--insecure", "version",
-  ]);
-  assert.match(stdout.trim(), /^pir \d+\.\d+\.\d+$/);
-  assert.ok(stderr.includes("pir-serve") === false || true);
+  // version/config/skill are client-side; memory status relays through /v1/exec.
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [CLI, "--server", base, "--token", TOKEN, "--insecure", "memory", "status", "--json", "--cwd", repo.dir],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(JSON.parse(stdout).command, "memory.status");
 
   // Wrong token -> exit 3 with a clear message.
   await assert.rejects(
-    execFileAsync(process.execPath, [CLI, "--server", base, "--token", "wrong", "--insecure", "version"]),
+    execFileAsync(process.execPath, [
+      CLI, "--server", base, "--token", "wrong", "--insecure", "memory", "status", "--cwd", repo.dir,
+    ], { env, encoding: "utf8" }),
     (err) => err.code === 3,
   );
 });
