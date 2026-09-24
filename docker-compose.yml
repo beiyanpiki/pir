@@ -20,10 +20,17 @@ services:
     environment:
       - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in .env}
       - BIGMODEL_API_KEY=${BIGMODEL_API_KEY:?set BIGMODEL_API_KEY in .env}
-      - PIR_STATE_IN_PROJECT=1
+      - PIR_REPOS_ROOT=/data/repos
+      - PIR_STATE_ROOT=/data/state
     volumes:
       - ${PIR_WORKSPACE:-..}:/workspace
       - ./docker/pi-config:/pi-config:ro
+      - pir-repos:/data/repos
+      - pir-state:/data/state
     ports:
       - "8790:8790"
     command: ["serve"]
+
+volumes:
+  pir-repos:
+  pir-state:

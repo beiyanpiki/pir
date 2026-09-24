@@ -39,7 +39,7 @@ docker pull ghcr.io/beiyanpiki/pir:main
 **stdout 只输出结果**(`--json` 时是带 `schemaVersion: 1` 信封的纯 JSON);进度/日志一律 stderr,不污染管道。
 
 ```bash
-pir find [--base <ref>] [--head <ref>] [--json]
+pir find [--base <ref>] [--head <ref>] [--uncommitted] [--json]
          [--max-rounds N] [--max-tokens N]
          [--fail-on P0|P1|P2|P3|none] [--model <id>] [--no-sync-index]
 pir memory status|bootstrap|refresh [--json] [--max-batches N] [--model <id>]
@@ -49,8 +49,12 @@ pir remember project|feature <key>|symbol <key> invariant|note|risk --text "..."
 pir findings [list [--status <s>]] [--json]
 pir findings show <id> [--json]
 pir verify-fix <findingId> [--json]
+pir repos add <git-url|path> [--name <n>] | list | remove <n> [--purge]
+pir serve [...]                                    # HTTPS 服务
 pir version
 ```
+
+`--repo <name> [--branch <ref>]`(find/memory/findings/verify-fix)在服务端注册的克隆上评审(fetch + 临时 worktree,记忆集中在 `PIR_STATE_ROOT`)。
 
 全局:`--json`、`--cwd <path>`、`--quiet`、环境变量 `PIR_MEMORY_DB`(覆盖 memory.sqlite 位置)。
 
@@ -76,9 +80,12 @@ find 的 finding 字段:
 
 ```bash
 pir find --json --fail-on P1                       # 审查 HEAD^..HEAD
+pir find --uncommitted --json                      # 审查未提交的工作区(含 untracked,不碰 index/分支)
 pir feedback F-12 expected --note "intentional"    # 反馈写入长期记忆
 pir find --json                                     # 同类问题不再打扰你
 pir verify-fix F-13                                 # 验证修复确实消除了触发路径
+pir --server https://pir.svc:8790 find --uncommitted --json
+                                                   # 远程审查本地状态(bundle 流,无需 push)
 ```
 
 ## Docker
@@ -108,7 +115,8 @@ pir --server https://127.0.0.1:8790 --token secret --insecure find --json
 要点:
 
 - **模型配置**:走 pi 内置的 `zai-coding-cn` provider(智谱官方 coding 端点 `open.bigmodel.cn/api/coding/paas/v4`,含 glm-5.3 / glm-5.3-flash 模型目录与 thinking 级别映射)。容器传入 `BIGMODEL_API_KEY`,entrypoint 生成 0600 的 `auth.json`——密钥不进镜像、不落 git;`/pi-config` 挂载可覆盖完整 pi 配置(会先播种到容器内可写目录,pi 需要写 auth 存储)。
-- **服务协议**:`GET /health`;`POST /v1/exec {"argv": ["find", "--json", ...]}` → `{code, output, log}`,命令串行执行,`--cwd` 被限制在 workspace 内;usage 错误按 CLI 语义返回 code=2。远端客户端自动剥离 `--server/--token/--insecure` 后转发。
+- **服务协议**:`GET /health`;`POST /v1/exec {"argv": [...]}` → `{code, output, log}`(命令串行,`--cwd` 被限制在 workspace 内);`POST /v1/review`(coderabbit-cli 式)**客户端把本地状态打包成 git bundle 上传,服务端物化为一次性 worktree 后评审**——未 push 的提交、甚至未提交的工作区(`--uncommitted`)都能审,服务端不需要源仓库凭证。usage 错误按 CLI 语义返回 code=2。远端客户端自动剥离 `--server/--token/--insecure` 后转发。
+- **完全服务端化**:`pir repos add <url|path> [--name]` 在服务端注册仓库(`PIR_REPOS_ROOT`,默认 `~/.local/share/pir/repos`),`find/memory/findings/verify-fix --repo <name> [--branch <ref>]` 自动 fetch + 在临时 worktree 中评审;记忆按 `projectId` 集中在 `PIR_STATE_ROOT/<projectId>/`(分支不参与记忆 key——不变量与历史决策是仓库级知识)。
 - **TLS**:`--cert/--key` 或 `PIR_TLS_CERT/PIR_TLS_KEY` 提供正式证书;否则容器内用 openssl 自签(持久化于 `PIR_CERT_DIR`);`PIR_ALLOW_HTTP=1` 可显式降级明文。客户端用 `--insecure` 接受自签证书。
 - 镜像内置 git/ripgrep/openssl 与可选的 codegraph(`INSTALL_CODEGRAPH=0` 构建参数可去掉);git 已设 `safe.directory '*'` 以接受挂载仓库。
 

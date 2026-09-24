@@ -19,6 +19,8 @@ export interface ServeOptions {
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
+// Bundle uploads carry the client's history (full bundles on first contact).
+const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
 
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
@@ -88,18 +90,104 @@ export async function startServer(input: {
       res.end(JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls) }));
       return;
     }
-    if (req.method === "POST" && url.pathname === "/v1/exec") {
+    if (req.method === "POST" && (url.pathname === "/v1/exec" || url.pathname === "/v1/review")) {
       if (input.token && req.headers.authorization !== `Bearer ${input.token}`) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "missing or invalid bearer token" }));
         return;
       }
-      void handleExec(req, res);
+      if (url.pathname === "/v1/review") {
+        void handleReview(req, res);
+      } else {
+        void handleExec(req, res);
+      }
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not found", endpoints: ["GET /health", "POST /v1/exec"] }));
+    res.end(JSON.stringify({ error: "not found", endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review"] }));
   };
+
+  /**
+   * coderabbit-cli style flow: the client ships its LOCAL state as a git
+   * bundle (unpushed commits included); we materialize a throwaway worktree
+   * and run the requested command there under the repo's stable projectId.
+   */
+  async function handleReview(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const logLines: string[] = [];
+    try {
+      const body = await readBody(req, MAX_BUNDLE_BYTES);
+      const parsed = JSON.parse(body) as {
+        remoteUrl?: string | null;
+        rootCommit?: string;
+        base?: string | null;
+        head?: string;
+        bundleBase64?: string;
+        argv?: string[];
+      };
+      if (!parsed.head || !parsed.rootCommit || typeof parsed.bundleBase64 !== "string") {
+        throw new Error("body must include rootCommit, head and bundleBase64");
+      }
+      const argv = Array.isArray(parsed.argv) ? (parsed.argv as string[]) : ["find"];
+      if (argv.includes("serve")) throw new Error("refusing to execute serve");
+
+      const bundle = Buffer.from(parsed.bundleBase64, "base64");
+      const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
+      let materialized: import("../app/repos.js").MaterializedReview;
+      try {
+        materialized = (await materializeFromBundle(bundle, {
+          remoteUrl: parsed.remoteUrl ?? null,
+          rootCommit: parsed.rootCommit,
+          base: parsed.base ?? null,
+          head: parsed.head,
+        })).review;
+      } catch (err) {
+        if ((err as { needFull?: boolean }).needFull) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ needFull: true }));
+          return;
+        }
+        throw err;
+      }
+      log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
+
+      // Force the review into the worktree; drop any client --cwd.
+      const cleanedArgv: string[] = [];
+      for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === "--cwd") {
+          i += 1;
+          continue;
+        }
+        cleanedArgv.push(argv[i]!);
+      }
+      const effectiveArgv = ["--cwd", materialized.worktree, ...cleanedArgv];
+      try {
+        const result = await enqueue(() =>
+          executePirCommand(effectiveArgv, {
+            cwdGuard: materialized!.worktree,
+            dbPath: reviewDbPath(materialized!.projectId),
+            onLog: (message) => {
+              logLines.push(message);
+              log(`${cleanedArgv.join(" ")} :: ${message}`);
+            },
+          }),
+        );
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
+      } finally {
+        await materialized.cleanup();
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof UsageError) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] }));
+        return;
+      }
+      log(`review error: ${message}`);
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: message }));
+    }
+  }
 
   async function handleExec(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
@@ -222,13 +310,13 @@ async function resolveTls(options: ServeOptions): Promise<TlsMaterial | null> {
   }
 }
 
-function readBody(req: http.IncomingMessage): Promise<string> {
+function readBody(req: http.IncomingMessage, limitBytes = MAX_BODY_BYTES): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > limitBytes) {
         reject(new Error("request body too large"));
         req.destroy();
         return;

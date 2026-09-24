@@ -26,9 +26,10 @@ RUN apt-get update \
 ARG INSTALL_CODEGRAPH=1
 RUN if [ "$INSTALL_CODEGRAPH" = "1" ]; then npm i -g @colbymchenry/codegraph@1.6.0 || true; fi
 
-# Writable home for pi (model config mounted at /home/pi/.pi).
-RUN mkdir -p /home/pi /app /workspace \
-  && chown -R node:node /home/pi /app /workspace
+# Writable home for pi (model config mounted at /home/pi/.pi) plus server-side
+# data roots (registered clones, centralized memory state).
+RUN mkdir -p /home/pi /app /workspace /data/repos /data/state \
+  && chown -R node:node /home/pi /app /workspace /data
 ENV HOME=/home/pi \
     PIR_STATE_IN_PROJECT=1
 

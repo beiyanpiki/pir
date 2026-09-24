@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -18,19 +21,72 @@ export class GitError extends Error {
 export async function git(
   repoRoot: string,
   args: string[],
-  options: { stdin?: string; timeoutMs?: number } = {},
+  options: { stdin?: string; timeoutMs?: number; env?: Record<string, string> } = {},
 ): Promise<string> {
   try {
     const result = (await execFileAsync("git", ["-C", repoRoot, ...args], {
       timeout: options.timeoutMs ?? GIT_TIMEOUT_MS,
       maxBuffer: 64 * 1024 * 1024,
       encoding: "utf8",
+      env: options.env ? { ...process.env, ...options.env } : undefined,
     })) as { stdout: string };
     return result.stdout;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new GitError(`git ${args.join(" ")} failed: ${message}`, args);
   }
+}
+
+/** Binary git output (e.g. `git bundle create -`), untouched by encoding. */
+export async function gitBuffer(
+  repoRoot: string,
+  args: string[],
+  options: { timeoutMs?: number } = {},
+): Promise<Buffer> {
+  try {
+    const result = (await execFileAsync("git", ["-C", repoRoot, ...args], {
+      timeout: options.timeoutMs ?? GIT_TIMEOUT_MS,
+      maxBuffer: 256 * 1024 * 1024,
+      encoding: "buffer",
+    })) as { stdout: Buffer };
+    return result.stdout;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new GitError(`git ${args.join(" ")} failed: ${message}`, args);
+  }
+}
+
+/**
+ * Snapshot the current working tree (tracked modifications + untracked
+ * files) as a commit object WITHOUT touching the user's index, HEAD or
+ * branches: a temporary alternate index is populated, its tree is written,
+ * and a commit is created with HEAD as parent. Returns the new commit sha,
+ * or HEAD when the tree is clean.
+ */
+export async function createWorkingTreeSnapshot(repoRoot: string): Promise<string> {
+  const head = (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  const tmpIndexDir = mkdtempSync(path.join(tmpdir(), "pir-index-"));
+  const indexFile = path.join(tmpIndexDir, "index");
+  try {
+    await git(repoRoot, ["add", "-A"], { env: { GIT_INDEX_FILE: indexFile } });
+    const tree = (await git(repoRoot, ["write-tree"], { env: { GIT_INDEX_FILE: indexFile } })).trim();
+    const headTree = (await git(repoRoot, ["rev-parse", `HEAD^{tree}`])).trim();
+    if (tree === headTree) return head;
+    const commit = (
+      await git(repoRoot, ["commit-tree", tree, "-p", head, "-m", "pir: working tree snapshot"], {
+        env: { GIT_INDEX_FILE: indexFile },
+      })
+    ).trim();
+    return commit;
+  } finally {
+    rmSync(tmpIndexDir, { recursive: true, force: true });
+  }
+}
+
+/** True when the working tree or index differs from HEAD (untracked included). */
+export async function isDirty(repoRoot: string): Promise<boolean> {
+  const out = await git(repoRoot, ["status", "--porcelain"]);
+  return out.trim().length > 0;
 }
 
 export async function isGitRepo(cwd: string): Promise<boolean> {

@@ -129,3 +129,53 @@ test("remote CLI: pir --server relays argv, output and exit code", async (t) => 
     (err) => err.code === 3,
   );
 });
+
+test("/v1/review materializes a client bundle into a worktree (unpushed code path)", async (t) => {
+  const { base } = await withServer(t);
+  const repo = createTempGitRepo("pir-bundle-src-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-bundle-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-bundle-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  // Simulate an unpushed commit: it only ever exists in the client repo.
+  repo.write("src/unpushed.ts", "export const neverPushed = true;\n");
+  repo.commit("unpushed work");
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const { getHeadCommit, getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [head, rootCommit, remoteUrl] = await Promise.all([
+    getHeadCommit(repo.dir),
+    getRootCommit(repo.dir),
+    getRemoteUrl(repo.dir),
+  ]);
+  const bundle = await createBundle(repo.dir, { base: null, head });
+
+  const response = await fetch(`${base}/v1/review`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      remoteUrl,
+      rootCommit,
+      base: null,
+      head,
+      bundleBase64: bundle.toString("base64"),
+      argv: ["memory", "status", "--json"],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.code, 0);
+  const envelopeBody = JSON.parse(payload.output);
+  // The materialized worktree saw the unpushed commit...
+  assert.equal(envelopeBody.data.headCommit, head);
+  // ...and memory landed in the centralized state root for this project.
+  assert.match(envelopeBody.data.dbPath, new RegExp(`^${stateRoot}/[0-9a-f]{64}/memory\\.sqlite$`));
+  assert.ok(existsSync(envelopeBody.data.dbPath));
+  repo.cleanup();
+});

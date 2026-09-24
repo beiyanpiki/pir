@@ -75,6 +75,8 @@ export interface ExecOptions {
   onLog?: (message: string) => void;
   /** Restrict --cwd to paths under this root (server mode guard). */
   cwdGuard?: string;
+  /** Explicit sqlite location override (bundle/worktree server flows). */
+  dbPath?: string;
 }
 
 interface ParsedArgs {
@@ -94,6 +96,9 @@ const VALUE_FLAGS = new Set([
   "--note",
   "--text",
   "--max-batches",
+  "--repo",
+  "--branch",
+  "--name",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -143,6 +148,10 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   const emit = (text: string) => out.push(text);
   const log = (message: string) => opts.onLog?.(message);
 
+  if (command === "repos") {
+    return await cmdRepos(positional.slice(1), flags, json, emit, out);
+  }
+
   let cwd = typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd();
   if (opts.cwdGuard) {
     const resolved = path.resolve(cwd);
@@ -151,6 +160,39 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
       throw new UsageError(`--cwd must stay under ${guard}`);
     }
     cwd = resolved;
+  }
+
+  // Review the working tree (tracked + untracked) as a virtual commit,
+  // without touching the user's index or branches.
+  const explicitDbPath = typeof opts.dbPath === "string" ? opts.dbPath : undefined;
+  if (flags.get("--uncommitted")) {
+    if (command !== "find") throw new UsageError("--uncommitted applies to find only");
+    if (flags.get("--repo")) throw new UsageError("--uncommitted and --repo are mutually exclusive");
+    const { createWorkingTreeSnapshot } = await import("../changes/git.js");
+    const snapshot = await createWorkingTreeSnapshot(cwd);
+    flags.delete("--uncommitted");
+    flags.set("--head", snapshot);
+    log(`• working-tree snapshot ${snapshot.slice(0, 10)}`);
+  }
+
+  // Server-side registered repo: fetch the clone, review in a throwaway worktree.
+  let materialized: import("../app/repos.js").MaterializedReview | null = null;
+  if (typeof flags.get("--repo") === "string") {
+    const repoSpec = flags.get("--repo") as string;
+    if (!["find", "memory", "findings", "verify-fix"].includes(command ?? "")) {
+      throw new UsageError(`--repo applies to find/memory/findings/verify-fix, not ${command}`);
+    }
+    const { resolveRepo, materializeRegistered, reviewDbPath } = await import("../app/repos.js");
+    const resolvedRepo = resolveRepo(repoSpec);
+    log(`• repo ${resolvedRepo.entry.name} (${resolvedRepo.entry.projectId.slice(0, 10)}…)`);
+    materialized = await materializeRegistered(resolvedRepo.dir, resolvedRepo.entry.projectId, {
+      branch: typeof flags.get("--branch") === "string" ? (flags.get("--branch") as string) : undefined,
+      noFetch: Boolean(flags.get("--no-fetch")),
+    });
+    cwd = materialized.worktree;
+    const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
+    flags.set("--cwd", cwd);
+    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, json, out, emit, log, materialized);
   }
 
   if (!command || command === "help" || flags.get("--help")) {
@@ -170,8 +212,24 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
+  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, json, out, emit, log, null);
+}
+
+async function runInContext(
+  cwd: string,
+  ctxOptions: { dbPath?: string },
+  command: string,
+  positional: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  out: string[],
+  emit: Emit,
+  log: Log,
+  materialized: import("../app/repos.js").MaterializedReview | null,
+): Promise<ExecResult> {
   const ctx = await createAppContext(cwd, {
     noSyncIndex: Boolean(flags.get("--no-sync-index")),
+    dbPath: ctxOptions.dbPath,
   });
 
   let code: number;
@@ -200,8 +258,45 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     }
   } finally {
     ctx.memory.close();
+    await materialized?.cleanup();
   }
   return { code, output: out.join("") };
+}
+
+async function cmdRepos(
+  args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  out: string[],
+): Promise<ExecResult> {
+  const { addRepo, listRepos, removeRepo } = await import("../app/repos.js");
+  const sub = args[0] ?? "list";
+  if (sub === "list") {
+    const repos = listRepos();
+    emit(json ? `${envelope("repos.list", { repos })}\n` : `${JSON.stringify(repos, null, 2)}\n`);
+    return { code: 0, output: out.join("") };
+  }
+  if (sub === "add") {
+    const source = args[1];
+    if (!source) throw new UsageError("repos add requires a git URL or local path");
+    const name = typeof flags.get("--name") === "string" ? (flags.get("--name") as string) : undefined;
+    const entry = await addRepo(source, name);
+    emit(json ? `${envelope("repos.add", entry)}\n` : `registered ${entry.name} -> ${entry.projectId.slice(0, 12)}…\n`);
+    return { code: 0, output: out.join("") };
+  }
+  if (sub === "remove") {
+    const name = args[1];
+    if (!name) throw new UsageError("repos remove requires a name");
+    const entry = removeRepo(name, Boolean(flags.get("--purge")));
+    emit(
+      json
+        ? `${envelope("repos.remove", entry)}\n`
+        : `removed ${entry.name}${flags.get("--purge") ? " (clone purged)" : ""}\n`,
+    );
+    return { code: 0, output: out.join("") };
+  }
+  throw new UsageError(`unknown repos subcommand: ${sub}`);
 }
 
 type Emit = (text: string) => void;

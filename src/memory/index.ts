@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import { computeProjectIdentity, ensureStateDir, memoryDbPath, type ProjectIdentity } from "./identity.js";
+import { computeProjectIdentity, ensureStateDir, memoryDbPath, projectStateDir, type ProjectIdentity } from "./identity.js";
 import { SqliteStore } from "./sqlite-store.js";
 import { ProjectMemoriesRepo } from "./project-memory.js";
 import { FeaturesRepo } from "./feature-memory.js";
@@ -8,6 +8,21 @@ import { EntitiesRepo } from "./entity-memory.js";
 import { IssueMemoriesRepo } from "./issue-memory.js";
 import { ResolutionsRepo } from "./resolution-memory.js";
 import { FindingStore } from "./finding-store.js";
+
+/**
+ * Centralized state layout for server-side flows: PIR_STATE_ROOT/<projectId>/
+ * when PIR_STATE_ROOT is set, otherwise the per-project XDG default.
+ */
+export function stateRootDbPath(projectId: string): string {
+  const root = process.env.PIR_STATE_ROOT;
+  if (root) {
+    const dir = path.join(root, projectId);
+    mkdirSync(dir, { recursive: true });
+    return path.join(dir, "memory.sqlite");
+  }
+  ensureStateDir(projectId);
+  return memoryDbPath(projectId);
+}
 
 export interface OpenMemoryOptions {
   /** Override the sqlite location (tests). */
@@ -41,16 +56,17 @@ export class Memory {
 
   static async open(repoRoot: string, options: OpenMemoryOptions = {}): Promise<Memory> {
     const identity = await computeProjectIdentity(repoRoot);
-    // Resolution order: explicit path (tests) > PIR_MEMORY_DB (single db override)
-    // > PIR_STATE_IN_PROJECT (Docker/exec mode: everything under <repo>/.pir/)
-    // > per-project XDG state dir.
+    // Resolution order: explicit path (tests / worktree flows) >
+    // PIR_MEMORY_DB (single db override) > PIR_STATE_IN_PROJECT (Docker exec
+    // mode: everything under <repo>/.pir/) > PIR_STATE_ROOT (server mode:
+    // centralized <root>/<projectId>/) > per-project XDG state dir.
     const dbPath =
       options.dbPath ??
       process.env.PIR_MEMORY_DB ??
       (process.env.PIR_STATE_IN_PROJECT === "1"
         ? (mkdirSync(path.join(repoRoot, ".pir"), { recursive: true }),
           path.join(repoRoot, ".pir", "memory.sqlite"))
-        : (ensureStateDir(identity.projectId), memoryDbPath(identity.projectId)));
+        : stateRootDbPath(identity.projectId));
     const store = SqliteStore.open(dbPath);
     store.run(
       `INSERT INTO projects (id, remote, normalized_remote, root_commit, created_at) VALUES (?, ?, ?, ?, ?)
