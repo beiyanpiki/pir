@@ -1,16 +1,15 @@
-# pir service — HTTPS executor over a mounted project.
+# pir service — HTTPS review executor.
 #
+#   sh docker/deploy.sh        # interactive QA deployment (recommended)
+#   # or by hand:
 #   echo "PIR_SERVER_TOKEN=$(openssl rand -hex 16)" >> .env
-#   echo "BIGMODEL_API_KEY=<your bigmodel coding-plan key>" >> .env
+#   echo "BIGMODEL_API_KEY=<key>" >> .env
 #   docker compose up -d
-#   pir --server https://localhost:8790 --token "$PIR_SERVER_TOKEN" --insecure find --json
 #
-# - Project is mounted at /workspace; all pir state lands in <project>/.pir/
-#   (PIR_STATE_IN_PROJECT=1), so the sqlite memory survives with your repo.
-# - Model access uses pi's built-in zai-coding-cn provider (official GLM
-#   coding endpoint, open.bigmodel.cn); the key is injected from the
-#   environment by the entrypoint — never baked into the image.
-# - Public egress only: standard bridge networking with a mapped port.
+# Reviews arrive either as client-side git bundles (POST /v1/review — local
+# unpushed state, no server credentials needed) or through repos registered
+# with `pir repos add` (PIR_REPOS_ROOT). Memory concentrates under
+# PIR_STATE_ROOT/<projectId>/; both live in named volumes.
 services:
   pir:
     # Prebuilt image from GHCR; comment out to build locally instead.
@@ -23,12 +22,11 @@ services:
       - PIR_REPOS_ROOT=/data/repos
       - PIR_STATE_ROOT=/data/state
     volumes:
-      - ${PIR_WORKSPACE:-..}:/workspace
       - ./docker/pi-config:/pi-config:ro
       - pir-repos:/data/repos
       - pir-state:/data/state
     ports:
-      - "8790:8790"
+      - "${PIR_PORT:-8790}:8790"
     command: ["serve"]
 
 volumes:

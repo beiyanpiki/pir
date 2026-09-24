@@ -1,7 +1,7 @@
 {
   "name": "pir",
   "version": "0.1.0",
-  "description": "Pi-based code review engine with Repository Memory — exposed as a Pi extension (/review-* commands) and an agent-friendly CLI (pir)",
+  "description": "Pi-based code review engine with Repository Memory — local CLI, Pi extension (/review-* commands), and an agent-friendly HTTPS service (pir serve) that reviews even unpushed code via git bundles",
   "type": "module",
   "bin": {
     "pir": "dist/cli/cli.js"
@@ -13,6 +13,16 @@
       "./dist/extension/index.js"
     ]
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/beiyanpiki/pir.git"
+  },
+  "homepage": "https://github.com/beiyanpiki/pir#readme",
+  "bugs": {
+    "url": "https://github.com/beiyanpiki/pir/issues"
+  },
+  "author": "Xin Gao",
+  "license": "MIT",
   "keywords": [
     "pi-package",
     "pi-extension",
