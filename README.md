@@ -16,6 +16,12 @@ pi install $(pwd)     # extension: /review-* 命令
 pi --extension ./dist/extension/index.js
 ```
 
+或直接使用 GHCR 上的预构建镜像(CI 自动发布,`main` 与版本 tag 同步):
+
+```bash
+docker pull ghcr.io/beiyanpiki/pir:main
+```
+
 前提:Node ≥ 22.5(`node:sqlite`)、git、已配置模型的 pi。可选 `codegraph`(结构性查询,缺失时自动降级为文件级审查)。
 
 **模型接入(智谱官方 GLM)**:pi 内置 `zai-coding-cn` provider(coding 订阅端点)。把你的 bigmodel key 写入凭证存储即可:

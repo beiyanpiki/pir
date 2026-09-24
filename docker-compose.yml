@@ -13,8 +13,9 @@
 # - Public egress only: standard bridge networking with a mapped port.
 services:
   pir:
+    # Prebuilt image from GHCR; comment out to build locally instead.
+    image: ghcr.io/beiyanpiki/pir:main
     build: .
-    image: pir:latest
     init: true
     environment:
       - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in .env}
