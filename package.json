@@ -36,7 +36,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepare": "npm run build",
+    "prepare": "node -e \"if (require('node:fs').existsSync('tsconfig.json')) process.exit(1)\" || npm run build",
     "pretest": "npm run build",
     "test": "node --test tests/unit/*.test.js tests/integration/*.test.js",
     "test:unit": "node --test tests/unit/*.test.js",
