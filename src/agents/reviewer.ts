@@ -70,6 +70,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
   });
 
   let assistantText = "";
+  let providerError: string | undefined;
   try {
     const prompt = reviewerPrompt({
       base: deps.ctx.changeSet.base,
@@ -83,6 +84,12 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     });
     await session.prompt(prompt);
     assistantText = session.getLastAssistantText() ?? "";
+    // pi resolves a failed provider turn instead of rejecting; surface it so
+    // a dead endpoint cannot masquerade as "no findings".
+    providerError = session.getLastAssistantError();
+    if (providerError) {
+      throw new Error(`reviewer session failed: ${providerError}`);
+    }
   } finally {
     session.dispose();
   }

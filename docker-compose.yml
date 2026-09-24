@@ -1,0 +1,26 @@
+# pir service — HTTPS executor over a mounted project.
+#
+#   docker compose up -d
+#   pir --server https://localhost:8790 --token "$PIR_SERVER_TOKEN" --insecure find --json
+#
+# - Project is mounted at /workspace; all pir state lands in <project>/.pir/
+#   (PIR_STATE_IN_PROJECT=1), so the sqlite memory survives with your repo.
+# - Model config is seeded read-only from docker/pi-config (env-interpolated
+#   API key via PI_PROXY_KEY).
+# - network_mode: host keeps 127.0.0.1 proxies on the host reachable from the
+#   container (Linux). On Docker Desktop, drop it and point models.json at
+#   http://host.docker.internal:8317/v1 with the proxy listening on 0.0.0.0.
+services:
+  pir:
+    build: .
+    image: pir:latest
+    init: true
+    network_mode: host
+    environment:
+      - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in the environment or .env}
+      - PI_PROXY_KEY=${PI_PROXY_KEY:?set PI_PROXY_KEY (cli-proxy-api key) in the environment or .env}
+      - PIR_STATE_IN_PROJECT=1
+    volumes:
+      - ${PIR_WORKSPACE:-..}:/workspace
+      - ./docker/pi-config:/pi-config:ro
+    command: ["serve"]

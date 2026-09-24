@@ -1,0 +1,9 @@
+node_modules
+dist
+.git
+.codegraph
+.pir
+tests
+docs
+*.md
+docker-compose.yml

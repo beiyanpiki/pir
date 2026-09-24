@@ -40,6 +40,7 @@ class FakeSessionFactory {
         }
       },
       getLastAssistantText: () => "fake assistant text",
+      getLastAssistantError: () => undefined,
       dispose() {},
     };
     this.createdSessions.push(handle);

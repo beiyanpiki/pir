@@ -110,6 +110,16 @@ export class PiSessionFactory implements AgentSessionFactory {
     return {
       prompt: (text) => session.prompt(text),
       getLastAssistantText: () => session.getLastAssistantText(),
+      getLastAssistantError: () => {
+        const messages = session.messages;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const message = messages[i]!;
+          if (message.role === "assistant") {
+            return message.errorMessage ?? undefined;
+          }
+        }
+        return undefined;
+      },
       dispose: () => {
         try {
           session.dispose();

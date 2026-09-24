@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "cliproxy",
+  "defaultModel": "glm/glm-glm-5.3-flash",
+  "defaultThinkingLevel": "low"
+}

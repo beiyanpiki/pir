@@ -87,6 +87,14 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
       }),
     );
     assistantText = session.getLastAssistantText() ?? "";
+    const providerError = session.getLastAssistantError();
+    if (providerError) {
+      return {
+        verdict: "uncertain",
+        rationale: `verifier session error: ${providerError}`,
+        confidence: 0,
+      };
+    }
   } finally {
     session.dispose();
   }

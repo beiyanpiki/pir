@@ -1,6 +1,6 @@
 # pir — pi-based code review with Repository Memory
 
-`pir` 是基于 [Pi](https://github.com/earendil-works/pi) 的代码审查引擎:它只做一件事——**尽可能准确地发现"本次变更引入的问题",并通过项目历史知识降低误报**。不集成 GitHub/PR 评论/CI/自动修复。
+`pir` 是基于 [Pi](https://github.com/earendil-works/pi) 的代码审查引擎:它只做一件事——**尽可能准确地发现"本次变更引入的问题",并通过项目历史知识降低误报**。不集成 GitHub/PR 评论/CI/自动修复。支持本地运行、Pi extension、CLI,以及 [Docker](#docker)(exec 直调 + HTTPS 服务)。
 
 单一 npm 包,两个入口,共享同一套用例逻辑:
 
@@ -64,6 +64,38 @@ pir feedback F-12 expected --note "intentional"    # 反馈写入长期记忆
 pir find --json                                     # 同类问题不再打扰你
 pir verify-fix F-13                                 # 验证修复确实消除了触发路径
 ```
+
+## Docker
+
+单一镜像,两种用法,**所有状态(`.pir/memory.sqlite`)都落在项目目录内**(`PIR_STATE_IN_PROJECT=1`),容器销毁不丢、可随仓库归档:
+
+```bash
+docker build -t pir:latest .
+
+# ① exec 模式:像本地 CLI 一样直接调用
+docker run --rm -v $PWD:/workspace pir:latest find --json
+docker run --rm -v $PWD:/workspace pir:latest feedback F-1 expected --note "..."
+ls .pir/          # memory.sqlite 就在你的项目里
+
+# ② HTTPS 服务模式(自签 TLS + Bearer 认证)
+docker run -d --name pir-serve --network host \
+  -v $PWD:/workspace -v ./docker/pi-config:/pi-config:ro \
+  -e PIR_SERVER_TOKEN=secret -e PI_PROXY_KEY=<key> \
+  pir:latest serve
+
+# 同一个 pir CLI 作为远端客户端调用:
+pir --server https://127.0.0.1:8790 --token secret --insecure find --json
+```
+
+或 `docker compose up -d`(见 [docker-compose.yml](docker-compose.yml),需 `.env` 提供 `PIR_SERVER_TOKEN`/`PI_PROXY_KEY`)。
+
+要点:
+
+- **模型配置**:把 pi 的 `models.json`/`settings.json` 只读挂到 `/pi-config`,entrypoint 会播种到容器内可写的 `~/.pi/agent`(pi 需要写 auth 存储)。样例见 [docker/pi-config/](docker/pi-config/),API key 用 `${PI_PROXY_KEY}` 环境变量插值,不落盘。
+- **网络**:Linux 推荐 `--network host`(宿主机上只监听 127.0.0.1 的代理直接可达);Docker Desktop 用 `host.docker.internal`,但代理需监听 0.0.0.0。
+- **服务协议**:`GET /health`;`POST /v1/exec {"argv": ["find", "--json", ...]}` → `{code, output, log}`,命令串行执行,`--cwd` 被限制在 workspace 内;usage 错误按 CLI 语义返回 code=2。远端客户端自动剥离 `--server/--token/--insecure` 后转发。
+- **TLS**:`--cert/--key` 或 `PIR_TLS_CERT/PIR_TLS_KEY` 提供正式证书;否则容器内用 openssl 自签(持久化于 `PIR_CERT_DIR`);`PIR_ALLOW_HTTP=1` 可显式降级明文。客户端用 `--insecure` 接受自签证书。
+- 镜像内置 git/ripgrep/openssl 与可选的 codegraph(`INSTALL_CODEGRAPH=0` 构建参数可去掉);git 已设 `safe.directory '*'` 以接受挂载仓库。
 
 ## Repository Memory(与普通 AI review 的区别)
 

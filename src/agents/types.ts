@@ -23,6 +23,8 @@ export interface ReviewTool {
 export interface AgentHandle {
   prompt(text: string): Promise<void>;
   getLastAssistantText(): string | undefined;
+  /** Provider/transport error of the last turn, when pi swallowed it into the assistant message instead of rejecting. */
+  getLastAssistantError(): string | undefined;
   dispose(): void;
 }
 
