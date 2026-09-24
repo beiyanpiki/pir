@@ -1,5 +1,5 @@
 {
-  "defaultProvider": "cliproxy",
-  "defaultModel": "glm/glm-glm-5.3-flash",
+  "defaultProvider": "zai-coding-cn",
+  "defaultModel": "glm-5.3-flash",
   "defaultThinkingLevel": "low"
 }

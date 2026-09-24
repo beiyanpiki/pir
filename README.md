@@ -18,6 +18,16 @@ pi --extension ./dist/extension/index.js
 
 前提:Node ≥ 22.5(`node:sqlite`)、git、已配置模型的 pi。可选 `codegraph`(结构性查询,缺失时自动降级为文件级审查)。
 
+**模型接入(智谱官方 GLM)**:pi 内置 `zai-coding-cn` provider(coding 订阅端点)。把你的 bigmodel key 写入凭证存储即可:
+
+```bash
+# ~/.pi/agent/auth.json  (chmod 600)
+{ "zai-coding-cn": { "type": "api_key", "key": "<你的bigmodel key>" } }
+# 或环境变量: export ZAI_CODING_CN_API_KEY=<key>
+```
+
+默认模型在 `~/.pi/agent/settings.json` 里设 `defaultProvider: "zai-coding-cn"`、`defaultModel: "glm-5.3-flash"`、`defaultThinkingLevel: "low"`(GLM 仅接受 low/high/max)。
+
 ## CLI 协议(给 agent 用的契约)
 
 **stdout 只输出结果**(`--json` 时是带 `schemaVersion: 1` 信封的纯 JSON);进度/日志一律 stderr,不污染管道。
@@ -78,21 +88,20 @@ docker run --rm -v $PWD:/workspace pir:latest feedback F-1 expected --note "..."
 ls .pir/          # memory.sqlite 就在你的项目里
 
 # ② HTTPS 服务模式(自签 TLS + Bearer 认证)
-docker run -d --name pir-serve --network host \
+docker run -d --name pir-serve -p 8790:8790 \
   -v $PWD:/workspace -v ./docker/pi-config:/pi-config:ro \
-  -e PIR_SERVER_TOKEN=secret -e PI_PROXY_KEY=<key> \
+  -e PIR_SERVER_TOKEN=secret -e BIGMODEL_API_KEY=<bigmodel-key> \
   pir:latest serve
 
 # 同一个 pir CLI 作为远端客户端调用:
 pir --server https://127.0.0.1:8790 --token secret --insecure find --json
 ```
 
-或 `docker compose up -d`(见 [docker-compose.yml](docker-compose.yml),需 `.env` 提供 `PIR_SERVER_TOKEN`/`PI_PROXY_KEY`)。
+或 `docker compose up -d`(见 [docker-compose.yml](docker-compose.yml),需 `.env` 提供 `PIR_SERVER_TOKEN`/`BIGMODEL_API_KEY`,已被 gitignore)。
 
 要点:
 
-- **模型配置**:把 pi 的 `models.json`/`settings.json` 只读挂到 `/pi-config`,entrypoint 会播种到容器内可写的 `~/.pi/agent`(pi 需要写 auth 存储)。样例见 [docker/pi-config/](docker/pi-config/),API key 用 `${PI_PROXY_KEY}` 环境变量插值,不落盘。
-- **网络**:Linux 推荐 `--network host`(宿主机上只监听 127.0.0.1 的代理直接可达);Docker Desktop 用 `host.docker.internal`,但代理需监听 0.0.0.0。
+- **模型配置**:走 pi 内置的 `zai-coding-cn` provider(智谱官方 coding 端点 `open.bigmodel.cn/api/coding/paas/v4`,含 glm-5.3 / glm-5.3-flash 模型目录与 thinking 级别映射)。容器传入 `BIGMODEL_API_KEY`,entrypoint 生成 0600 的 `auth.json`——密钥不进镜像、不落 git;`/pi-config` 挂载可覆盖完整 pi 配置(会先播种到容器内可写目录,pi 需要写 auth 存储)。
 - **服务协议**:`GET /health`;`POST /v1/exec {"argv": ["find", "--json", ...]}` → `{code, output, log}`,命令串行执行,`--cwd` 被限制在 workspace 内;usage 错误按 CLI 语义返回 code=2。远端客户端自动剥离 `--server/--token/--insecure` 后转发。
 - **TLS**:`--cert/--key` 或 `PIR_TLS_CERT/PIR_TLS_KEY` 提供正式证书;否则容器内用 openssl 自签(持久化于 `PIR_CERT_DIR`);`PIR_ALLOW_HTTP=1` 可显式降级明文。客户端用 `--insecure` 接受自签证书。
 - 镜像内置 git/ripgrep/openssl 与可选的 codegraph(`INSTALL_CODEGRAPH=0` 构建参数可去掉);git 已设 `safe.directory '*'` 以接受挂载仓库。

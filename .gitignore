@@ -3,4 +3,5 @@ dist/
 *.tsbuildinfo
 .codegraph/
 .zcode/
+.env
 .DS_Store

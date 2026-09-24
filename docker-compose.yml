@@ -1,26 +1,28 @@
 # pir service — HTTPS executor over a mounted project.
 #
+#   echo "PIR_SERVER_TOKEN=$(openssl rand -hex 16)" >> .env
+#   echo "BIGMODEL_API_KEY=<your bigmodel coding-plan key>" >> .env
 #   docker compose up -d
 #   pir --server https://localhost:8790 --token "$PIR_SERVER_TOKEN" --insecure find --json
 #
 # - Project is mounted at /workspace; all pir state lands in <project>/.pir/
 #   (PIR_STATE_IN_PROJECT=1), so the sqlite memory survives with your repo.
-# - Model config is seeded read-only from docker/pi-config (env-interpolated
-#   API key via PI_PROXY_KEY).
-# - network_mode: host keeps 127.0.0.1 proxies on the host reachable from the
-#   container (Linux). On Docker Desktop, drop it and point models.json at
-#   http://host.docker.internal:8317/v1 with the proxy listening on 0.0.0.0.
+# - Model access uses pi's built-in zai-coding-cn provider (official GLM
+#   coding endpoint, open.bigmodel.cn); the key is injected from the
+#   environment by the entrypoint — never baked into the image.
+# - Public egress only: standard bridge networking with a mapped port.
 services:
   pir:
     build: .
     image: pir:latest
     init: true
-    network_mode: host
     environment:
-      - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in the environment or .env}
-      - PI_PROXY_KEY=${PI_PROXY_KEY:?set PI_PROXY_KEY (cli-proxy-api key) in the environment or .env}
+      - PIR_SERVER_TOKEN=${PIR_SERVER_TOKEN:?set PIR_SERVER_TOKEN in .env}
+      - BIGMODEL_API_KEY=${BIGMODEL_API_KEY:?set BIGMODEL_API_KEY in .env}
       - PIR_STATE_IN_PROJECT=1
     volumes:
       - ${PIR_WORKSPACE:-..}:/workspace
       - ./docker/pi-config:/pi-config:ro
+    ports:
+      - "8790:8790"
     command: ["serve"]
