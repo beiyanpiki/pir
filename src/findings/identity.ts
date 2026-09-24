@@ -47,3 +47,17 @@ export function claimSimilarity(a: string, b: string): number {
   for (const t of ta) if (tb.has(t)) inter += 1;
   return inter / (ta.size + tb.size - inter);
 }
+
+/**
+ * Overlap coefficient (intersection / smaller set). Unlike Jaccard it stays
+ * high when one claim restates the same core problem with extra detail —
+ * the shape historical-decision matching needs.
+ */
+export function claimOverlap(a: string, b: string): number {
+  const ta = new Set(normalizeClaimText(a).split(" ").filter(Boolean));
+  const tb = new Set(normalizeClaimText(b).split(" ").filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let inter = 0;
+  for (const t of ta) if (tb.has(t)) inter += 1;
+  return inter / Math.min(ta.size, tb.size);
+}

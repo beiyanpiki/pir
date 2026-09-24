@@ -125,6 +125,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         fingerprint: candidate.identity.fingerprint,
         featureKey: candidate.identity.featureKey || undefined,
         entityKey: candidate.identity.entityKey || undefined,
+        normalizedClaim: candidate.identity.normalizedClaim,
+        category: candidate.category,
+        anchorPaths: [...new Set(candidate.anchors.map((a) => a.path))],
       });
       const memoryMatches: MemoryMatch[] = matches.map((m) => ({
         memoryId: m.id,

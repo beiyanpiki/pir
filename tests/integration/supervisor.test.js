@@ -147,6 +147,7 @@ test("findIssues: trusted prior decision verified still-applicable suppresses re
     rationale: "retry_count intentionally counts attempts",
     scope: "symbol",
     source: "user_explicit",
+    anchorPaths: [],
     createdAtCommit: null,
     validUntilCommit: null,
     stale: false,
@@ -181,6 +182,53 @@ test("findIssues: trusted prior decision verified still-applicable suppresses re
     assert.equal(matches.length, 1);
     assert.equal(matches[0].stillApplies, true);
     assert.equal(matches[0].decision, "expected");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: accepted-risk suppresses even when the verifier confirms the problem is real", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const identity = await candidateIdentity();
+  ctx.memory.issues.insert({
+    featureKey: CANDIDATE.featureKey,
+    entityKey: CANDIDATE.entityKey,
+    fingerprint: identity.fingerprint,
+    category: CANDIDATE.category,
+    claim: CANDIDATE.claim,
+    trigger: CANDIDATE.trigger,
+    decision: "accepted_risk",
+    priority: null,
+    rationale: "gateway dedupes upstream",
+    scope: "symbol",
+    source: "user_explicit",
+    anchorPaths: ["src/pay.ts"],
+    createdAtCommit: null,
+    validUntilCommit: null,
+    stale: false,
+  });
+  const factory = new FakeSessionFactory({
+    reviewerScript: reviewerRecordsCandidate,
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({
+        verdict: "confirmed",
+        rationale: "the bug is real — and the team's accepted-risk decision still covers it",
+        priorDecisionStillApplies: true,
+        confidence: 0.9,
+      });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 1 },
+    });
+    assert.equal(outcome.findings[0].status, "accepted_risk");
   } finally {
     ctx.memory.close();
     repo.cleanup();

@@ -191,4 +191,13 @@ export const MIGRATIONS: Migration[] = [
       `CREATE INDEX IF NOT EXISTS idx_memory_versions ON memory_versions (memory_type, memory_id)`,
     ],
   },
+  {
+    version: 2,
+    statements: [
+      // Anchor paths captured when the user gave feedback: lets future
+      // candidates with drifted wording but the same code location still
+      // find the decision.
+      `ALTER TABLE issue_memories ADD COLUMN anchor_paths TEXT NOT NULL DEFAULT '[]'`,
+    ],
+  },
 ];

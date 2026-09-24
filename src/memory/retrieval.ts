@@ -1,3 +1,4 @@
+import { claimOverlap } from "../findings/identity.js";
 import type { IssueMemory } from "./issue-memory.js";
 import type { Memory } from "./index.js";
 
@@ -117,16 +118,44 @@ export function buildMemoryPack(memory: Memory, input: MemoryPackInput, maxToken
  * Match a candidate against historical decisions. Returns matches ordered by
  * specificity (fingerprint > entity > feature > project).
  */
+/**
+ * Match a candidate against historical decisions, most specific first:
+ * 1. exact fingerprint
+ * 2. scope match (entity -> feature -> project)
+ * 3. fuzzy tier: claim overlap alone (>= 0.6), or claim overlap >= 0.35
+ *    corroborated by an anchor-path intersection — real reviewers reword the
+ *    same issue substantially between runs, but keep pointing at the same code.
+ * Fuzzy matches are still safe to surface: the verifier decides whether the
+ * prior decision still applies to the current code.
+ */
+const FUZZY_CLAIM_THRESHOLD = 0.6;
+const PATH_CORROBORATED_THRESHOLD = 0.35;
+
 export function matchIssueHistory(
   memory: Memory,
-  candidate: { fingerprint: string; featureKey?: string; entityKey?: string },
+  candidate: {
+    fingerprint: string;
+    featureKey?: string;
+    entityKey?: string;
+    normalizedClaim?: string;
+    category?: string;
+    anchorPaths?: string[];
+  },
 ): IssueMemory[] {
   const exact = memory.issues.byFingerprint(candidate.fingerprint);
   if (exact.length > 0) return exact;
   const scoped = memory.issues.matchingScope({
     featureKey: candidate.featureKey || undefined,
     entityKey: candidate.entityKey || undefined,
-    category: "",
+    category: candidate.category ?? "",
   });
-  return scoped;
+  if (scoped.length > 0) return scoped;
+  if (!candidate.normalizedClaim) return [];
+  const candidatePaths = new Set(candidate.anchorPaths ?? []);
+  return memory.issues.recent(100).filter((m) => {
+    const overlap = claimOverlap(m.claim, candidate.normalizedClaim!);
+    if (overlap >= FUZZY_CLAIM_THRESHOLD) return true;
+    if (overlap < PATH_CORROBORATED_THRESHOLD) return false;
+    return m.anchorPaths.some((p) => candidatePaths.has(p));
+  });
 }

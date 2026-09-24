@@ -79,6 +79,7 @@ export async function applyFeedback(memory: Memory, input: FeedbackInput): Promi
   const issueDecision = DECISION_TO_ISSUE[input.decision];
   if (issueDecision) {
     const scope: IssueScope = finding.entityKey ? "symbol" : finding.featureKey ? "feature" : "project";
+    const anchorPaths = [...new Set(memory.findings.anchors(finding).map((a) => a.path))];
     const issue = memory.issues.insert({
       featureKey: finding.featureKey,
       entityKey: finding.entityKey,
@@ -91,6 +92,7 @@ export async function applyFeedback(memory: Memory, input: FeedbackInput): Promi
       rationale: input.note ?? "",
       scope,
       source: "user_explicit",
+      anchorPaths,
       createdAtCommit: input.commit,
       validUntilCommit: null,
       stale: false,

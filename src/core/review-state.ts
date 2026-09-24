@@ -66,13 +66,15 @@ export function applyVerdict(
     stillApplies: verdict.priorDecisionStillApplies ?? undefined,
   }));
 
-  // Suppression contract: a trusted prior decision that the verifier confirmed
-  // still applies turns the finding into the prior decision's status — it is
-  // recorded, not silently dropped, and can be reopened when code changes.
-  const trusted = annotated.some((m) => m.stillApplies === true && isTrustedSource(m.source));
-  if (trusted && verdict.verdict !== "confirmed") {
-    const decision = annotated.find((m) => m.stillApplies === true)!.decision;
-    status = decisionToStatus(decision);
+  // Suppression contract: a trusted prior decision that the verifier
+  // explicitly endorses (stillApplies === true) turns the finding into the
+  // prior decision's status — recorded, not silently dropped, and reopenable
+  // when code changes. This holds even when the verifier *confirms* the
+  // problem is technically real: for accepted_risk / wont_fix that is the
+  // premise of the decision, not a contradiction of it.
+  const trusted = annotated.find((m) => m.stillApplies === true && isTrustedSource(m.source));
+  if (trusted) {
+    status = decisionToStatus(trusted.decision);
   }
 
   const finding: VerifiedFinding = {

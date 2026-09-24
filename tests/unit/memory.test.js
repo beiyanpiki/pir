@@ -264,6 +264,105 @@ test("rememberKnowledge writes user_explicit memory at each scope", async () => 
   }
 });
 
+test("matchIssueHistory: fuzzy claim fallback catches reworded duplicates across key drift", async () => {
+  const repo = createTempGitRepo();
+  const memory = await openMemory(repo);
+  try {
+    const { matchIssueHistory } = await import("../../dist/memory/retrieval.js");
+    const { buildIdentity } = await import("../../dist/findings/identity.js");
+
+    // First run: reviewer supplied a feature key.
+    const first = buildIdentity({
+      featureKey: "payment-idempotency",
+      entityKey: undefined,
+      category: "correctness",
+      claim: "The change removes the missing-key check and the duplicate-charge rejection, so charging twice returns ok both times",
+      trigger: "repeated idempotency key",
+    });
+    memory.issues.insert({
+      featureKey: "payment-idempotency",
+      entityKey: null,
+      fingerprint: first.fingerprint,
+      category: "correctness",
+      claim: "The change removes the missing-key check and the duplicate-charge rejection, so charging twice returns ok both times",
+      trigger: "repeated idempotency key",
+      decision: "accepted_risk",
+      priority: null,
+      rationale: "gateway dedupes upstream",
+      scope: "feature",
+      source: "user_explicit",
+      anchorPaths: ["payment.ts"],
+      createdAtCommit: null,
+      validUntilCommit: null,
+      stale: false,
+    });
+
+    // Second run: different fingerprint, no keys at all, and a drifted
+    // category (correctness -> regression), as real reviewers do.
+    const second = buildIdentity({
+      featureKey: undefined,
+      entityKey: undefined,
+      category: "regression",
+      claim: "The change removes the missing-key check and the duplicate-charge check, so repeated keyless charge calls always return ok",
+      trigger: "keyless charge call",
+    });
+    const matched = matchIssueHistory(memory, {
+      fingerprint: second.fingerprint,
+      normalizedClaim: second.normalizedClaim,
+      category: "regression",
+    });
+    assert.equal(matched.length, 1);
+    assert.equal(matched[0].decision, "accepted_risk");
+
+    // Unrelated claims must not match — neither by wording...
+    const other = buildIdentity({
+      category: "regression",
+      claim: "ledger entries are appended without balancing the books at month end",
+      trigger: "cron",
+    });
+    assert.equal(
+      matchIssueHistory(memory, { fingerprint: other.fingerprint, normalizedClaim: other.normalizedClaim, category: "regression" }).length,
+      0,
+    );
+    // ...nor via path corroboration from a different file.
+    assert.equal(
+      matchIssueHistory(memory, {
+        fingerprint: other.fingerprint,
+        normalizedClaim: other.normalizedClaim,
+        anchorPaths: ["src/ledger.ts"],
+      }).length,
+      0,
+    );
+
+    // Heavily reworded claim (overlap in the 0.35-0.6 band): matches ONLY
+    // when the anchors point at the same file (path corroboration).
+    const reworded = buildIdentity({
+      category: "regression",
+      claim: "guard for duplicate charges removed so the same key can be charged twice",
+      trigger: "any second call",
+    });
+    assert.equal(
+      matchIssueHistory(memory, {
+        fingerprint: reworded.fingerprint,
+        normalizedClaim: reworded.normalizedClaim,
+        anchorPaths: ["payment.ts"],
+      }).length,
+      1,
+    );
+    assert.equal(
+      matchIssueHistory(memory, {
+        fingerprint: reworded.fingerprint,
+        normalizedClaim: reworded.normalizedClaim,
+        anchorPaths: ["src/checkout.ts"],
+      }).length,
+      0,
+    );
+  } finally {
+    memory.close();
+    repo.cleanup();
+  }
+});
+
 test("freshness: hash mismatch marks entity stale, deletion invalidates", async () => {
   const repo = createTempGitRepo();
   const memory = await openMemory(repo);

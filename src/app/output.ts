@@ -67,14 +67,18 @@ export function renderFindResultText(input: {
   }
   lines.push(`stopped: ${input.stoppedBecause}`);
   const reported = input.findings.filter(isReported);
-  const suppressed = input.findings.filter((f) => !isReported(f) && f.status !== "rejected");
   lines.push("");
-  lines.push(reported.length > 0 ? `Findings (${reported.length}):` : "No confirmed findings.");
-  lines.push(renderFindingsText(reported));
+  if (reported.length > 0) {
+    lines.push(`Findings (${reported.length}):`);
+    lines.push(renderFindingsText(reported));
+  } else {
+    lines.push("No confirmed findings.");
+  }
+  const suppressed = input.findings.filter((f) => !isReported(f));
   if (suppressed.length > 0) {
     lines.push("");
-    lines.push(`Suppressed by prior decisions / rejected (${suppressed.length + input.findings.filter((f) => f.status === "rejected").length}):`);
-    for (const f of input.findings.filter((x) => !isReported(x))) {
+    lines.push(`Suppressed by prior decisions / rejected (${suppressed.length}):`);
+    for (const f of suppressed) {
       lines.push(`  ${f.displayId} [${f.status}] ${f.title}`);
     }
   }

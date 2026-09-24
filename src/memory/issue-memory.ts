@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SUPPRESSION_SOURCES, type MemorySource } from "../core/types.js";
+import { parseJsonArray, SUPPRESSION_SOURCES, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
 export type IssueDecision = "expected" | "false_positive" | "accepted_risk" | "wont_fix" | "confirmed";
@@ -18,12 +18,14 @@ export interface IssueMemory {
   rationale: string;
   scope: IssueScope;
   source: MemorySource;
+  /** Repo paths of the finding's anchors at feedback time (migration v2). */
+  anchorPaths: string[];
   createdAtCommit: string | null;
   validUntilCommit: string | null;
   stale: boolean;
 }
 
-export type IssueDraft = Omit<IssueMemory, "id">;
+export type IssueDraft = Omit<IssueMemory, "id" | "anchorPaths"> & { anchorPaths?: string[] };
 
 interface Row {
   id: string;
@@ -38,6 +40,7 @@ interface Row {
   rationale: string;
   scope: string;
   source: string;
+  anchor_paths: string | null;
   created_at_commit: string | null;
   valid_until_commit: string | null;
   stale: number;
@@ -57,6 +60,7 @@ function toDomain(row: Row): IssueMemory {
     rationale: row.rationale,
     scope: row.scope as IssueScope,
     source: row.source as MemorySource,
+    anchorPaths: parseJsonArray(row.anchor_paths),
     createdAtCommit: row.created_at_commit,
     validUntilCommit: row.valid_until_commit,
     stale: row.stale === 1,
@@ -72,8 +76,8 @@ export class IssueMemoriesRepo {
   insert(draft: IssueDraft): IssueMemory {
     const id = randomUUID();
     this.store.run(
-      `INSERT INTO issue_memories (id, project_id, feature_key, entity_key, fingerprint, category, claim, trigger, decision, priority, rationale, scope, source, created_at_commit, valid_until_commit, stale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO issue_memories (id, project_id, feature_key, entity_key, fingerprint, category, claim, trigger, decision, priority, rationale, scope, source, anchor_paths, created_at_commit, valid_until_commit, stale)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       this.projectId,
       draft.featureKey,
@@ -87,12 +91,13 @@ export class IssueMemoriesRepo {
       draft.rationale,
       draft.scope,
       draft.source,
+      JSON.stringify(draft.anchorPaths ?? []),
       draft.createdAtCommit,
       draft.validUntilCommit,
       draft.stale ? 1 : 0,
     );
     this.store.recordMemoryVersion("issue_memory", id, draft, "insert");
-    return { ...draft, id };
+    return { ...draft, anchorPaths: draft.anchorPaths ?? [], id };
   }
 
   byFingerprint(fingerprint: string): IssueMemory[] {
