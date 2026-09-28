@@ -35,6 +35,9 @@ export interface ReviewerDeps {
   memoryPack: string;
   round: number;
   maxRounds: number;
+  maxFindings: number;
+  /** Slots left under the maxFindings cap at the start of this round. */
+  findingsRemaining: number;
   focus: string[];
   priorSummary?: string;
   model?: string;
@@ -77,6 +80,8 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
       head: deps.ctx.changeSet.head,
       round: deps.round,
       maxRounds: deps.maxRounds,
+      maxFindings: deps.maxFindings,
+      findingsRemaining: deps.findingsRemaining,
       focus: deps.focus,
       priorSummary: deps.priorSummary,
       memoryPack: deps.memoryPack,

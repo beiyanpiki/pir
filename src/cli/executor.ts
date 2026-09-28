@@ -53,6 +53,9 @@ Find options:
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    reviewer loop rounds (default 2)
   --max-tokens <n>    token budget estimate (default 400000)
+  --max-findings <n>  cap on reported findings (default 10). A ceiling, not
+                      a target: fewer findings is correct when evidence runs
+                      out — nothing is padded to reach it
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -78,6 +81,8 @@ Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
+  --flag=value        value flags (--base, --repo, ...) also accept the
+                      --flag=value form
 
 Modes:
   Local by default. The first interactive run starts a setup wizard and
@@ -125,6 +130,7 @@ export const VALUE_FLAGS = new Set([
   "--head",
   "--max-rounds",
   "--max-tokens",
+  "--max-findings",
   "--fail-on",
   "--model",
   "--provider",
@@ -145,7 +151,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token.startsWith("--")) {
-      if (VALUE_FLAGS.has(token)) {
+      const eq = token.indexOf("=");
+      const name = eq === -1 ? token : token.slice(0, eq);
+      if (eq !== -1 && VALUE_FLAGS.has(name)) {
+        flags.set(name, token.slice(eq + 1));
+      } else if (VALUE_FLAGS.has(token)) {
         const value = argv[i + 1];
         if (value === undefined) throw new UsageError(`missing value for ${token}`);
         flags.set(token, value);
@@ -158,6 +168,53 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags };
+}
+
+/**
+ * Replace --base/--head values (two-token and `--flag=value` forms) with
+ * resolved SHAs. Bundle-materialized repos have no remote-tracking or user
+ * refs — `origin/main` or a branch name would not resolve there, failing
+ * the diff — so refs must be pinned to SHAs before the argv is executed
+ * against one (client side before shipping, server side for old clients).
+ */
+export function pinRefsToShas(argv: string[], shas: { base: string | null; head: string }): string[] {
+  const pinned = new Map<string, string | null>([
+    ["--base", shas.base],
+    ["--head", shas.head],
+  ]);
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token.startsWith("--")) {
+      const eq = token.indexOf("=");
+      const name = eq > 0 ? token.slice(0, eq) : token;
+      const sha = pinned.get(name);
+      if (typeof sha === "string") {
+        if (eq > 0) {
+          out.push(`${name}=${sha}`);
+        } else if (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
+          out.push(name, sha);
+          i += 1; // drop the raw ref
+        } else {
+          // Valueless --base/--head: leave it for parseArgs to reject as a
+          // usage error — pinning a fabricated SHA would silently turn the
+          // invocation into a successful (and wrong) review.
+          out.push(token);
+        }
+        continue;
+      }
+      if (eq === -1 && VALUE_FLAGS.has(name)) {
+        // Another value flag: keep its value verbatim, so a literal "--head"
+        // inside a --note/--text is never mistaken for a ref flag.
+        out.push(token);
+        if (i + 1 < argv.length) out.push(argv[i + 1]!);
+        i += 1;
+        continue;
+      }
+    }
+    out.push(token);
+  }
+  return out;
 }
 
 export function readVersion(): string {
@@ -451,11 +508,19 @@ async function cmdFind(
 ): Promise<number> {
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
+  let maxFindings: number | undefined;
+  if (flags.get("--max-findings") !== undefined) {
+    maxFindings = Number(flags.get("--max-findings"));
+    if (!Number.isInteger(maxFindings) || maxFindings < 1) {
+      throw new UsageError(`invalid --max-findings: ${flags.get("--max-findings")} (positive integer required)`);
+    }
+  }
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
     maxRounds: flags.get("--max-rounds") !== undefined ? Number(flags.get("--max-rounds")) : undefined,
     maxTokens: flags.get("--max-tokens") !== undefined ? Number(flags.get("--max-tokens")) : undefined,
+    maxFindings,
     model: flags.get("--model") as string | undefined,
     onProgress: (event) => log(`• ${event.message}`),
   });
@@ -471,6 +536,7 @@ async function cmdFind(
             base: result.base,
             head: result.head,
             rounds: result.rounds,
+            maxFindings: result.maxFindings,
             files: result.changeSet.files.map((f) => ({
               path: f.path,
               status: f.status,

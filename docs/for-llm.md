@@ -22,6 +22,15 @@ Two deployment shapes share one image:
 | `docker exec` | mount the project, run `pir <cmd>` | local, state in `<project>/.pir/` |
 | `serve` | HTTPS service (`POST /v1/exec`, `POST /v1/review`) | shared engine; reviews arrive as git bundles — **no push required, no repo credentials needed** |
 
+`/v1/review` executes review commands only (`find`, `memory`, `findings`,
+`feedback`, `remember`, `verify-fix`) against the bundle the client shipped;
+registry management (`repos …`) and everything else go through `/v1/exec`.
+Named refs in a review's `--base`/`--head` are resolved to SHAs by the client
+(older clients are handled server-side); the shipped JSON body is unchanged.
+A `head` that is a well-formed commit id but missing from the shipped bundle
+fails the request with 400 — a client/bundle mismatch is never silently
+reviewed away. `argv` must be an array of strings when present.
+
 ---
 
 ## Part 1 — QA before deploying
@@ -176,8 +185,10 @@ pir skill print                # raw SKILL.md for other agent frameworks
 `displayId`, `severity` (P0–P3), `status` (`confirmed`/`uncertain` are
 reported; `expected`/`accepted_risk`/`wont_fix` mean suppressed by a prior
 user decision that a verifier re-validated), `claim`, `trigger`, `anchors`,
-`verifierRationale`, `memoryMatches`. Use `--fail-on P1` + exit code `1` for
-gating decisions.
+`verifierRationale`, `memoryMatches`. `data.run.maxFindings` echoes the
+reported-findings cap (default 10, `--max-findings N`; a ceiling, not a
+target — fewer findings when evidence runs out is normal, never padded).
+Use `--fail-on P1` + exit code `1` for gating decisions.
 
 ## Troubleshooting quick table
 

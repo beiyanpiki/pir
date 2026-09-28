@@ -20,28 +20,7 @@ if [ -d /pi-config ] && [ -n "$(ls -A /pi-config 2>/dev/null)" ]; then
   cp -r /pi-config/. "$HOME/.pi/agent/"
 fi
 
-PIR_ENTRY_AUTH_PATH="$HOME/.pi/agent/auth.json" node -e '
-  const fs = require("fs");
-  const path = process.env.PIR_ENTRY_AUTH_PATH;
-  let auth = {};
-  try { auth = JSON.parse(fs.readFileSync(path, "utf8")); } catch { /* absent */ }
-  try {
-    if (process.env.PI_AUTH_JSON) {
-      Object.assign(auth, JSON.parse(process.env.PI_AUTH_JSON));
-    }
-  } catch (err) {
-    console.error("pir-entrypoint: PI_AUTH_JSON is not valid JSON: " + err.message);
-    process.exit(1);
-  }
-  for (const [name, value] of Object.entries(process.env)) {
-    if (name.startsWith("PI_API_KEY__") && value) {
-      auth[name.slice("PI_API_KEY__".length)] = { type: "api_key", key: value };
-    }
-  }
-  if (Object.keys(auth).length > 0) {
-    fs.writeFileSync(path, JSON.stringify(auth, null, 2) + "\n");
-  }
-'
+PIR_ENTRY_AUTH_PATH="$HOME/.pi/agent/auth.json" node /usr/local/bin/pir-auth-seed
 chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
 
 PIR_ENTRY_SETTINGS_PATH="$HOME/.pi/agent/settings.json" node -e '
