@@ -20,6 +20,8 @@ export interface VerifierDeps {
   /** Matched historical decisions (already fetched by the memory matcher). */
   priorDecisions: MemoryMatch[];
   model?: string;
+  /** Opt-in transcript dump location for this verification session. */
+  transcriptFile?: string;
 }
 
 /**
@@ -54,6 +56,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
     tools,
     builtinTools: [...READONLY_BUILTIN_TOOLS],
     model: deps.model,
+    transcriptFile: deps.transcriptFile,
   });
 
   let assistantText = "";

@@ -107,6 +107,21 @@ key in `PI_AUTH_JSON` (surfaces later as `reviewer session failed`, not at
 health time) or a taken port. An unknown model id fails at session start;
 check spelling against `docker compose exec pir models --all`.
 
+**Full session logs & thinking (optional):** `docker compose logs` shows only
+progress events. For the complete conversations — assistant text, thinking
+blocks, tool calls and results — set `PIR_TRANSCRIPTS=1` in `.env` (compose
+passes it through) and restart. Each run then dumps one JSON file per
+reviewer/verifier session under the `pir-state` volume:
+
+```bash
+docker compose exec pir sh -c 'ls -t /data/state/*/transcripts/*/ | head'
+# reviewer-r1.json  verifier-r1-F-101.json  ...   (messages[] holds the
+# conversation; thinking lives in content blocks with type "thinking")
+```
+
+The run's JSON envelope (`run.transcriptDir`) and the log line
+`transcripts: /data/state/...` both name the directory for a given run.
+
 **Custom TLS (Q4 = custom):** mount the PEM pair and point pi at it:
 
 ```bash

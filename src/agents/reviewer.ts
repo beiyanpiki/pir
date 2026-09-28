@@ -41,6 +41,8 @@ export interface ReviewerDeps {
   focus: string[];
   priorSummary?: string;
   model?: string;
+  /** Opt-in transcript dump location for this round's session. */
+  transcriptFile?: string;
 }
 
 /**
@@ -70,6 +72,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     tools,
     builtinTools: [...READONLY_BUILTIN_TOOLS],
     model: deps.model,
+    transcriptFile: deps.transcriptFile,
   });
 
   let assistantText = "";

@@ -537,6 +537,7 @@ async function cmdFind(
             head: result.head,
             rounds: result.rounds,
             maxFindings: result.maxFindings,
+            transcriptDir: result.transcriptDir ?? null,
             files: result.changeSet.files.map((f) => ({
               path: f.path,
               status: f.status,
@@ -560,6 +561,7 @@ async function cmdFind(
         rounds: result.rounds,
         findings,
         stoppedBecause: result.stoppedBecause,
+        transcriptDir: result.transcriptDir,
       })}\n`,
     );
   }

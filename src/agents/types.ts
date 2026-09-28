@@ -37,6 +37,11 @@ export interface SessionConfig {
   builtinTools: string[];
   /** Model id override; falls back to pi settings when unset. */
   model?: string;
+  /**
+   * When set, the full conversation of this session (thinking included) is
+   * dumped here as JSON once the prompt settles — see transcripts.ts.
+   */
+  transcriptFile?: string;
 }
 
 export interface AgentSessionFactory {

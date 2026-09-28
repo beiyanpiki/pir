@@ -140,7 +140,7 @@ pir version
 - `--max-findings N`:单次运行最多报告的 findings 数(默认 10,只计 confirmed/uncertain,被拒绝或被历史决策压下的不占额度)。**上限而非目标**:证据不足时少报、零报才是正确结果;系统不会为凑满数量而伪造 finding 或提交无关紧要的琐碎问题
 - 决策集:`confirmed | expected | false-positive | accepted-risk | wont-fix | fixed | obsolete`
 - 退出码:`0` 正常 | `1` 存在 ≥ `--fail-on` 级别的已报告 findings | `2` 用法错误 | `3` 运行错误
-- 环境变量:`PIR_MODEL`(默认模型覆盖)、`PIR_MEMORY_DB`(单库覆盖)、`PIR_STATE_IN_PROJECT=1`(状态进 `<repo>/.pir/`,docker exec 模式默认)、`PIR_STATE_ROOT`(服务端集中状态)、`PIR_REPOS_ROOT`(服务端仓库根)、`PIR_SERVER_TOKEN`/`PIR_TLS_CERT`/`PIR_TLS_KEY`(serve)、`PIR_KEEP_WORKTREE=1`(保留评审 worktree 调试)、`PIR_SERVER_URL`/`PIR_MODE`(远程模式)、`PIR_CONFIG_DIR`(配置目录,默认 `~/.pir`)、`PIR_NO_WIZARD=1`(禁用首次向导)
+- 环境变量:`PIR_MODEL`(默认模型覆盖)、`PIR_MEMORY_DB`(单库覆盖)、`PIR_STATE_IN_PROJECT=1`(状态进 `<repo>/.pir/`,docker exec 模式默认)、`PIR_STATE_ROOT`(服务端集中状态)、`PIR_REPOS_ROOT`(服务端仓库根)、`PIR_SERVER_TOKEN`/`PIR_TLS_CERT`/`PIR_TLS_KEY`(serve)、`PIR_KEEP_WORKTREE=1`(保留评审 worktree 调试)、`PIR_SERVER_URL`/`PIR_MODE`(远程模式)、`PIR_CONFIG_DIR`(配置目录,默认 `~/.pir`)、`PIR_NO_WIZARD=1`(禁用首次向导)、`PIR_TRANSCRIPTS=1`(把每次评审的完整会话转录——含 thinking、工具调用与结果——写入状态目录 `transcripts/<runId>/` 下的 JSON;目录位置与 memory.sqlite 同级解析,服务端即 `PIR_STATE_ROOT/<projectId>/transcripts/`,运行结束时 stdout/日志会回显路径)
 
 ## Docker 两种用法
 

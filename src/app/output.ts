@@ -55,6 +55,7 @@ export function renderFindResultText(input: {
   rounds: Array<{ round: number; fresh: number; confirmed: number; rejected: number; uncertain: number }>;
   findings: FindingView[];
   stoppedBecause: string;
+  transcriptDir?: string;
 }): string {
   const lines: string[] = [];
   if (input.degraded) {
@@ -66,6 +67,9 @@ export function renderFindResultText(input: {
     );
   }
   lines.push(`stopped: ${input.stoppedBecause}`);
+  if (input.transcriptDir) {
+    lines.push(`transcripts: ${input.transcriptDir}`);
+  }
   const reported = input.findings.filter(isReported);
   lines.push("");
   if (reported.length > 0) {
