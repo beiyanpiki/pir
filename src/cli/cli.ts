@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand } from "./executor.js";
+import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
@@ -101,15 +102,3 @@ main(process.argv.slice(2)).then(
     }
   },
 );
-
-/**
- * Exit only after queued stream writes reach the OS: plain process.exit()
- * truncates large buffered writes on pipes (the `pir models --all` catalog
- * exceeds the synchronous 64KB buffer). The empty-string write's callback
- * fires once everything queued before it has been flushed.
- */
-function drainAndExit(code: number): void {
-  process.stdout.write("", () => {
-    process.stderr.write("", () => process.exit(code));
-  });
-}

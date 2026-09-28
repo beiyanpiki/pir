@@ -50,6 +50,10 @@ function execCodegraph(args: string[], options: { stdin?: string; timeoutMs?: nu
       clearTimeout(timer);
       resolve({ stdout, stderr, code });
     });
+    // The child may exit before consuming stdin (e.g. it errors out at
+    // startup): an EPIPE here must not surface as an unhandled stream
+    // error — the close event and the exit code carry the real outcome.
+    child.stdin.on("error", () => {});
     if (options.stdin !== undefined) child.stdin.write(options.stdin);
     child.stdin.end();
   });

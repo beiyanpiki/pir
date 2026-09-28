@@ -78,6 +78,8 @@ Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
+  --flag=value        value flags (--base, --repo, ...) also accept the
+                      --flag=value form
 
 Modes:
   Local by default. The first interactive run starts a setup wizard and
@@ -145,7 +147,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token.startsWith("--")) {
-      if (VALUE_FLAGS.has(token)) {
+      const eq = token.indexOf("=");
+      const name = eq === -1 ? token : token.slice(0, eq);
+      if (eq !== -1 && VALUE_FLAGS.has(name)) {
+        flags.set(name, token.slice(eq + 1));
+      } else if (VALUE_FLAGS.has(token)) {
         const value = argv[i + 1];
         if (value === undefined) throw new UsageError(`missing value for ${token}`);
         flags.set(token, value);
@@ -158,6 +164,53 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags };
+}
+
+/**
+ * Replace --base/--head values (two-token and `--flag=value` forms) with
+ * resolved SHAs. Bundle-materialized repos have no remote-tracking or user
+ * refs — `origin/main` or a branch name would not resolve there, failing
+ * the diff — so refs must be pinned to SHAs before the argv is executed
+ * against one (client side before shipping, server side for old clients).
+ */
+export function pinRefsToShas(argv: string[], shas: { base: string | null; head: string }): string[] {
+  const pinned = new Map<string, string | null>([
+    ["--base", shas.base],
+    ["--head", shas.head],
+  ]);
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!;
+    if (token.startsWith("--")) {
+      const eq = token.indexOf("=");
+      const name = eq > 0 ? token.slice(0, eq) : token;
+      const sha = pinned.get(name);
+      if (typeof sha === "string") {
+        if (eq > 0) {
+          out.push(`${name}=${sha}`);
+        } else if (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
+          out.push(name, sha);
+          i += 1; // drop the raw ref
+        } else {
+          // Valueless --base/--head: leave it for parseArgs to reject as a
+          // usage error — pinning a fabricated SHA would silently turn the
+          // invocation into a successful (and wrong) review.
+          out.push(token);
+        }
+        continue;
+      }
+      if (eq === -1 && VALUE_FLAGS.has(name)) {
+        // Another value flag: keep its value verbatim, so a literal "--head"
+        // inside a --note/--text is never mistaken for a ref flag.
+        out.push(token);
+        if (i + 1 < argv.length) out.push(argv[i + 1]!);
+        i += 1;
+        continue;
+      }
+    }
+    out.push(token);
+  }
+  return out;
 }
 
 export function readVersion(): string {

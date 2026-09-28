@@ -1,5 +1,5 @@
 import process from "node:process";
-import { UsageError } from "./executor.js";
+import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 
 export interface RemoteOptions {
   token?: string;
@@ -21,12 +21,21 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
   }
   const url = new URL(serverUrl);
   const cleaned = stripClientFlags(argv);
-  const command = cleaned.find((a) => !a.startsWith("--"));
 
-  if (command === "find" && !cleaned.includes("--repo")) {
+  if (wantsBundle(cleaned)) {
     return await reviewViaBundle(url, cleaned, options);
   }
   return await forwardExec(url, cleaned, options);
+}
+
+/**
+ * Only a plain `find` over the caller's own checkout ships as a bundle.
+ * parseArgs is the authority on the command (it skips value-flag values, so
+ * `--model glm find` is still a find), matching the server's own check.
+ */
+export function wantsBundle(cleanedArgv: string[]): boolean {
+  const command = parseArgs(cleanedArgv).positional[0];
+  return command === "find" && !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="));
 }
 
 async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions): Promise<number> {
@@ -41,12 +50,20 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
 
   const flags = new Map<string, string>();
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i]!.startsWith("--") && i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
-      flags.set(argv[i]!, argv[i + 1]!);
+    const token = argv[i]!;
+    if (!token.startsWith("--")) continue;
+    const eq = token.indexOf("=");
+    if (eq > 0) {
+      flags.set(token.slice(0, eq), token.slice(eq + 1));
+    } else if (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
+      flags.set(token, argv[i + 1]!);
     }
   }
 
-  let head = flags.get("--head") ?? (await getHeadCommit(cwd));
+  const headFlag = flags.get("--head");
+  let head = headFlag
+    ? (await git(cwd, ["rev-parse", "--verify", `${headFlag}^{commit}`])).trim()
+    : await getHeadCommit(cwd);
   if (argv.includes("--uncommitted")) {
     head = await createWorkingTreeSnapshot(cwd);
     argv = argv.filter((a) => a !== "--uncommitted");
@@ -62,6 +79,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       base = null;
     }
   }
+  argv = pinRefsToShas(argv, { base, head });
 
   const [remoteUrl, rootCommit] = await Promise.all([getRemoteUrl(cwd), getRootCommit(cwd)]);
   const { createBundle } = await import("../app/repos.js");
