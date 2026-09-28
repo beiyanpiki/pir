@@ -25,7 +25,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
   pi.registerCommand("review-find", {
     description: "Run the pi-review finding loop on a change range (default HEAD^..HEAD)",
     getArgumentCompletions: (prefix) => {
-      const options = ["--base", "--head", "--max-rounds", "--model"].filter((o) => o.startsWith(prefix));
+      const options = ["--base", "--head", "--max-rounds", "--max-findings", "--model"].filter((o) => o.startsWith(prefix));
       return options.length > 0 ? options.map((value) => ({ value, label: value })) : null;
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -37,6 +37,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           base: extractFlag(tokens, "--base"),
           head: extractFlag(tokens, "--head"),
           maxRounds: extractFlag(tokens, "--max-rounds") !== undefined ? Number(extractFlag(tokens, "--max-rounds")) : undefined,
+          maxFindings: extractFlag(tokens, "--max-findings") !== undefined ? Number(extractFlag(tokens, "--max-findings")) : undefined,
           model: extractFlag(tokens, "--model"),
         });
         const findings = result.findings.map((row) => toFindingView(app, row));

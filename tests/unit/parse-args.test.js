@@ -10,6 +10,13 @@ test("parseArgs accepts --flag=value for value flags", () => {
   assert.equal(flags.get("--json"), true);
 });
 
+test("parseArgs parses --max-findings in both forms", () => {
+  const { flags } = parseArgs(["find", "--max-findings", "5"]);
+  assert.equal(flags.get("--max-findings"), "5");
+  const eq = parseArgs(["find", "--max-findings=3"]);
+  assert.equal(eq.flags.get("--max-findings"), "3");
+});
+
 test("parseArgs keeps values containing '=' intact", () => {
   const { flags } = parseArgs(["feedback", "F-1", "expected", "--note=a=b"]);
   assert.equal(flags.get("--note"), "a=b");

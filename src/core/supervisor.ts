@@ -12,7 +12,7 @@ import type { ToolContext } from "../tools/context.js";
 import { Budget } from "./budget.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
-import { applyVerdict, createReviewState, type ReviewState, type RoundInfo } from "./review-state.js";
+import { applyVerdict, createReviewState, reportedCount, type ReviewState, type RoundInfo } from "./review-state.js";
 
 export interface FindOptions {
   base?: string;
@@ -22,6 +22,11 @@ export interface FindOptions {
   model?: string;
   /** Cap on verifier sessions per round — verification is the expensive part. */
   maxVerificationsPerRound?: number;
+  /**
+   * Cap on reported findings (confirmed + uncertain) per run. A ceiling, not
+   * a target: the loop must never invent or pad findings to reach it.
+   */
+  maxFindings?: number;
 }
 
 export interface FindEvent {
@@ -49,11 +54,13 @@ export interface FindOutcome {
   estimatedTokens: number;
   memoryPackTokens: number;
   runId: string;
+  maxFindings: number;
 }
 
 const DEFAULT_MAX_ROUNDS = 2;
 const DEFAULT_MAX_TOKENS = 400_000;
 const DEFAULT_MAX_VERIFICATIONS = 8;
+const DEFAULT_MAX_FINDINGS = 10;
 
 /**
  * The outer Finding Loop:
@@ -64,6 +71,7 @@ const DEFAULT_MAX_VERIFICATIONS = 8;
 export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const options = deps.options ?? {};
   const maxRounds = options.maxRounds ?? DEFAULT_MAX_ROUNDS;
+  const maxFindings = options.maxFindings ?? DEFAULT_MAX_FINDINGS;
   const budget = new Budget({
     maxRounds,
     maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -91,6 +99,12 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   };
 
   while (true) {
+    // The findings cap is checked before the other stop conditions so a full
+    // report is attributed to the cap, not to whichever budget also expired.
+    if (state.round > 0 && reportedCount(state) >= maxFindings) {
+      state.stoppedBecause = `max findings reached (${maxFindings})`;
+      break;
+    }
     const stop = shouldStop(state, budget);
     if (state.round > 0 && stop.stop) {
       state.stoppedBecause = stop.reason!;
@@ -105,6 +119,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       memoryPack: memoryPack.text,
       round: state.round,
       maxRounds,
+      maxFindings,
+      findingsRemaining: Math.max(0, maxFindings - reportedCount(state)),
       focus: state.focus,
       priorSummary: state.priorSummary,
       model: options.model,
@@ -114,7 +130,11 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     const dedup = deduplicateCandidates(result.candidates, state.known);
     state.known.push(...dedup.fresh);
 
-    const toVerify = dedup.fresh.slice(0, options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS);
+    const verificationSlots = Math.min(
+      options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS,
+      Math.max(0, maxFindings - reportedCount(state)),
+    );
+    const toVerify = dedup.fresh.slice(0, verificationSlots);
     let confirmed = 0;
     let rejected = 0;
     let uncertain = 0;
@@ -198,5 +218,6 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     estimatedTokens: budget.tokenEstimate,
     memoryPackTokens: memoryPack.approxTokens,
     runId: run.id,
+    maxFindings,
   };
 }

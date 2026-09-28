@@ -118,7 +118,7 @@ Docker 下按 provider 注入凭证:`-e PI_API_KEY__deepseek=sk-...`(或整份
 
 ```bash
 pir find [--base <ref>] [--head <ref>] [--uncommitted] [--json]
-         [--max-rounds N] [--max-tokens N]
+         [--max-rounds N] [--max-tokens N] [--max-findings N]
          [--fail-on P0|P1|P2|P3|none] [--model <id>] [--no-sync-index]
 pir memory status|bootstrap|refresh [--json] [--max-batches N] [--model <id>]
 pir feedback <id> <decision> [--note "..."]      # decision 见下
@@ -137,6 +137,7 @@ pir version
 全局:`--json`、`--cwd <path>`、`--quiet`;远端模式 `--server <url> --token <t> [--insecure]`(`pir --server ... models` 列的是**服务端**可用的模型),`--local` 单次强制本地。模式解析优先级:`--server` > `--local` > `PIR_SERVER_URL` > `PIR_MODE` > `~/.pir/config.json`;`serve`/`config`/`skill`/`version` 始终本地执行。
 
 - `--model <id>`:`<provider>/<model>` 或模糊 id(`pir models` 查目录);缺省时依次取 `PIR_MODEL` 环境变量、`~/.pir/config.json` 的 `model`、pi settings 默认
+- `--max-findings N`:单次运行最多报告的 findings 数(默认 10,只计 confirmed/uncertain,被拒绝或被历史决策压下的不占额度)。**上限而非目标**:证据不足时少报、零报才是正确结果;系统不会为凑满数量而伪造 finding 或提交无关紧要的琐碎问题
 - 决策集:`confirmed | expected | false-positive | accepted-risk | wont-fix | fixed | obsolete`
 - 退出码:`0` 正常 | `1` 存在 ≥ `--fail-on` 级别的已报告 findings | `2` 用法错误 | `3` 运行错误
 - 环境变量:`PIR_MODEL`(默认模型覆盖)、`PIR_MEMORY_DB`(单库覆盖)、`PIR_STATE_IN_PROJECT=1`(状态进 `<repo>/.pir/`,docker exec 模式默认)、`PIR_STATE_ROOT`(服务端集中状态)、`PIR_REPOS_ROOT`(服务端仓库根)、`PIR_SERVER_TOKEN`/`PIR_TLS_CERT`/`PIR_TLS_KEY`(serve)、`PIR_KEEP_WORKTREE=1`(保留评审 worktree 调试)、`PIR_SERVER_URL`/`PIR_MODE`(远程模式)、`PIR_CONFIG_DIR`(配置目录,默认 `~/.pir`)、`PIR_NO_WIZARD=1`(禁用首次向导)

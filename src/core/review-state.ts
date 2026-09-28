@@ -42,6 +42,14 @@ export function createReviewState(base: string, head: string, maxRounds: number)
   };
 }
 
+/**
+ * Findings that count toward the report: confirmed plus uncertain. Rejected
+ * and decision-suppressed findings do not consume the maxFindings budget.
+ */
+export function reportedCount(state: ReviewState): number {
+  return state.verified.filter((f) => f.status === "confirmed" || f.status === "uncertain").length;
+}
+
 export function applyVerdict(
   state: ReviewState,
   candidate: CandidateFinding,

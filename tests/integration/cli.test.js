@@ -126,6 +126,19 @@ test("pir exit codes: usage error exits 2, unknown finding exits 3", async () =>
   }
 });
 
+test("pir find rejects a non-positive --max-findings as a usage error", async () => {
+  const repo = createTempGitRepo("pir-cli-max-findings-");
+  try {
+    for (const bad of ["0", "-3", "2.5", "abc"]) {
+      const usage = await pirExpectFail(["find", "--max-findings", bad, "--cwd", repo.dir]);
+      assert.equal(usage.code, 2, `--max-findings ${bad} must be a usage error`);
+      assert.match(usage.stderr, /--max-findings/);
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("pir models lists the full pi catalog with --all", async () => {
   const json = await pir(["models", "--json", "--all"]);
   const parsed = JSON.parse(json.stdout);
