@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { findIssues } from "../../dist/core/supervisor.js";
 import { createAppContext } from "../../dist/app/context.js";
@@ -23,6 +25,17 @@ class FakeSessionFactory {
   }
   async createSession(config) {
     const factory = this;
+    // The real factory honors SessionConfig.transcriptFile by dumping the
+    // conversation there; the fake mirrors that contract minimally so the
+    // supervisor's wiring stays observable.
+    const dumpTranscript = () => {
+      if (!config.transcriptFile) return;
+      mkdirSync(path.dirname(config.transcriptFile), { recursive: true });
+      writeFileSync(
+        config.transcriptFile,
+        JSON.stringify({ role: config.systemRole, messages: [{ role: "user" }, { role: "assistant" }] }),
+      );
+    };
     const handle = {
       config,
       async prompt(text) {
@@ -31,12 +44,16 @@ class FakeSessionFactory {
           if (!found) throw new Error(`tool not found in fake session: ${name}`);
           return found;
         };
-        if (config.systemRole === "code reviewer" && factory.reviewerScript) {
-          await factory.reviewerScript(tool, text, config);
-        } else if (config.systemRole === "finding verifier" && factory.verifierScript) {
-          await factory.verifierScript(tool, text, config);
-        } else if (config.systemRole === "fix verifier" && factory.verifierScript) {
-          await factory.verifierScript(tool, text, config);
+        try {
+          if (config.systemRole === "code reviewer" && factory.reviewerScript) {
+            await factory.reviewerScript(tool, text, config);
+          } else if (config.systemRole === "finding verifier" && factory.verifierScript) {
+            await factory.verifierScript(tool, text, config);
+          } else if (config.systemRole === "fix verifier" && factory.verifierScript) {
+            await factory.verifierScript(tool, text, config);
+          }
+        } finally {
+          dumpTranscript();
         }
       },
       getLastAssistantText: () => "fake assistant text",
@@ -446,6 +463,79 @@ test("findIssues: rejected findings do not consume the maxFindings budget", asyn
     assert.equal(outcome.findings.filter((f) => f.status === "rejected").length, 1);
     assert.equal(outcome.stoppedBecause, "max findings reached (1)");
   } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: PIR_TRANSCRIPTS=1 dumps one transcript per session under the state root", async () => {
+  const repo = setupRepo();
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-transcripts-e2e-"));
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: reviewerRecordsCandidate,
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+    },
+  });
+  const savedTranscripts = process.env.PIR_TRANSCRIPTS;
+  const savedStateRoot = process.env.PIR_STATE_ROOT;
+  process.env.PIR_TRANSCRIPTS = "1";
+  process.env.PIR_STATE_ROOT = stateRoot;
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 1 },
+    });
+    assert.ok(outcome.transcriptDir, "outcome names the transcript directory");
+    assert.ok(outcome.transcriptDir.startsWith(stateRoot), "transcripts live under PIR_STATE_ROOT");
+    const reviewerFile = path.join(outcome.transcriptDir, "reviewer-r1.json");
+    const verifierFile = path.join(outcome.transcriptDir, "verifier-r1-F-101.json");
+    assert.ok(existsSync(reviewerFile), "reviewer transcript exists");
+    assert.ok(existsSync(verifierFile), "verifier transcript exists");
+    assert.equal(JSON.parse(readFileSync(reviewerFile, "utf8")).role, "code reviewer");
+    assert.equal(JSON.parse(readFileSync(verifierFile, "utf8")).role, "finding verifier");
+  } finally {
+    if (savedTranscripts === undefined) delete process.env.PIR_TRANSCRIPTS;
+    else process.env.PIR_TRANSCRIPTS = savedTranscripts;
+    if (savedStateRoot === undefined) delete process.env.PIR_STATE_ROOT;
+    else process.env.PIR_STATE_ROOT = savedStateRoot;
+    ctx.memory.close();
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  }
+});
+
+test("findIssues: no transcript files without PIR_TRANSCRIPTS", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: reviewerRecordsCandidate,
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+    },
+  });
+  const savedTranscripts = process.env.PIR_TRANSCRIPTS;
+  delete process.env.PIR_TRANSCRIPTS;
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 1 },
+    });
+    assert.equal(outcome.transcriptDir, undefined);
+    assert.equal(
+      factory.createdSessions.every((s) => s.config.transcriptFile === undefined),
+      true,
+      "sessions get no transcript file when disabled",
+    );
+  } finally {
+    if (savedTranscripts !== undefined) process.env.PIR_TRANSCRIPTS = savedTranscripts;
     ctx.memory.close();
     repo.cleanup();
   }

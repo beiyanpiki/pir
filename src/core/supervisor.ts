@@ -5,6 +5,7 @@ import { deduplicateCandidates } from "../findings/dedup.js";
 import type { CandidateFinding, MemoryMatch } from "../findings/types.js";
 import type { Memory } from "../memory/index.js";
 import { buildMemoryPack, matchIssueHistory } from "../memory/retrieval.js";
+import { runTranscriptDir, transcriptsEnabled } from "../agents/transcripts.js";
 import type { AgentSessionFactory } from "../agents/types.js";
 import { runReviewerRound } from "../agents/reviewer.js";
 import { runVerifier } from "../agents/verifier.js";
@@ -13,6 +14,7 @@ import { Budget } from "./budget.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
 import { applyVerdict, createReviewState, reportedCount, type ReviewState, type RoundInfo } from "./review-state.js";
+import path from "node:path";
 
 export interface FindOptions {
   base?: string;
@@ -30,7 +32,7 @@ export interface FindOptions {
 }
 
 export interface FindEvent {
-  type: "round-start" | "round-end" | "verify" | "done";
+  type: "round-start" | "round-end" | "verify" | "info" | "done";
   round?: number;
   message: string;
 }
@@ -55,6 +57,8 @@ export interface FindOutcome {
   memoryPackTokens: number;
   runId: string;
   maxFindings: number;
+  /** Set when PIR_TRANSCRIPTS=1: directory holding this run's session dumps. */
+  transcriptDir?: string;
 }
 
 const DEFAULT_MAX_ROUNDS = 2;
@@ -83,6 +87,13 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
   const run = deps.memory.findings.createRun(base, head);
   const state: ReviewState = createReviewState(base, head, maxRounds);
+
+  const transcriptDir = transcriptsEnabled()
+    ? runTranscriptDir(deps.repoRoot, deps.memory.identity.projectId, run.id)
+    : undefined;
+  if (transcriptDir) {
+    deps.onProgress?.({ type: "info", message: `transcripts: ${transcriptDir}` });
+  }
 
   const changedPaths = changeSet.files.map((f) => f.path);
   const memoryPack = deps.memory
@@ -124,6 +135,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       focus: state.focus,
       priorSummary: state.priorSummary,
       model: options.model,
+      transcriptFile: transcriptDir ? path.join(transcriptDir, `reviewer-r${state.round}.json`) : undefined,
     });
     budget.chargeText(result.assistantText, result.summary);
 
@@ -163,6 +175,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         candidate,
         priorDecisions: memoryMatches,
         model: options.model,
+        transcriptFile: transcriptDir
+          ? path.join(transcriptDir, `verifier-r${state.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`)
+          : undefined,
       });
       budget.chargeText(verdict.rationale);
       const verified = applyVerdict(state, candidate, verdict, memoryMatches);
@@ -219,5 +234,6 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     memoryPackTokens: memoryPack.approxTokens,
     runId: run.id,
     maxFindings,
+    ...(transcriptDir ? { transcriptDir } : {}),
   };
 }

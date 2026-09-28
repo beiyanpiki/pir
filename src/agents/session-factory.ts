@@ -12,6 +12,7 @@ import {
   type CreateAgentSessionOptions,
 } from "@earendil-works/pi-coding-agent";
 import { readPiStartupModel } from "./pi-models.js";
+import { writeTranscript } from "./transcripts.js";
 import type { AgentHandle, AgentSessionFactory, ReviewTool, SessionConfig } from "./types.js";
 
 type SessionModel = NonNullable<CreateAgentSessionOptions["model"]>;
@@ -100,7 +101,30 @@ export class PiSessionFactory implements AgentSessionFactory {
     });
 
     return {
-      prompt: (text) => session.prompt(text),
+      prompt: async (text: string) => {
+        const startedAt = new Date().toISOString();
+        let promptError: string | undefined;
+        try {
+          await session.prompt(text);
+        } catch (err) {
+          promptError = err instanceof Error ? err.message : String(err);
+          throw err;
+        } finally {
+          // Dump before dispose: once the session is gone the conversation —
+          // thinking included — exists nowhere else.
+          if (config.transcriptFile) {
+            writeTranscript(config.transcriptFile, {
+              role: config.systemRole,
+              model: requested ?? "(pi default)",
+              startedAt,
+              endedAt: new Date().toISOString(),
+              ...(promptError ? { error: promptError } : {}),
+              prompt: text,
+              messages: session.messages,
+            });
+          }
+        }
+      },
       getLastAssistantText: () => session.getLastAssistantText(),
       getLastAssistantError: () => {
         const messages = session.messages;

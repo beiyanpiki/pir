@@ -31,6 +31,9 @@ services:
       - PI_DEFAULT_PROVIDER=${PI_DEFAULT_PROVIDER:-}
       - PI_DEFAULT_MODEL=${PI_DEFAULT_MODEL:-}
       - PI_DEFAULT_THINKING=${PI_DEFAULT_THINKING:-}
+      # PIR_TRANSCRIPTS=1: dump full reviewer/verifier conversations (thinking
+      # included) per run under /data/state/<projectId>/transcripts/<runId>/
+      - PIR_TRANSCRIPTS=${PIR_TRANSCRIPTS:-}
       - PIR_REPOS_ROOT=/data/repos
       - PIR_STATE_ROOT=/data/state
     volumes:
