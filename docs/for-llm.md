@@ -185,8 +185,10 @@ pir skill print                # raw SKILL.md for other agent frameworks
 `displayId`, `severity` (P0–P3), `status` (`confirmed`/`uncertain` are
 reported; `expected`/`accepted_risk`/`wont_fix` mean suppressed by a prior
 user decision that a verifier re-validated), `claim`, `trigger`, `anchors`,
-`verifierRationale`, `memoryMatches`. Use `--fail-on P1` + exit code `1` for
-gating decisions.
+`verifierRationale`, `memoryMatches`. `data.run.maxFindings` echoes the
+reported-findings cap (default 10, `--max-findings N`; a ceiling, not a
+target — fewer findings when evidence runs out is normal, never padded).
+Use `--fail-on P1` + exit code `1` for gating decisions.
 
 ## Troubleshooting quick table
 
