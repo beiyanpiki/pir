@@ -1,4 +1,16 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -59,11 +71,25 @@ function readRegistry(): Record<string, RepoEntry> {
   }
 }
 
-/** Atomic replace via rename, so readers never observe a torn write. */
+/**
+ * Atomic replace via rename, so readers never observe a torn write. The temp
+ * file is fsynced first: without that, a crash right after the rename can
+ * leave a zero-length registry on some filesystems — a hard outage now that
+ * a corrupt registry is a loud error.
+ */
 function writeRegistry(registry: Record<string, RepoEntry>): void {
   const target = registryPath();
   const temp = path.join(reposRoot(), `repos.json.tmp-${process.pid}-${randomUUID()}`);
-  writeFileSync(temp, JSON.stringify(registry, null, 2) + "\n");
+  const fd = openSync(temp, "w");
+  try {
+    writeSync(fd, JSON.stringify(registry, null, 2) + "\n");
+    fsyncSync(fd);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    throw err;
+  } finally {
+    closeSync(fd);
+  }
   try {
     renameSync(temp, target);
   } catch (err) {
@@ -85,14 +111,21 @@ function sleepSync(ms: number): void {
  * Serialize registry mutations across processes: CLI invocations are not
  * serialized by anything (unlike the server's request queue), and an
  * unguarded read-modify-write loses whichever entry was written first.
+ *
+ * The lock file carries an owner token and is removed only if it is still
+ * ours: if we stall past REGISTRY_LOCK_STALE_MS a waiter breaks the lock and
+ * creates its own — deleting that one would re-open the race this lock
+ * exists to close.
  */
 function withRegistryLock<T>(fn: () => T): T {
   const lockPath = `${registryPath()}.lock`;
   const deadline = Date.now() + REGISTRY_LOCK_WAIT_MS;
-  let fd: number | undefined;
-  while (fd === undefined) {
+  const token = `${process.pid}-${randomUUID()}`;
+  let acquired = false;
+  while (!acquired) {
     try {
-      fd = openSync(lockPath, "wx");
+      writeFileSync(lockPath, token, { flag: "wx" });
+      acquired = true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       try {
@@ -110,9 +143,10 @@ function withRegistryLock<T>(fn: () => T): T {
   try {
     return fn();
   } finally {
-    closeSync(fd);
     try {
-      rmSync(lockPath, { force: true });
+      if (readFileSync(lockPath, "utf8") === token) {
+        rmSync(lockPath, { force: true });
+      }
     } catch {
       // someone else already broke a lock they considered stale
     }
@@ -315,11 +349,28 @@ export async function materializeFromBundle(
       throw error;
     }
     // Older clients forwarded raw refs ("HEAD", "origin/x", a branch name)
-    // as the head; nothing by that name exists in this repo. The fetched
-    // refs/pir/last-bundle always points at the commit the client actually
-    // packed, so fall back to it instead of failing with a git fatal.
+    // as the head; nothing by that name exists in this repo (or it resolves
+    // to the wrong commit). The fetched refs/pir/last-bundle always points
+    // at the commit the client actually packed, so review that — but say so.
+    // A head that is shaped like a commit id yet absent from the fetched
+    // objects is a genuine client/bundle mismatch (every current client
+    // packs its claimed head); fail loudly instead of silently reviewing
+    // whatever was packed.
     const packedHead = (await git(dir, ["rev-parse", "--verify", "refs/pir/last-bundle^{commit}"])).trim();
-    const head = isCommitId(meta.head) && (await commitExists(dir, meta.head)) ? meta.head : packedHead;
+    let head: string;
+    if (!isCommitId(meta.head)) {
+      process.stderr.write(
+        `pir: client sent non-SHA head ${JSON.stringify(meta.head)}; reviewing packed head ${packedHead.slice(0, 10)}\n`,
+      );
+      head = packedHead;
+    } else if (await commitExists(dir, meta.head)) {
+      head = meta.head;
+    } else {
+      throw new Error(
+        `bundle does not contain the claimed head ${meta.head} (packed head is ${packedHead.slice(0, 10)}); ` +
+          "client/server state mismatch",
+      );
+    }
     return { review: await materializeWorktree(dir, projectId, head), neededFull: false };
   } finally {
     rmSync(bundleFile, { force: true });

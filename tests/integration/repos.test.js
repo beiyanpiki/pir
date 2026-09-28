@@ -249,3 +249,43 @@ test("unregistered --repo spec keys memory under the computed sha projectId", as
     repo.cleanup();
   }
 });
+
+test("a claimed SHA missing from the bundle is a loud error, not a silent fallback", async (t) => {
+  sandbox(t); // env-scoped PIR_REPOS_ROOT/PIR_STATE_ROOT for materializeFromBundle
+  const repo = createTempGitRepo("pir-headmismatch-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    const headCommit = repo.commit("head");
+    const { createBundle, materializeFromBundle } = await import("../../dist/app/repos.js");
+    const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+    const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+    const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+    // Well-formed but never packed: a genuine client/bundle mismatch must
+    // not quietly review whatever the bundle happened to contain.
+    const forged = "f".repeat(40);
+    await assert.rejects(
+      materializeFromBundle(bundle, { remoteUrl, rootCommit, base: null, head: forged }),
+      (err) => err.message.includes("does not contain the claimed head"),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("a live foreign lock is never deleted by a failed acquisition", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-foreignlock-");
+  try {
+    const lockPath = path.join(reposRoot, "repos.json.lock");
+    writeFileSync(lockPath, "owned-by-someone-else");
+    await assert.rejects(
+      executePirCommand(["repos", "add", repo.dir, "--name", "foreign", "--json"]),
+      (err) => err.message.includes("repo registry lock busy"),
+    );
+    // Fresh and not ours: the timed-out acquisition must leave it untouched
+    // for its real owner — deleting it would let a third process race in.
+    assert.equal(readFileSync(lockPath, "utf8"), "owned-by-someone-else");
+  } finally {
+    repo.cleanup();
+  }
+});
