@@ -38,6 +38,7 @@ COPY --from=build /build/node_modules /app/node_modules
 COPY --from=build /build/dist /app/dist
 COPY package.json /app/package.json
 COPY docker/entrypoint.sh /usr/local/bin/pir-entrypoint
+COPY docker/auth-seed.cjs /usr/local/bin/pir-auth-seed
 RUN chmod +x /app/dist/cli/cli.js /usr/local/bin/pir-entrypoint \
   && ln -s /app/dist/cli/cli.js /usr/local/bin/pir \
   && ln -s /app/dist/cli/cli.js /usr/local/bin/pir-review
