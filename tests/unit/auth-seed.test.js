@@ -69,3 +69,16 @@ test("auth-seed merges PI_API_KEY__<provider> env and existing file contents", a
     openai: { type: "api_key", key: "sk-3" },
   });
 });
+
+test("auth-seed rejects a non-object existing auth.json (bad /pi-config mount)", async (t) => {
+  const dir = authDir(t);
+  const target = path.join(dir, "auth.json");
+  writeFileSync(target, '"just-a-string"\n');
+  // Same treatment as a corrupt file: fail loudly instead of leaving the
+  // bad store in place to resurface later as a model-auth error.
+  await assert.rejects(
+    run({ HOME: dir, PIR_ENTRY_AUTH_PATH: target }),
+    (err) => err.code === 1 && /is not a JSON object/.test(err.stderr),
+  );
+  assert.equal(readFileSync(target, "utf8"), '"just-a-string"\n');
+});

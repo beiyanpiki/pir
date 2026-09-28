@@ -22,12 +22,17 @@ let auth = {};
 try {
   const parsed = JSON.parse(fs.readFileSync(target, "utf8"));
   if (!isObject(parsed)) {
-    // Seeded from the /pi-config mount: warn and start clean rather than
-    // propagate a corrupt store; PI_* env vars may still configure auth.
-    console.error(`pir-entrypoint: ignoring non-object ${target} (bad /pi-config mount?)`);
-  } else {
-    auth = parsed;
+    // Same policy as an unreadable/corrupt file below: bad operator input
+    // fails loudly at startup. "Starting clean" without rewriting the file
+    // would leave the bad store in place to resurface later as an obscure
+    // model-auth error.
+    console.error(
+      `pir-entrypoint: ${target} is not a JSON object mapping providers to credentials ` +
+        '(bad /pi-config mount?) — fix or remove it',
+    );
+    process.exit(1);
   }
+  auth = parsed;
 } catch (err) {
   if (err.code !== "ENOENT") {
     console.error(`pir-entrypoint: cannot read ${target}: ${err.message}`);
