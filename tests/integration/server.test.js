@@ -135,6 +135,177 @@ test("remote CLI: pir --server relays argv, output and exit code", async (t) => 
   );
 });
 
+test("/v1/review rejects non-review commands before touching any bundle", async (t) => {
+  const { base } = await withServer(t);
+  // Registry management and client-side commands belong to /v1/exec (or the
+  // local CLI); a valid token must not reach them through the review path.
+  const forbidden = [
+    ["repos", "add", "https://attacker.example/x.git"],
+    ["repos", "remove", "x", "--purge"],
+    ["models"],
+    ["config", "set", "mode", "remote"],
+    ["skill", "install"],
+    ["serve"],
+  ];
+  for (const argv of forbidden) {
+    const response = await fetch(`${base}/v1/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        remoteUrl: null,
+        rootCommit: "0".repeat(40),
+        base: null,
+        head: "0".repeat(40),
+        bundleBase64: "",
+        argv,
+      }),
+    });
+    assert.equal(response.status, 400, `expected rejection for: ${argv.join(" ")}`);
+    const body = await response.json();
+    assert.match(body.error, /not allowed on \/v1\/review/);
+  }
+});
+
+test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree", async (t) => {
+  await withServer(t); // server handle only pins env cleanup (TLS off for tests)
+  const repo = createTempGitRepo("pir-pin-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-pin-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-pin-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  repo.write("src/a.ts", "export const a = 1;\n");
+  const baseCommit = repo.commit("base change");
+  repo.write("src/b.ts", "export const b = 2;\n");
+  const headCommit = repo.commit("head change");
+
+  const { createBundle, materializeFromBundle } = await import("../../dist/app/repos.js");
+  const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const { buildChangeSet } = await import("../../dist/changes/change-set.js");
+  const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+
+  // What the client ships after pinRefsToShas: named refs replaced by SHAs.
+  // First contact carries a full bundle (the thin-bundle retry needs a
+  // pre-seeded server repo, exercised elsewhere).
+  const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+  const { review } = await materializeFromBundle(bundle, {
+    remoteUrl,
+    rootCommit,
+    base: null,
+    head: headCommit,
+  });
+  try {
+    const changeSet = await buildChangeSet(review.worktree, baseCommit, headCommit);
+    assert.ok(changeSet.files.some((f) => f.path === "src/b.ts"));
+    assert.ok(!changeSet.files.some((f) => f.path === "src/a.ts"));
+    // The materialized repo has no remote-tracking refs — exactly why the
+    // client must pin named refs to SHAs before forwarding.
+    await assert.rejects(buildChangeSet(review.worktree, "origin/main", headCommit));
+  } finally {
+    await review.cleanup();
+  }
+});
+
+test("/v1/review tolerates older clients that forward raw refs (head + argv)", async (t) => {
+  const { base } = await withServer(t);
+  const repo = createTempGitRepo("pir-oldclient-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-oldc-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-oldc-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  repo.write("src/a.ts", "export const a = 1;\n");
+  const baseCommit = repo.commit("base change");
+  repo.write("src/b.ts", "export const b = 2;\n");
+  const headCommit = repo.commit("head change");
+
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+  // What a pre-fix client ships: meta.head and the argv keep raw refs; only
+  // the bundle (packed under refs/pir/bundle-head) knows the real commit.
+  const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+
+  const response = await fetch(`${base}/v1/review`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      remoteUrl,
+      rootCommit,
+      base: baseCommit,
+      head: "origin/feat/page-optimize",
+      bundleBase64: bundle.toString("base64"),
+      argv: ["memory", "status", "--json", "--base", "origin/feat/page-optimize", "--head", "HEAD"],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.code, 0, JSON.stringify(payload));
+  const data = JSON.parse(payload.output).data;
+  // The materialized head fell back to the commit the client actually packed…
+  assert.equal(data.headCommit, headCommit);
+  // …and memory keyed under the project's sha directory.
+  assert.match(data.dbPath, new RegExp(`^${stateRoot}/[0-9a-f]{64}/memory\\.sqlite$`));
+});
+
+test("/v1/review strips the --cwd=path form too", async (t) => {
+  const { base } = await withServer(t);
+  const repo = createTempGitRepo("pir-cwdscrub-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-cwdscrub-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-cwdscrub-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const { getHeadCommit, getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [head, rootCommit, remoteUrl] = await Promise.all([
+    getHeadCommit(repo.dir),
+    getRootCommit(repo.dir),
+    getRemoteUrl(repo.dir),
+  ]);
+  const bundle = await createBundle(repo.dir, { base: null, head });
+
+  const response = await fetch(`${base}/v1/review`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      remoteUrl,
+      rootCommit,
+      base: null,
+      head,
+      bundleBase64: bundle.toString("base64"),
+      // A --cwd pointing outside the worktree must be ignored, not honored
+      // (and not reject the request via the cwdGuard).
+      argv: ["memory", "status", "--json", "--cwd=/etc"],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.code, 0, JSON.stringify(payload));
+  assert.equal(JSON.parse(payload.output).data.headCommit, head);
+});
+
 test("/v1/review materializes a client bundle into a worktree (unpushed code path)", async (t) => {
   const { base } = await withServer(t);
   const repo = createTempGitRepo("pir-bundle-src-");

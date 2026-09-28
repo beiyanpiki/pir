@@ -1,17 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { promisify } from "node:util";
 import { executePirCommand } from "../../dist/cli/executor.js";
 import { createWorkingTreeSnapshot, git } from "../../dist/changes/git.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
+
+const execFileAsync = promisify(execFile);
+const CLI = path.resolve("dist/cli/cli.js");
 
 function sandbox(t) {
   const root = mkdtempSync(path.join(tmpdir(), "pir-repos-test-"));
   const reposRoot = path.join(root, "repos");
   const stateRoot = path.join(root, "state");
+  mkdirSync(reposRoot, { recursive: true }); // pir creates it lazily on first use
   process.env.PIR_REPOS_ROOT = reposRoot;
   process.env.PIR_STATE_ROOT = stateRoot;
   t.after(() => {
@@ -137,5 +143,109 @@ test("PIR_STATE_ROOT centralizes memory by projectId", async () => {
     if (prevProject) process.env.PIR_STATE_IN_PROJECT = prevProject;
     repo.cleanup();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("corrupt repos.json is a loud error and is never overwritten", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const registry = path.join(reposRoot, "repos.json");
+  writeFileSync(registry, "{ not json\n");
+  await assert.rejects(
+    executePirCommand(["repos", "list", "--json"]),
+    (err) => err.message.includes("cannot read repo registry") && err.message.includes("refusing to overwrite"),
+  );
+  // The corrupt file must survive untouched — no silent wipe.
+  assert.equal(readFileSync(registry, "utf8"), "{ not json\n");
+});
+
+test("a non-object repos.json root is rejected too", async (t) => {
+  const { reposRoot } = sandbox(t);
+  writeFileSync(path.join(reposRoot, "repos.json"), '["not", "an", "object"]\n');
+  await assert.rejects(
+    executePirCommand(["repos", "list", "--json"]),
+    (err) => err.message.includes("cannot read repo registry"),
+  );
+});
+
+test("a stale registry lock is broken so registrations still work", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-lock-");
+  try {
+    const lockPath = path.join(reposRoot, "repos.json.lock");
+    writeFileSync(lockPath, "");
+    const stale = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, stale, stale);
+    const add = await executePirCommand(["repos", "add", repo.dir, "--name", "stale", "--json"]);
+    assert.equal(add.code, 0);
+    assert.ok(!existsSync(lockPath), "the lock we created was cleaned up, not left behind");
+    const list = await executePirCommand(["repos", "list", "--json"]);
+    assert.ok(JSON.parse(list.output).data.repos.some((r) => r.name === "stale"));
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("concurrent repos add from separate processes keeps every entry", async (t) => {
+  const { reposRoot, stateRoot } = sandbox(t);
+  const repoA = createTempGitRepo("pir-race-a-");
+  const repoB = createTempGitRepo("pir-race-b-");
+  try {
+    const env = { ...process.env, PIR_REPOS_ROOT: reposRoot, PIR_STATE_ROOT: stateRoot, PIR_NO_WIZARD: "1" };
+    // --local keeps the child CLIs away from any configured remote server.
+    await Promise.all([
+      execFileAsync(process.execPath, [CLI, "--local", "repos", "add", repoA.dir, "--name", "alpha"], {
+        encoding: "utf8",
+        env,
+      }),
+      execFileAsync(process.execPath, [CLI, "--local", "repos", "add", repoB.dir, "--name", "beta"], {
+        encoding: "utf8",
+        env,
+      }),
+    ]);
+    const list = await executePirCommand(["repos", "list", "--json"]);
+    const names = JSON.parse(list.output).data.repos.map((r) => r.name);
+    assert.ok(names.includes("alpha"), `alpha lost: ${JSON.stringify(names)}`);
+    assert.ok(names.includes("beta"), `beta lost: ${JSON.stringify(names)}`);
+  } finally {
+    repoA.cleanup();
+    repoB.cleanup();
+  }
+});
+
+test("--repo also accepts the --repo=name form", async (t) => {
+  const { stateRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-eqform-");
+  try {
+    await executePirCommand(["repos", "add", repo.dir, "--name", "demo"]);
+    const status = await executePirCommand(["memory", "status", "--repo=demo", "--json"], { onLog: () => {} });
+    assert.equal(status.code, 0);
+    assert.match(JSON.parse(status.output).data.dbPath, new RegExp(`^${stateRoot}/[0-9a-f]{64}/memory\\.sqlite$`));
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("unregistered --repo spec keys memory under the computed sha projectId", async (t) => {
+  const { reposRoot, stateRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-fallback-");
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+  try {
+    // A server-side clone exists at the sha-keyed dir (e.g. created by a
+    // prior bundle flow) but the spec was never registered by name.
+    const { projectIdFor } = await import("../../dist/app/repos.js");
+    const rootCommit = (await git(repo.dir, ["rev-list", "--max-parents=0", "HEAD"])).trim();
+    const id = projectIdFor(null, rootCommit);
+    await git(reposRoot, ["clone", "--quiet", repo.dir, path.join(reposRoot, id)]);
+
+    const status = await executePirCommand(["memory", "status", "--repo", rootCommit, "--json"], {
+      onLog: () => {},
+    });
+    assert.equal(status.code, 0);
+    const data = JSON.parse(status.output).data;
+    assert.equal(data.dbPath, path.join(stateRoot, id, "memory.sqlite"));
+    assert.match(id, /^[0-9a-f]{64}$/);
+  } finally {
+    repo.cleanup();
   }
 });
