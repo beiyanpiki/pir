@@ -116,7 +116,7 @@ pir memory refresh            # after large refactors
 
 | Command | Purpose |
 |---|---|
-| `pir find [--base B --head H --uncommitted --model M --fail-on SEV]` | review a range; `--model provider/model` overrides the default |
+| `pir find [--base B --head H --uncommitted --model M --fail-on SEV --max-findings N]` | review a range; `--model provider/model` overrides the default. `--max-findings` (default 10) caps reported findings — a ceiling, not a target |
 | `pir findings [list [--status s]]` / `pir findings show F-12` | stored findings |
 | `pir feedback <id> <decision> [--note …]` | decisions: `expected` `accepted_risk` `wont_fix` `false_positive` (+ `priority P0-P3`) |
 | `pir verify-fix <id>` | verifier checks a reported fix |

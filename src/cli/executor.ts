@@ -53,6 +53,9 @@ Find options:
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    reviewer loop rounds (default 2)
   --max-tokens <n>    token budget estimate (default 400000)
+  --max-findings <n>  cap on reported findings (default 10). A ceiling, not
+                      a target: fewer findings is correct when evidence runs
+                      out — nothing is padded to reach it
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -127,6 +130,7 @@ export const VALUE_FLAGS = new Set([
   "--head",
   "--max-rounds",
   "--max-tokens",
+  "--max-findings",
   "--fail-on",
   "--model",
   "--provider",
@@ -504,11 +508,19 @@ async function cmdFind(
 ): Promise<number> {
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
+  let maxFindings: number | undefined;
+  if (flags.get("--max-findings") !== undefined) {
+    maxFindings = Number(flags.get("--max-findings"));
+    if (!Number.isInteger(maxFindings) || maxFindings < 1) {
+      throw new UsageError(`invalid --max-findings: ${flags.get("--max-findings")} (positive integer required)`);
+    }
+  }
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
     maxRounds: flags.get("--max-rounds") !== undefined ? Number(flags.get("--max-rounds")) : undefined,
     maxTokens: flags.get("--max-tokens") !== undefined ? Number(flags.get("--max-tokens")) : undefined,
+    maxFindings,
     model: flags.get("--model") as string | undefined,
     onProgress: (event) => log(`• ${event.message}`),
   });
@@ -524,6 +536,7 @@ async function cmdFind(
             base: result.base,
             head: result.head,
             rounds: result.rounds,
+            maxFindings: result.maxFindings,
             files: result.changeSet.files.map((f) => ({
               path: f.path,
               status: f.status,

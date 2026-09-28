@@ -3,6 +3,8 @@ export function reviewerPrompt(input: {
   head: string;
   round: number;
   maxRounds: number;
+  maxFindings: number;
+  findingsRemaining: number;
   focus: string[];
   priorSummary?: string;
   memoryPack: string;
@@ -28,6 +30,14 @@ export function reviewerPrompt(input: {
     "- Do not report style unless it hides real risk.",
     "- Do not propose fixes. Only record findings.",
     "- If nothing is wrong, record nothing and say so in finish_round.",
+    "",
+    "FINDINGS BUDGET",
+    `At most ${input.maxFindings} findings will be reported for this change. That number is a ceiling, not a target: recording fewer — or none — is the correct outcome whenever the evidence runs out.`,
+    "- Never invent, split, or pad findings to get closer to the ceiling. A speculative or trivial finding is worse than no finding.",
+    "- Quality over quantity: keep only findings a careful maintainer would act on.",
+    input.findingsRemaining < input.maxFindings
+      ? `So far ${input.maxFindings - input.findingsRemaining} of the ${input.maxFindings} slots are used; at most ${input.findingsRemaining} more can be reported this run.`
+      : `No findings have been reported yet in this run.`,
   ];
   if (!input.structuralQueries) {
     lines.push(

@@ -359,6 +359,98 @@ test("reviewer prompt excludes issue decisions; memory pack excludes them too", 
   }
 });
 
+test("findIssues: maxFindings caps reported findings and stops the loop", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  let seenPrompt = "";
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      seenPrompt = promptText;
+      for (let i = 1; i <= 3; i++) {
+        await tool("record_candidate").execute({
+          title: `issue ${i}`,
+          claim: `claim ${i}: the quota path ${i} skips its guard`,
+          trigger: `trigger ${i}`,
+          category: "correctness",
+          severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+        });
+      }
+      await tool("finish_round").execute({ summary: "found several issues", nextFocus: [], needsMoreRounds: true });
+    },
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 5, maxFindings: 2 },
+    });
+    // Only the first two candidates are verified and persisted; the loop
+    // stops before spending a round on the third.
+    assert.equal(outcome.findings.length, 2);
+    assert.ok(outcome.findings.every((f) => f.status === "confirmed"));
+    assert.equal(outcome.maxFindings, 2);
+    assert.equal(outcome.stoppedBecause, "max findings reached (2)");
+    assert.equal(outcome.rounds.length, 1);
+    // The prompt frames the cap as a ceiling, never as a quota to fill.
+    assert.ok(seenPrompt.includes("At most 2 findings"), "prompt states the cap");
+    assert.ok(seenPrompt.includes("ceiling, not a target"), "prompt forbids quota-chasing");
+    assert.ok(seenPrompt.includes("Never invent, split, or pad findings"), "prompt forbids fabrication");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: rejected findings do not consume the maxFindings budget", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      const round = promptText.includes("Review round 1 of") ? 1 : 2;
+      await tool("record_candidate").execute({
+        title: `issue ${round}`,
+        claim: `claim ${round}: the quota path ${round} skips its guard`,
+        trigger: `trigger ${round}`,
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [],
+      });
+      await tool("finish_round").execute({ summary: "one more to check", nextFocus: [], needsMoreRounds: true });
+    },
+    verifierScript: async (tool, promptText) => {
+      // Round 1's candidate is rejected; round 2's is confirmed.
+      const verdict = promptText.includes("claim 1:") ? "rejected" : "confirmed";
+      await tool("submit_verdict").execute({ verdict, rationale: "checked the code", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 5, maxFindings: 1 },
+    });
+    // The rejection was recorded but freed its slot, so the second candidate
+    // still got verified and became the single reported finding.
+    assert.equal(outcome.findings.length, 2);
+    assert.equal(outcome.findings.filter((f) => f.status === "confirmed").length, 1);
+    assert.equal(outcome.findings.filter((f) => f.status === "rejected").length, 1);
+    assert.equal(outcome.stoppedBecause, "max findings reached (1)");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
 test("verifyFix: rejected verdict (trigger gone) marks the resolution verified", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
@@ -422,6 +514,7 @@ test("runFind service layer returns a renderable outcome", async () => {
     assert.equal(result.findings.length, 1);
     assert.equal(result.projectId, ctx.memory.identity.projectId);
     assert.equal(typeof result.degraded, "boolean");
+    assert.equal(result.maxFindings, 10, "default findings cap is 10");
   } finally {
     ctx.memory.close();
     repo.cleanup();
