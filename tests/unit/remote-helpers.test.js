@@ -63,3 +63,21 @@ test("wantsBundle: only a find without --repo (either form) ships a bundle", () 
   assert.equal(wantsBundle(["memory", "status"]), false);
   assert.equal(wantsBundle(["--json"]), false);
 });
+
+test("wantsBundle: value flags before the command don't hide a find", () => {
+  // The old ad-hoc scan took "glm" for the command and misrouted to /v1/exec.
+  assert.equal(wantsBundle(["--model", "glm-5.3", "find", "--json"]), true);
+  assert.equal(wantsBundle(["--model=glm-5.3", "find"]), true);
+  assert.equal(wantsBundle(["--note", "--head", "feedback"]), false);
+});
+
+test("pinRefsToShas leaves a valueless --base/--head for parseArgs to reject", () => {
+  // Fabricating a SHA here would turn a usage error into a silently
+  // successful review of the wrong range.
+  assert.deepEqual(pinRefsToShas(["find", "--base"], { base: BASE, head: HEAD }), ["find", "--base"]);
+  assert.deepEqual(pinRefsToShas(["find", "--head", "--json"], { base: BASE, head: HEAD }), [
+    "find",
+    "--head",
+    "--json",
+  ]);
+});

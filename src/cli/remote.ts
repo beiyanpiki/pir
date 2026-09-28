@@ -1,5 +1,5 @@
 import process from "node:process";
-import { UsageError, pinRefsToShas } from "./executor.js";
+import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 
 export interface RemoteOptions {
   token?: string;
@@ -28,9 +28,13 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
   return await forwardExec(url, cleaned, options);
 }
 
-/** Only a plain `find` over the caller's own checkout ships as a bundle. */
+/**
+ * Only a plain `find` over the caller's own checkout ships as a bundle.
+ * parseArgs is the authority on the command (it skips value-flag values, so
+ * `--model glm find` is still a find), matching the server's own check.
+ */
 export function wantsBundle(cleanedArgv: string[]): boolean {
-  const command = cleanedArgv.find((a) => !a.startsWith("--"));
+  const command = parseArgs(cleanedArgv).positional[0];
   return command === "find" && !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="));
 }
 

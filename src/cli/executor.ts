@@ -188,9 +188,14 @@ export function pinRefsToShas(argv: string[], shas: { base: string | null; head:
       if (typeof sha === "string") {
         if (eq > 0) {
           out.push(`${name}=${sha}`);
-        } else {
+        } else if (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) {
           out.push(name, sha);
-          if (i + 1 < argv.length && !argv[i + 1]!.startsWith("--")) i += 1; // drop the raw ref
+          i += 1; // drop the raw ref
+        } else {
+          // Valueless --base/--head: leave it for parseArgs to reject as a
+          // usage error — pinning a fabricated SHA would silently turn the
+          // invocation into a successful (and wrong) review.
+          out.push(token);
         }
         continue;
       }
