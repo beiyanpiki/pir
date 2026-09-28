@@ -4,7 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { promisify } from "node:util";
-import { USAGE, UsageError, executePirCommand, readVersion } from "../cli/executor.js";
+import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +21,13 @@ export interface ServeOptions {
 const MAX_BODY_BYTES = 1024 * 1024;
 // Bundle uploads carry the client's history (full bundles on first contact).
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
+
+/**
+ * /v1/review reviews the bundle the client shipped — nothing else. Registry
+ * management (repos: server-side clones, purge) belongs to /v1/exec, and
+ * models/config/skill/serve have no business running against a worktree.
+ */
+const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
@@ -128,7 +135,13 @@ export async function startServer(input: {
         throw new Error("body must include rootCommit, head and bundleBase64");
       }
       const argv = Array.isArray(parsed.argv) ? (parsed.argv as string[]) : ["find"];
-      if (argv.includes("serve")) throw new Error("refusing to execute serve");
+      // Whitelist the command: parseArgs is the authority on what the first
+      // positional is (it skips value-flag arguments, so a URL after --repo
+      // can't masquerade as the command).
+      const command = parseArgs(argv).positional[0] ?? "find";
+      if (!REVIEW_ENDPOINT_COMMANDS.has(command)) {
+        throw new Error(`command not allowed on /v1/review: ${command} (use /v1/exec for repos/models)`);
+      }
 
       const bundle = Buffer.from(parsed.bundleBase64, "base64");
       const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
@@ -150,16 +163,25 @@ export async function startServer(input: {
       }
       log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
 
-      // Force the review into the worktree; drop any client --cwd.
+      // Force the review into the worktree; drop any client --cwd (both the
+      // two-token and the --cwd=path form).
       const cleanedArgv: string[] = [];
       for (let i = 0; i < argv.length; i++) {
         if (argv[i] === "--cwd") {
           i += 1;
           continue;
         }
+        if (argv[i]!.startsWith("--cwd=")) continue;
         cleanedArgv.push(argv[i]!);
       }
-      const effectiveArgv = ["--cwd", materialized.worktree, ...cleanedArgv];
+      // Older clients also forward raw refs in argv — pin them to the SHAs
+      // this request actually materialized so the diff resolves in a repo
+      // without remote-tracking refs.
+      const pinnedArgv = pinRefsToShas(cleanedArgv, {
+        base: parsed.base ?? null,
+        head: materialized.headCommit,
+      });
+      const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
       try {
         const result = await enqueue(() =>
           executePirCommand(effectiveArgv, {

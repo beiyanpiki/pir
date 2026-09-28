@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { git, gitBuffer } from "../changes/git.js";
+import { commitExists, git, gitBuffer } from "../changes/git.js";
 import { normalizeRemoteUrl } from "../changes/git.js";
 import { sha256 } from "../core/types.js";
 import { stateRootDbPath } from "../memory/index.js";
@@ -31,16 +31,92 @@ function registryPath(): string {
   return path.join(reposRoot(), "repos.json");
 }
 
+/**
+ * Read the registry. A missing file is an empty registry; a corrupt one is a
+ * hard error — silently returning {} here would make the next addRepo
+ * persist only its own entry and wipe every other registration.
+ */
 function readRegistry(): Record<string, RepoEntry> {
+  const file = registryPath();
+  let raw: string;
   try {
-    return JSON.parse(readFileSync(registryPath(), "utf8")) as Record<string, RepoEntry>;
-  } catch {
-    return {};
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw err;
+  }
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("registry root must be a JSON object");
+    }
+    return parsed as Record<string, RepoEntry>;
+  } catch (err) {
+    throw new Error(
+      `cannot read repo registry ${file}: ${err instanceof Error ? err.message : String(err)} — ` +
+        "fix or remove the file by hand; refusing to overwrite it",
+    );
   }
 }
 
+/** Atomic replace via rename, so readers never observe a torn write. */
 function writeRegistry(registry: Record<string, RepoEntry>): void {
-  writeFileSync(registryPath(), JSON.stringify(registry, null, 2) + "\n");
+  const target = registryPath();
+  const temp = path.join(reposRoot(), `repos.json.tmp-${process.pid}-${randomUUID()}`);
+  writeFileSync(temp, JSON.stringify(registry, null, 2) + "\n");
+  try {
+    renameSync(temp, target);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    throw err;
+  }
+}
+
+/** Locks are held for milliseconds (read-mutate-write only); a holder that
+ *  crashed this long ago is considered gone and its lock is broken. */
+const REGISTRY_LOCK_STALE_MS = 10_000;
+const REGISTRY_LOCK_WAIT_MS = 5_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Serialize registry mutations across processes: CLI invocations are not
+ * serialized by anything (unlike the server's request queue), and an
+ * unguarded read-modify-write loses whichever entry was written first.
+ */
+function withRegistryLock<T>(fn: () => T): T {
+  const lockPath = `${registryPath()}.lock`;
+  const deadline = Date.now() + REGISTRY_LOCK_WAIT_MS;
+  let fd: number | undefined;
+  while (fd === undefined) {
+    try {
+      fd = openSync(lockPath, "wx");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > REGISTRY_LOCK_STALE_MS) {
+          rmSync(lockPath, { force: true });
+          continue;
+        }
+      } catch {
+        continue; // the lock vanished — try to grab it right away
+      }
+      if (Date.now() > deadline) throw new Error(`repo registry lock busy: ${lockPath}`);
+      sleepSync(25);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      rmSync(lockPath, { force: true });
+    } catch {
+      // someone else already broke a lock they considered stale
+    }
+  }
 }
 
 export function projectIdFor(remoteUrl: string | null, rootCommit: string): string {
@@ -90,9 +166,13 @@ export async function addRepo(source: string, name?: string): Promise<RepoEntry>
       projectId,
       addedAt: Date.now(),
     };
-    const registry = readRegistry();
-    registry[entry.name] = entry;
-    writeRegistry(registry);
+    // The clone happened outside the lock; only the registry mutation is
+    // serialized, so the lock is held for milliseconds.
+    withRegistryLock(() => {
+      const registry = readRegistry();
+      registry[entry.name] = entry;
+      writeRegistry(registry);
+    });
     return entry;
   } catch (err) {
     rmSync(tempDir, { recursive: true, force: true });
@@ -110,11 +190,14 @@ export function listRepos(): RepoEntry[] {
 }
 
 export function removeRepo(name: string, purge: boolean): RepoEntry {
-  const registry = readRegistry();
-  const entry = registry[name];
-  if (!entry) throw new Error(`repo not registered: ${name}`);
-  delete registry[name];
-  writeRegistry(registry);
+  const entry = withRegistryLock(() => {
+    const registry = readRegistry();
+    const found = registry[name];
+    if (!found) throw new Error(`repo not registered: ${name}`);
+    delete registry[name];
+    writeRegistry(registry);
+    return found;
+  });
   if (purge) {
     const dir = repoDirFor(entry.projectId);
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -126,8 +209,9 @@ export function resolveRepo(spec: string): { entry: RepoEntry; dir: string } {
   const registry = readRegistry();
   const entry = registry[spec] ?? Object.values(registry).find((e) => e.projectId === spec || e.url === spec);
   if (!entry) {
-    const dir = repoDirFor(projectIdFor(looksLikeUrl(spec) ? spec : null, spec));
-    if (existsSync(dir)) return { entry: { name: spec, url: spec, projectId: spec, addedAt: 0 }, dir };
+    const projectId = projectIdFor(looksLikeUrl(spec) ? spec : null, spec);
+    const dir = repoDirFor(projectId);
+    if (existsSync(dir)) return { entry: { name: spec, url: spec, projectId, addedAt: 0 }, dir };
     throw new Error(`repo not registered: ${spec} (register with: pir repos add <url>)`);
   }
   return { entry, dir: repoDirFor(entry.projectId) };
@@ -135,6 +219,10 @@ export function resolveRepo(spec: string): { entry: RepoEntry; dir: string } {
 
 function looksLikeUrl(spec: string): boolean {
   return /^[a-z]+@|:\/\/|^git@/i.test(spec);
+}
+
+function isCommitId(value: string): boolean {
+  return /^[0-9a-f]{40,64}$/i.test(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,9 +314,13 @@ export async function materializeFromBundle(
       if (isNew) rmSync(dir, { recursive: true, force: true });
       throw error;
     }
-    // The fetched objects must contain the advertised head.
-    await git(dir, ["cat-file", "-e", `${meta.head}^{commit}`]);
-    return { review: await materializeWorktree(dir, projectId, meta.head), neededFull: false };
+    // Older clients forwarded raw refs ("HEAD", "origin/x", a branch name)
+    // as the head; nothing by that name exists in this repo. The fetched
+    // refs/pir/last-bundle always points at the commit the client actually
+    // packed, so fall back to it instead of failing with a git fatal.
+    const packedHead = (await git(dir, ["rev-parse", "--verify", "refs/pir/last-bundle^{commit}"])).trim();
+    const head = isCommitId(meta.head) && (await commitExists(dir, meta.head)) ? meta.head : packedHead;
+    return { review: await materializeWorktree(dir, projectId, head), neededFull: false };
   } finally {
     rmSync(bundleFile, { force: true });
   }
