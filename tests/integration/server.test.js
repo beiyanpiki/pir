@@ -166,6 +166,29 @@ test("/v1/review rejects non-review commands before touching any bundle", async 
   }
 });
 
+test("/v1/review rejects an argv that is not an array of strings", async (t) => {
+  const { base } = await withServer(t);
+  // /v1/exec has always validated this; /v1/review must not let a number or
+  // a bare string reach parseArgs as a TypeError-shaped 400.
+  for (const argv of [[123], [null], "find", { 0: "find" }]) {
+    const response = await fetch(`${base}/v1/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        remoteUrl: null,
+        rootCommit: "0".repeat(40),
+        base: null,
+        head: "0".repeat(40),
+        bundleBase64: "",
+        argv,
+      }),
+    });
+    assert.equal(response.status, 400, `expected rejection for: ${JSON.stringify(argv)}`);
+    const body = await response.json();
+    assert.match(body.error, /argv must be an array of strings/);
+  }
+});
+
 test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree", async (t) => {
   await withServer(t); // server handle only pins env cleanup (TLS off for tests)
   const repo = createTempGitRepo("pir-pin-");

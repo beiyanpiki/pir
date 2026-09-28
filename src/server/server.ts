@@ -134,6 +134,9 @@ export async function startServer(input: {
       if (!parsed.head || !parsed.rootCommit || typeof parsed.bundleBase64 !== "string") {
         throw new Error("body must include rootCommit, head and bundleBase64");
       }
+      if (parsed.argv !== undefined && (!Array.isArray(parsed.argv) || parsed.argv.some((a) => typeof a !== "string"))) {
+        throw new Error('body argv must be an array of strings');
+      }
       const argv = Array.isArray(parsed.argv) ? (parsed.argv as string[]) : ["find"];
       // Whitelist the command: parseArgs is the authority on what the first
       // positional is (it skips value-flag arguments, so a URL after --repo
