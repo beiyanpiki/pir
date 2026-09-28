@@ -22,6 +22,12 @@ Two deployment shapes share one image:
 | `docker exec` | mount the project, run `pir <cmd>` | local, state in `<project>/.pir/` |
 | `serve` | HTTPS service (`POST /v1/exec`, `POST /v1/review`) | shared engine; reviews arrive as git bundles — **no push required, no repo credentials needed** |
 
+`/v1/review` executes review commands only (`find`, `memory`, `findings`,
+`feedback`, `remember`, `verify-fix`) against the bundle the client shipped;
+registry management (`repos …`) and everything else go through `/v1/exec`.
+Named refs in a review's `--base`/`--head` are resolved to SHAs by the client
+(older clients are handled server-side); the shipped JSON body is unchanged.
+
 ---
 
 ## Part 1 — QA before deploying
