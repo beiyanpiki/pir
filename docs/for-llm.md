@@ -186,8 +186,10 @@ docker compose exec pir find --repo pay --branch origin/pr-42 --json
 ```
 
 **Memory sync** merges the user's local memory DB with the server's
-(bidirectional, nothing deleted; conflicting records: newest write wins, user
-knowledge always beats agent summaries). It runs locally even in remote mode:
+(bidirectional; both sides converge, same-logical-record rows — same feature
+key, symbol key, or finding fingerprint — collapse onto the winner's rows;
+conflicting records: newest write wins, user knowledge always beats agent
+summaries). It runs locally even in remote mode:
 
 ```bash
 pir memory sync --json                  # server from config/env; use --dry-run to preview

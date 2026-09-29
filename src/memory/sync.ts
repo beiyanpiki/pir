@@ -293,6 +293,96 @@ function mergeKeyed(
   return { rows, idRemap, stats };
 }
 
+/** Stable content signature of a row group, independent of row order. */
+function canonicalGroup(rows: SyncRow[]): string {
+  return JSON.stringify(rows.map((row) => canonical(row)).sort());
+}
+
+interface GroupedMergeResult {
+  rows: SyncRow[];
+  stats: SyncTableStats;
+}
+
+/**
+ * Merge tables whose rows carry per-replica UUIDs but describe one logical
+ * record through a shared fingerprint (issue decisions, fix resolutions).
+ * Rows are grouped by fingerprint and a contested fingerprint keeps ONE
+ * side's rows wholesale — unioning both sides would leave twin live rows that
+ * retrieval reports as contradictory decisions for the same finding. Group
+ * precedence follows the conflict rule: trusted knowledge (user decisions,
+ * verified fixes) beats fresher agent output, then newest write wins, then
+ * canonical content keeps the result deterministic and symmetric. Rows
+ * without a fingerprint have no natural key and union by id as before.
+ */
+function mergeFingerprinted(
+  table: "issue_memories" | "finding_resolutions",
+  localRows: SyncRow[],
+  remoteRows: SyncRow[],
+  timeOf: (side: "local" | "remote", row: SyncRow) => number,
+  groupRank: (rows: SyncRow[]) => number,
+): GroupedMergeResult {
+  const stats = tableSpec(table);
+  const keyed = mergeKeyed(
+    table,
+    localRows.filter((row) => row.fingerprint == null),
+    remoteRows.filter((row) => row.fingerprint == null),
+    (row) => String(row.id),
+    null,
+    timeOf,
+  );
+  const rows = [...keyed.rows];
+  for (const counter of ["localOnly", "remoteOnly", "bothIdentical", "merged"] as const) {
+    stats[counter] += keyed.stats[counter];
+  }
+  stats.conflicts.localWon += keyed.stats.conflicts.localWon;
+  stats.conflicts.remoteWon += keyed.stats.conflicts.remoteWon;
+
+  const groupsOf = (sideRows: SyncRow[]): Map<string, SyncRow[]> => {
+    const groups = new Map<string, SyncRow[]>();
+    for (const row of sideRows) {
+      if (row.fingerprint == null) continue;
+      const fp = String(row.fingerprint);
+      groups.set(fp, [...(groups.get(fp) ?? []), row]);
+    }
+    return groups;
+  };
+  const localGroups = groupsOf(localRows);
+  const remoteGroups = groupsOf(remoteRows);
+
+  for (const fp of [...new Set([...localGroups.keys(), ...remoteGroups.keys()])].sort()) {
+    const mine = localGroups.get(fp);
+    const theirs = remoteGroups.get(fp);
+    if (!mine || !theirs) {
+      const only = mine ?? theirs!;
+      stats[mine ? "localOnly" : "remoteOnly"] += only.length;
+      rows.push(...only);
+      continue;
+    }
+    const mineSig = canonicalGroup(mine);
+    const theirsSig = canonicalGroup(theirs);
+    if (mineSig === theirsSig) {
+      stats.bothIdentical += mine.length;
+      rows.push(...mine);
+      continue;
+    }
+    const mineTime = Math.max(...mine.map((row) => timeOf("local", row)));
+    const theirsTime = Math.max(...theirs.map((row) => timeOf("remote", row)));
+    const rankDelta = groupRank(mine) - groupRank(theirs);
+    let winner: "local" | "remote";
+    if (rankDelta !== 0) winner = rankDelta > 0 ? "local" : "remote";
+    else if (mineTime !== theirsTime) winner = mineTime > theirsTime ? "local" : "remote";
+    else winner = mineSig > theirsSig ? "local" : "remote";
+    stats.conflicts[winner === "local" ? "localWon" : "remoteWon"] += 1;
+    rows.push(...(winner === "local" ? mine : theirs));
+  }
+  rows.sort((a, b) => {
+    const fa = a.fingerprint == null ? "\uffff" : String(a.fingerprint);
+    const fb = b.fingerprint == null ? "\uffff" : String(b.fingerprint);
+    return fa === fb ? (String(a.id) < String(b.id) ? -1 : 1) : fa < fb ? -1 : 1;
+  });
+  return { rows, stats };
+}
+
 /** Prefer non-null; when both sides have a value, take the deterministic max. */
 function pickField(a: string | number | null | undefined, b: string | number | null | undefined): string | number | null {
   if (a === null || a === undefined) return b ?? null;
@@ -376,23 +466,21 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
     "id",
     writeTimeOf("code_entities"),
   );
-  const issues = mergeKeyed(
+  const issues = mergeFingerprinted(
     "issue_memories",
     local.tables.issue_memories,
     remote.tables.issue_memories,
-    (row) => String(row.id),
-    null,
     writeTimeOf("issue_memories"),
+    // A group's rank is its most trusted row: user knowledge beats agent output.
+    (rows) => Math.max(...rows.map((row) => SOURCE_RANK[String(row.source ?? "")] ?? 0)),
   );
-  const resolutions = mergeKeyed(
+  const resolutions = mergeFingerprinted(
     "finding_resolutions",
     local.tables.finding_resolutions,
     remote.tables.finding_resolutions,
-    (row) => String(row.id),
-    null,
     writeTimeOf("finding_resolutions"),
-    // A verifier-confirmed resolution outranks an unverified copy of the same row.
-    { prefer: (a, b) => Number(a.verified) - Number(b.verified) },
+    // A verifier-confirmed fix outranks an unverified copy regardless of time.
+    (rows) => (rows.some((row) => Number(row.verified) === 1) ? 1 : 0),
   );
 
   // Link pairs follow the surviving feature/entity ids; union both sides.
@@ -532,10 +620,33 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
     replaceByKey("features", "key");
     replaceByKey("code_entities", "symbol_key");
 
-    const upsertById = (table: "issue_memories" | "finding_resolutions"): void => {
+    // Fingerprinted rows replace per group: a merge can swap which replica's
+    // history survives for a fingerprint, and a plain upsert would keep the
+    // losing twin rows alive beside the winners. Fingerprint-less rows have
+    // no natural key and keep the plain upsert-by-id.
+    const replaceByFingerprint = (table: "issue_memories" | "finding_resolutions"): void => {
       const cols = COLUMNS[table];
       const { sql, values } = insertValues(table);
+      const scoped = table === "issue_memories"; // finding_resolutions has no project_id
+      const groups = new Map<string, SyncRow[]>();
+      const unkeyed: SyncRow[] = [];
       for (const row of snapshot.tables[table]) {
+        if (row.fingerprint == null) unkeyed.push(row);
+        else groups.set(String(row.fingerprint), [...(groups.get(String(row.fingerprint)) ?? []), row]);
+      }
+      for (const [fp, groupRows] of groups) {
+        const where = scoped ? "project_id = ? AND fingerprint = ?" : "fingerprint = ?";
+        const args = scoped ? [projectId, fp] : [fp];
+        const existing = store.all<SyncRow>(selectSql(table, where), ...args);
+        if (existing.length === groupRows.length && canonicalGroup(existing) === canonicalGroup(groupRows)) continue;
+        store.run(`DELETE FROM ${table} WHERE ${where}`, ...args);
+        for (const row of groupRows) {
+          store.run(sql, ...values(row));
+          store.recordMemoryVersion(TABLE_TO_MEMORY_TYPE[table]!, String(row.id), row, "sync");
+          applied[table] += 1;
+        }
+      }
+      for (const row of unkeyed) {
         const existing = store.get<SyncRow>(selectSql(table, "id = ?"), String(row.id));
         if (!changed(existing, row)) continue;
         store.run(
@@ -546,8 +657,8 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
         applied[table] += 1;
       }
     };
-    upsertById("issue_memories");
-    upsertById("finding_resolutions");
+    replaceByFingerprint("issue_memories");
+    replaceByFingerprint("finding_resolutions");
 
     // Rewrite the link table wholesale: applying a merge can swap a
     // feature/entity row's id (natural-key replace), which orphans the old

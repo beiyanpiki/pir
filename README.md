@@ -102,11 +102,12 @@ pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
 
 **Memory sync (local ⇄ server):** memories accumulated on your machine and on
 a `pir serve` instance are separate SQLite DBs keyed by the same projectId.
-`pir memory sync` merges them bidirectionally — nothing is deleted, both sides
-converge. On a conflicting record the newer write wins, and user knowledge
-(`user_explicit` / `verified_fix`) always beats agent summaries regardless of
-timestamps. The command always runs locally (even in remote mode) and takes
-`--dry-run`:
+`pir memory sync` merges them bidirectionally — both sides converge, and rows
+describing the same logical record (same feature key, symbol key, or finding
+fingerprint) collapse onto the winning replica's rows. On a conflicting record
+the newer write wins, and user knowledge (`user_explicit` / `verified_fix`)
+always beats agent summaries regardless of timestamps. The command always runs
+locally (even in remote mode) and takes `--dry-run`:
 
 ```bash
 pir memory sync --server https://pir.svc:8790 --token T --insecure --json

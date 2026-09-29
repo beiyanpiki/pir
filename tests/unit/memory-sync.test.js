@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -302,6 +303,127 @@ test("applySnapshot is idempotent: unchanged rows cost nothing", async () => {
     assert.equal(second.features, 0, "re-applying an already-applied snapshot writes nothing");
     const syncVersions = remote.store.all("SELECT * FROM memory_versions WHERE reason = 'sync'");
     assert.equal(syncVersions.length, 1, "no duplicate version records");
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});
+
+test("same-fingerprint decisions from two replicas collapse to one side's rows", async () => {
+  const repo = createTempGitRepo("pir-sync-twins-");
+  const { local, remote } = await openReplicas(repo);
+  try {
+    const fromLocal = seedIssue(local, { claim: "twin from local", decision: "expected" });
+    const fromRemote = seedIssue(remote, { claim: "twin from remote", decision: "wont_fix" });
+    backdateWrites(local, 1000); // local decided first; the newer write wins
+
+    const snapLocal = exportSnapshot(local.store, local.identity.projectId);
+    const snapRemote = exportSnapshot(remote.store, remote.identity.projectId);
+    const ab = mergeSnapshots(snapLocal, snapRemote);
+    const twins = ab.merged.tables.issue_memories.filter((m) => m.fingerprint === "fp-1");
+    assert.equal(twins.length, 1, "one row per fingerprint after merge, not one per replica");
+    assert.equal(twins[0].id, fromRemote.id, "the newer replica's row survives");
+    assert.deepEqual(ab.merged, mergeSnapshots(snapRemote, snapLocal).merged, "group winner is order-independent");
+
+    // Applying the merge must DELETE the losing twin, not upsert beside it.
+    applySnapshot(local.store, local.identity.projectId, ab.merged);
+    applySnapshot(remote.store, remote.identity.projectId, ab.merged);
+    for (const memory of [local, remote]) {
+      const ids = memory.store
+        .all("SELECT id FROM issue_memories WHERE fingerprint = 'fp-1'")
+        .map((r) => r.id)
+        .sort();
+      assert.deepEqual(ids, [fromRemote.id]);
+    }
+    assert.equal(local.issues.byFingerprint("fp-1").length, 1, "retrieval sees one live decision");
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});
+
+test("a verified fix history outranks a newer unverified twin", async () => {
+  const repo = createTempGitRepo("pir-sync-verified-");
+  const { local } = await openReplicas(repo);
+  try {
+    const inserted = local.resolutions.insert({
+      findingId: "f-1",
+      fingerprint: "fp-9",
+      featureKey: null,
+      entityKey: null,
+      category: "correctness",
+      originalClaim: "c",
+      originalTrigger: "t",
+      resolution: "fixed",
+      explanation: "",
+      beforeCommit: null,
+      afterCommit: null,
+      beforeCodeHash: null,
+      afterCodeHash: null,
+      fixCommit: null,
+      fixDiffHash: null,
+      verified: false,
+    });
+    local.resolutions.markVerified(inserted.id, null, null);
+    backdateWrites(local, 1000); // the verification is OLDER — it must still win
+
+    // The other replica recorded the same fix later and never verified it.
+    const snapLocal = exportSnapshot(local.store, local.identity.projectId);
+    const snapRemote = structuredClone(snapLocal);
+    const twinId = randomUUID();
+    snapRemote.tables.finding_resolutions[0].id = twinId;
+    snapRemote.tables.finding_resolutions[0].verified = 0;
+    snapRemote.writeTimes.finding_resolutions = { [twinId]: Date.now() };
+
+    const { merged } = mergeSnapshots(snapLocal, snapRemote);
+    const rows = merged.tables.finding_resolutions.filter((r) => r.fingerprint === "fp-9");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, inserted.id);
+    assert.equal(rows[0].verified, 1, "verified beats newer-unverified regardless of time");
+  } finally {
+    local.close();
+    repo.cleanup();
+  }
+});
+
+test("issue memories without a fingerprint still union by id", async () => {
+  const repo = createTempGitRepo("pir-sync-nofp-");
+  const { local, remote } = await openReplicas(repo);
+  try {
+    // seedIssue's fingerprint override cannot express null (?? falls back), so
+    // insert the fingerprint-less rows directly.
+    const insertUnkeyed = (memory, claim) =>
+      memory.issues.insert({
+        featureKey: null,
+        entityKey: null,
+        fingerprint: null,
+        category: "correctness",
+        claim,
+        trigger: "t",
+        decision: "expected",
+        priority: null,
+        rationale: "scoped note",
+        scope: "project",
+        source: "user_explicit",
+        anchorPaths: [],
+        createdAtCommit: null,
+        validUntilCommit: null,
+        stale: false,
+      });
+    insertUnkeyed(local, "scope note A");
+    insertUnkeyed(remote, "scope note B");
+
+    const { merged } = mergeSnapshots(
+      exportSnapshot(local.store, local.identity.projectId),
+      exportSnapshot(remote.store, remote.identity.projectId),
+    );
+    assert.equal(merged.tables.issue_memories.length, 2, "no natural key — rows coexist");
+
+    applySnapshot(remote.store, remote.identity.projectId, merged);
+    const unkeyed = remote.store.all("SELECT claim FROM issue_memories WHERE fingerprint IS NULL");
+    assert.deepEqual(unkeyed.map((r) => r.claim).sort(), ["scope note A", "scope note B"]);
   } finally {
     local.close();
     remote.close();
