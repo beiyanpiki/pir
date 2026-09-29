@@ -527,3 +527,40 @@ test("guards: project and schema mismatches are loud", async () => {
     repo.cleanup();
   }
 });
+
+test("agent_fields travels with the projects/features/entities rows through sync", async () => {
+  const repo = createTempGitRepo();
+  const { local, remote } = await openReplicas(repo);
+  try {
+    local.features.upsert({
+      key: "payment-retry",
+      name: "Payment Retry",
+      summary: "retries failed payments",
+      responsibilities: ["user resp"],
+      invariants: ["agent inv"],
+      agentGenerated: { invariants: ["agent inv"] },
+      entryPoints: [],
+      dependencies: [],
+      relatedFeatureKeys: [],
+      source: "agent_summary",
+      confidence: 0.6,
+      createdAtCommit: null,
+      validatedAtCommit: null,
+      stale: false,
+    });
+    const snapshot = exportSnapshot(local.store, local.identity.projectId);
+    assert.equal(snapshot.schemaVersion, MEMORY_SCHEMA_VERSION);
+    assert.ok(snapshot.tables.features[0].agent_fields.includes("agent inv"), "snapshot carries the generated-set column");
+    applySnapshot(remote.store, remote.identity.projectId, mergeSnapshots(
+      exportSnapshot(remote.store, remote.identity.projectId),
+      snapshot,
+    ).merged);
+    const replica = remote.features.get("payment-retry");
+    assert.deepEqual(replica.invariants, ["agent inv"]);
+    assert.deepEqual(replica.agentGenerated.invariants, ["agent inv"], "receiving replica can keep replacing generated entries after sync");
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});

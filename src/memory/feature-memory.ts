@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseJsonArray, type MemorySource } from "../core/types.js";
+import { parseGeneratedArrays, parseJsonArray, type GeneratedArrays, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
 export interface FeatureMemory {
@@ -17,6 +17,8 @@ export interface FeatureMemory {
   createdAtCommit: string | null;
   validatedAtCommit: string | null;
   stale: boolean;
+  /** Agent-generated array entries as of the last bootstrap; the rest are user-added. */
+  agentGenerated?: GeneratedArrays;
 }
 
 export type FeatureDraft = Omit<FeatureMemory, "id">;
@@ -36,6 +38,7 @@ interface Row {
   created_at_commit: string | null;
   validated_at_commit: string | null;
   stale: number;
+  agent_fields: string | null;
 }
 
 function toDomain(row: Row): FeatureMemory {
@@ -54,6 +57,7 @@ function toDomain(row: Row): FeatureMemory {
     createdAtCommit: row.created_at_commit,
     validatedAtCommit: row.validated_at_commit,
     stale: row.stale === 1,
+    agentGenerated: parseGeneratedArrays(row.agent_fields),
   };
 }
 
@@ -86,8 +90,8 @@ export class FeaturesRepo {
     );
     const id = existing?.id ?? randomUUID();
     this.store.run(
-      `INSERT INTO features (id, project_id, key, name, summary, responsibilities, invariants, entry_points, dependencies, related_feature_keys, source, confidence, created_at_commit, validated_at_commit, stale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO features (id, project_id, key, name, summary, responsibilities, invariants, entry_points, dependencies, related_feature_keys, source, confidence, created_at_commit, validated_at_commit, stale, agent_fields)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (project_id, key) DO UPDATE SET
          name = excluded.name,
          summary = excluded.summary,
@@ -99,7 +103,8 @@ export class FeaturesRepo {
          source = CASE WHEN excluded.source = 'user_explicit' THEN 'user_explicit' ELSE features.source END,
          confidence = MAX(features.confidence, excluded.confidence),
          validated_at_commit = excluded.validated_at_commit,
-         stale = excluded.stale`,
+         stale = excluded.stale,
+         agent_fields = excluded.agent_fields`,
       id,
       this.projectId,
       draft.key,
@@ -115,6 +120,7 @@ export class FeaturesRepo {
       draft.createdAtCommit,
       draft.validatedAtCommit,
       draft.stale ? 1 : 0,
+      draft.agentGenerated && Object.keys(draft.agentGenerated).length > 0 ? JSON.stringify(draft.agentGenerated) : null,
     );
     this.store.recordMemoryVersion("feature", id, draft, "upsert");
     return { ...draft, id };

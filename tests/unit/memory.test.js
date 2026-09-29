@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Memory } from "../../dist/memory/index.js";
+import { bootstrapProjectMemory } from "../../dist/memory/bootstrap.js";
 import { applyFeedback } from "../../dist/memory/feedback.js";
 import { rememberKnowledge } from "../../dist/memory/remember.js";
 import { buildIdentity } from "../../dist/findings/identity.js";
@@ -471,6 +472,77 @@ test("matchingScope honors keys and category; keyless project decisions surface 
 
     // Keyless project decisions still match through the exact fingerprint tier.
     assert.equal(memory.issues.byFingerprint("fp-project").length, 1);
+  } finally {
+    memory.close();
+    repo.cleanup();
+  }
+});
+
+test("bootstrap replaces obsolete agent-generated entries while user-added entries survive", async () => {
+  const repo = createTempGitRepo();
+  const memory = await openMemory(repo);
+  const codeMap = {
+    fileOverview: async () => [{ path: "src/pay.ts", nodeCount: 10 }],
+  };
+  // Scripted sessions: the module analyst and the project analyst each call
+  // their submit tool with the scenario's draft.
+  const factoryWith = (module, draft) => ({
+    createSession: async (config) => ({
+      prompt: async () => {
+        const submit = config.tools.find((t) => t.name === "submit_module_summary" || t.name === "submit_project_memory");
+        await submit.execute(submit.name === "submit_module_summary" ? module : draft);
+      },
+      getLastAssistantText: () => undefined,
+      getLastAssistantError: () => undefined,
+      dispose: () => {},
+    }),
+  });
+  const moduleSummaryWith = (responsibility) => ({
+    summary: "payment module",
+    responsibilities: ["handle payments"],
+    symbols: [{ name: "Pay.retry", path: "src/pay.ts", kind: "function", responsibility, invariants: [] }],
+    invariants: [],
+  });
+  const draftWith = (invariants, featureInvariants) => ({
+    architectureSummary: "arch",
+    responsibilities: ["payments"],
+    invariants,
+    conventions: [],
+    riskAreas: [],
+    features: [{
+      key: "payment",
+      name: "Payment",
+      summary: "payment flows",
+      invariants: featureInvariants,
+      entryPoints: [],
+      symbols: ["Pay.retry"],
+    }],
+  });
+  const bootstrap = async (module, draft) =>
+    bootstrapProjectMemory({ repoRoot: repo.dir, memory, codeMap, factory: factoryWith(module, draft) });
+  try {
+    repo.write("src/pay.ts", "export const x = 1;");
+    repo.commit("init");
+
+    await bootstrap(moduleSummaryWith("agent-resp-old"), draftWith(["agent-old-inv"], ["agent-feat-old"]));
+    let project = memory.projectMemory.get();
+    assert.deepEqual(project.invariants, ["agent-old-inv"]);
+    assert.deepEqual(project.agentGenerated.invariants, ["agent-old-inv"]);
+    assert.deepEqual(memory.entities.get("Pay.retry").responsibilities, ["agent-resp-old"]);
+    assert.deepEqual(memory.features.get("payment").invariants, ["agent-feat-old"]);
+
+    // The user adds knowledge between bootstraps; it must survive the next one.
+    memory.projectMemory.appendUserKnowledge("invariants", "user-added");
+
+    // The agent re-bootstraps and no longer asserts the old entries.
+    await bootstrap(moduleSummaryWith("agent-resp-new"), draftWith(["agent-new-inv"], ["agent-feat-new"]));
+    project = memory.projectMemory.get();
+    assert.deepEqual(project.invariants, ["user-added", "agent-new-inv"], "obsolete generated entries are replaced, user entries survive");
+    assert.deepEqual(project.agentGenerated.invariants, ["agent-new-inv"]);
+    const entity = memory.entities.get("Pay.retry");
+    assert.deepEqual(entity.responsibilities, ["agent-resp-new"]);
+    assert.deepEqual(entity.agentGenerated.responsibilities, ["agent-resp-new"]);
+    assert.deepEqual(memory.features.get("payment").invariants, ["agent-feat-new"]);
   } finally {
     memory.close();
     repo.cleanup();

@@ -1,4 +1,5 @@
 import { Type } from "typebox";
+import type { GeneratedArrays } from "../core/types.js";
 import { getHeadCommit } from "../changes/git.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import type { Memory } from "./index.js";
@@ -126,6 +127,20 @@ interface ModuleGroup {
   files: Array<{ path: string; nodeCount: number }>;
 }
 
+/**
+ * Merge an array field across a re-bootstrap: entries the previous agent pass
+ * generated drop out unless re-asserted; entries never listed as generated
+ * (user-added by construction) always survive. `next` becomes the new
+ * generated set for the following run.
+ */
+function mergeGenerated(
+  existing: readonly string[] | null | undefined,
+  oldGenerated: readonly string[] | undefined,
+  next: readonly string[],
+): string[] {
+  return [...new Set([...(existing ?? []).filter((entry) => !oldGenerated?.includes(entry)), ...next])];
+}
+
 function groupByModule(files: Array<{ path: string; nodeCount: number }>): ModuleGroup[] {
   const groups = new Map<string, ModuleGroup>();
   for (const file of files) {
@@ -244,18 +259,26 @@ export async function bootstrapProjectMemory(deps: {
   if (draft) {
     // Merge with existing knowledge instead of replacing it: the upserts
     // overwrite array fields wholesale, and user-supplied entries (pir
-    // remember, feedback) must survive an agent re-bootstrap.
-    const mergeUnique = (existing: readonly string[] | null | undefined, next: readonly string[]): string[] => [
-      ...new Set([...(existing ?? []), ...next]),
-    ];
+    // remember, feedback) must survive an agent re-bootstrap. Replacing the
+    // agent-generated portion (mergeGenerated) keeps a re-bootstrap from
+    // retaining entries the agent no longer asserts.
     const existingProject = deps.memory.projectMemory.get();
+    const prevProjectGenerated = existingProject?.agentGenerated;
+    const agentGenerated: GeneratedArrays = {
+      responsibilities: draft.responsibilities,
+      invariants: draft.invariants,
+      conventions: draft.conventions,
+      riskAreas: draft.riskAreas,
+      featureKeys: draft.features.map((f) => f.key),
+    };
     deps.memory.projectMemory.upsert({
       architectureSummary: draft.architectureSummary,
-      responsibilities: mergeUnique(existingProject?.responsibilities, draft.responsibilities),
-      invariants: mergeUnique(existingProject?.invariants, draft.invariants),
-      conventions: mergeUnique(existingProject?.conventions, draft.conventions),
-      riskAreas: mergeUnique(existingProject?.riskAreas, draft.riskAreas),
-      featureKeys: mergeUnique(existingProject?.featureKeys, draft.features.map((f) => f.key)),
+      responsibilities: mergeGenerated(existingProject?.responsibilities, prevProjectGenerated?.responsibilities, agentGenerated.responsibilities!),
+      invariants: mergeGenerated(existingProject?.invariants, prevProjectGenerated?.invariants, agentGenerated.invariants!),
+      conventions: mergeGenerated(existingProject?.conventions, prevProjectGenerated?.conventions, agentGenerated.conventions!),
+      riskAreas: mergeGenerated(existingProject?.riskAreas, prevProjectGenerated?.riskAreas, agentGenerated.riskAreas!),
+      featureKeys: mergeGenerated(existingProject?.featureKeys, prevProjectGenerated?.featureKeys, agentGenerated.featureKeys!),
+      agentGenerated,
       source: existingProject?.source === "user_explicit" ? "user_explicit" : "agent_summary",
       createdAtCommit: head,
       validatedAtCommit: head,
@@ -267,8 +290,9 @@ export async function bootstrapProjectMemory(deps: {
         key: feature.key,
         name: feature.name,
         summary: feature.summary,
-        responsibilities: mergeUnique(existingFeature?.responsibilities, []),
-        invariants: mergeUnique(existingFeature?.invariants, feature.invariants),
+        responsibilities: [...new Set(existingFeature?.responsibilities ?? [])],
+        invariants: mergeGenerated(existingFeature?.invariants, existingFeature?.agentGenerated?.invariants, feature.invariants),
+        agentGenerated: { invariants: feature.invariants },
         entryPoints: feature.entryPoints,
         dependencies: [],
         relatedFeatureKeys: [],
@@ -283,19 +307,25 @@ export async function bootstrapProjectMemory(deps: {
         const fromModule = summaries.flatMap((s) => s.symbols).find((sym) => sym.name === symbolName || sym.name.endsWith(`.${symbolName}`));
         if (!fromModule) continue;
         const existingEntity = deps.memory.entities.get(fromModule.name);
+        const prevGenerated = existingEntity?.agentGenerated;
+        const entityResponsibilities = [fromModule.responsibility].filter(Boolean);
+        // Features claim entities one at a time; the generated key set accumulates.
+        const entityFeatureKeys = [...new Set([...(prevGenerated?.featureKeys ?? []), feature.key])];
         deps.memory.entities.upsert({
           symbolKey: fromModule.name,
           qualifiedName: fromModule.name,
           kind: fromModule.kind,
           path: fromModule.path,
           signature: null,
-          responsibilities: mergeUnique(
-            existingEntity?.responsibilities,
-            [fromModule.responsibility].filter(Boolean),
-          ),
-          invariants: mergeUnique(existingEntity?.invariants, fromModule.invariants),
-          notes: mergeUnique(existingEntity?.notes, []),
-          featureKeys: mergeUnique(existingEntity?.featureKeys, [feature.key]),
+          responsibilities: mergeGenerated(existingEntity?.responsibilities, prevGenerated?.responsibilities, entityResponsibilities),
+          invariants: mergeGenerated(existingEntity?.invariants, prevGenerated?.invariants, fromModule.invariants),
+          agentGenerated: {
+            responsibilities: entityResponsibilities,
+            invariants: fromModule.invariants,
+            featureKeys: entityFeatureKeys,
+          },
+          notes: [...new Set(existingEntity?.notes ?? [])],
+          featureKeys: mergeGenerated(existingEntity?.featureKeys, prevGenerated?.featureKeys, entityFeatureKeys),
           source: "agent_summary",
           signatureHash: null,
           bodyHash: headHashes.get(fromModule.path) ?? null,
@@ -411,16 +441,28 @@ export async function refreshMemory(deps: {
       for (const sym of collector.summary.symbols) {
         if (!sym.path || !headHashes.has(sym.path)) continue;
         const existing = deps.memory.entities.byPaths([sym.path]).find((e) => e.qualifiedName === sym.name);
+        // What this refresh re-asserts; untouched fields keep the previous
+        // generated set so their replace rule stays stable.
+        const nextResponsibilities = sym.responsibility ? [sym.responsibility] : (existing?.agentGenerated?.responsibilities ?? []);
+        const nextInvariants = sym.invariants.length > 0 ? sym.invariants : (existing?.agentGenerated?.invariants ?? []);
         deps.memory.entities.upsert({
           symbolKey: existing?.symbolKey ?? sym.name,
           qualifiedName: sym.name,
           kind: sym.kind || existing?.kind || "unknown",
           path: sym.path,
           signature: existing?.signature ?? null,
-          responsibilities: sym.responsibility ? [sym.responsibility] : (existing?.responsibilities ?? []),
-          invariants: [...new Set([...(existing?.invariants ?? []), ...sym.invariants])],
+          // Same replace-generated/keep-user rule as bootstrap: the refresh
+          // re-asserts what it summarizes; anything else in the arrays was
+          // user-added and survives.
+          responsibilities: mergeGenerated(existing?.responsibilities, existing?.agentGenerated?.responsibilities, nextResponsibilities),
+          invariants: mergeGenerated(existing?.invariants, existing?.agentGenerated?.invariants, nextInvariants),
+          agentGenerated: {
+            responsibilities: nextResponsibilities,
+            invariants: nextInvariants,
+            featureKeys: existing?.agentGenerated?.featureKeys ?? [],
+          },
           notes: existing?.notes ?? [],
-          featureKeys: existing?.featureKeys ?? [],
+          featureKeys: mergeGenerated(existing?.featureKeys, existing?.agentGenerated?.featureKeys, existing?.agentGenerated?.featureKeys ?? []),
           source: existing?.source ?? "agent_summary",
           signatureHash: existing?.signatureHash ?? null,
           bodyHash: headHashes.get(sym.path) ?? existing?.bodyHash ?? null,

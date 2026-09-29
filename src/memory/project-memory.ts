@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseJsonArray, type MemorySource } from "../core/types.js";
+import { parseGeneratedArrays, parseJsonArray, type GeneratedArrays, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
 export interface ProjectMemory {
@@ -14,6 +14,8 @@ export interface ProjectMemory {
   createdAtCommit: string | null;
   validatedAtCommit: string | null;
   stale: boolean;
+  /** Agent-generated array entries as of the last bootstrap; the rest are user-added. */
+  agentGenerated?: GeneratedArrays;
 }
 
 interface Row {
@@ -28,6 +30,7 @@ interface Row {
   created_at_commit: string | null;
   validated_at_commit: string | null;
   stale: number;
+  agent_fields: string | null;
 }
 
 function toDomain(row: Row): ProjectMemory {
@@ -43,6 +46,7 @@ function toDomain(row: Row): ProjectMemory {
     createdAtCommit: row.created_at_commit,
     validatedAtCommit: row.validated_at_commit,
     stale: row.stale === 1,
+    agentGenerated: parseGeneratedArrays(row.agent_fields),
   };
 }
 
@@ -67,8 +71,8 @@ export class ProjectMemoriesRepo {
     );
     const id = existing?.id ?? mem.id ?? randomUUID();
     this.store.run(
-      `INSERT INTO project_memories (id, project_id, architecture_summary, responsibilities, invariants, conventions, risk_areas, feature_keys, source, created_at_commit, validated_at_commit, stale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO project_memories (id, project_id, architecture_summary, responsibilities, invariants, conventions, risk_areas, feature_keys, source, created_at_commit, validated_at_commit, stale, agent_fields)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          architecture_summary = excluded.architecture_summary,
          responsibilities = excluded.responsibilities,
@@ -78,7 +82,8 @@ export class ProjectMemoriesRepo {
          feature_keys = excluded.feature_keys,
          source = excluded.source,
          validated_at_commit = excluded.validated_at_commit,
-         stale = excluded.stale`,
+         stale = excluded.stale,
+         agent_fields = excluded.agent_fields`,
       id,
       this.projectId,
       mem.architectureSummary,
@@ -91,6 +96,7 @@ export class ProjectMemoriesRepo {
       mem.createdAtCommit,
       mem.validatedAtCommit,
       mem.stale ? 1 : 0,
+      mem.agentGenerated && Object.keys(mem.agentGenerated).length > 0 ? JSON.stringify(mem.agentGenerated) : null,
     );
     this.store.recordMemoryVersion("project_memory", id, mem, "upsert");
     return { ...mem, id };

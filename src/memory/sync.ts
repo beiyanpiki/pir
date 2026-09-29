@@ -16,16 +16,17 @@ const COLUMNS = {
   project_memories: [
     "id", "project_id", "architecture_summary", "responsibilities", "invariants", "conventions",
     "risk_areas", "feature_keys", "source", "created_at_commit", "validated_at_commit", "stale",
+    "agent_fields",
   ],
   features: [
     "id", "project_id", "key", "name", "summary", "responsibilities", "invariants", "entry_points",
     "dependencies", "related_feature_keys", "source", "confidence", "created_at_commit",
-    "validated_at_commit", "stale",
+    "validated_at_commit", "stale", "agent_fields",
   ],
   code_entities: [
     "id", "project_id", "symbol_key", "qualified_name", "kind", "path", "signature",
     "responsibilities", "invariants", "notes", "feature_keys", "source", "signature_hash",
-    "body_hash", "last_seen_commit", "stale",
+    "body_hash", "last_seen_commit", "stale", "agent_fields",
   ],
   feature_entities: ["feature_id", "entity_id"],
   issue_memories: [
