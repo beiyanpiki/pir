@@ -211,14 +211,14 @@ export class EntitiesRepo {
     if (current) this.store.recordMemoryVersion("code_entity", current.id, current, "mark_seen");
   }
 
-  /** Entities whose stored body hash no longer matches the file hash at commit. */
-  markStaleWhereHashMismatch(commit: string, hashByPath: Map<string, string>): number {
+  /** Missing hashes are invalid only for explicitly checked paths (partial maps are safe). */
+  markStaleWhereHashMismatch(commit: string, hashByPath: Map<string, string>, checkedPaths: Iterable<string> = hashByPath.keys()): number {
+    const checked = new Set(checkedPaths);
     let count = 0;
     for (const entity of this.list()) {
-      if (!entity.path || entity.stale) continue;
+      if (!entity.path || entity.stale || !checked.has(entity.path)) continue;
       const current = hashByPath.get(entity.path);
-      if (current === undefined) continue;
-      if (entity.bodyHash && entity.bodyHash !== current) {
+      if (current === undefined || !entity.bodyHash || entity.bodyHash !== current) {
         this.store.run(
           "UPDATE code_entities SET stale = 1 WHERE project_id = ? AND symbol_key = ?",
           this.projectId,
@@ -226,10 +226,9 @@ export class EntitiesRepo {
         );
         this.store.recordMemoryVersion("code_entity", entity.id, { ...entity, stale: true }, "stale_hash_mismatch");
         count += 1;
-      } else if (!entity.bodyHash) {
+      } else {
         this.store.run(
-          "UPDATE code_entities SET body_hash = ?, last_seen_commit = ? WHERE project_id = ? AND symbol_key = ?",
-          current,
+          "UPDATE code_entities SET last_seen_commit = ? WHERE project_id = ? AND symbol_key = ?",
           commit,
           this.projectId,
           entity.symbolKey,

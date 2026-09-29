@@ -59,6 +59,36 @@ test("runTranscriptDir sits next to the run's effective memory db", () => {
   }
 });
 
+test("writeTranscript keeps legacy payloads unchanged and preserves optional usage metadata", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pir-transcript-metadata-"));
+  try {
+    const file = path.join(root, "t.json");
+    const legacy = {
+      role: "code reviewer", model: "offline/model",
+      startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:01.000Z",
+      prompt: "review only", messages: [{ role: "user", content: "review only" }],
+    };
+    writeTranscript(file, legacy);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), legacy);
+    const enriched = {
+      ...legacy,
+      capture: "session-messages", sessionStartedAt: "2025-12-31T23:59:59.000Z",
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 20, cacheWriteTokens: 2, totalTokens: 37, cost: 0.25, durationMs: 2000, toolCalls: 3, repeatedToolCalls: 1 },
+      usageAvailable: true,
+      effectiveConfig: {
+        model: "offline/model", thinkingLevel: "off", builtinTools: ["read"], customTools: ["finish_round"],
+        systemPrompt: "read-only-review-v1", resources: "isolated", settings: "in-memory", toolExecution: "sequential",
+      },
+    };
+    writeTranscript(file, enriched);
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), enriched);
+    writeTranscript(file, { ...legacy, usage: undefined, effectiveConfig: undefined });
+    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), legacy);
+    writeTranscript(file, { ...legacy, usageAvailable: false });
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).usageAvailable, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("writeTranscript is JSON-safe and never throws", () => {
   const root = mkdtempSync(path.join(tmpdir(), "pir-transcript-write-"));
   try {

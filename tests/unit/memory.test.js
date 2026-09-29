@@ -403,7 +403,7 @@ test("freshness: hash mismatch marks entity stale, deletion invalidates", async 
   }
 });
 
-test("matchingScope: same-category key matches only; keyless project decisions never scope-match", async () => {
+test("matchingScope honors keys and category; keyless project decisions surface only to claim-similar candidates", async () => {
   const repo = createTempGitRepo();
   const memory = await openMemory(repo);
   try {
@@ -442,12 +442,32 @@ test("matchingScope: same-category key matches only; keyless project decisions n
       stale: false,
     });
 
+    // Scope-respecting matches: the feature-keyed decision matches its key,
+    // and a project-scope decision matches project-wide (it is a declared
+    // tier, ranked last). Relevance filtering for unrelated claims happens
+    // one layer up, in matchIssueHistory — asserted below.
     const scoped = memory.issues.matchingScope({ featureKey: "payment-retry", category: "correctness" });
-    assert.equal(scoped.length, 1);
-    assert.equal(scoped[0].fingerprint, "fp-feature");
+    assert.deepEqual(scoped.map((row) => row.fingerprint), ["fp-feature", "fp-project"]);
 
-    // Different category on the same feature key: no match.
+    // Different category: no match at any scope.
     assert.equal(memory.issues.matchingScope({ featureKey: "payment-retry", category: "security" }).length, 0);
+
+    // The keyless project decision never reaches an unrelated candidate: the
+    // retrieval tier requires claim overlap before a project-scope decision
+    // surfaces, so only claim-similar candidates see it.
+    const { matchIssueHistory } = await import("../../dist/memory/retrieval.js");
+    const unrelated = matchIssueHistory(memory, {
+      featureKey: "payment-refund",
+      category: "correctness",
+      claim: "refund path issues money before the gateway confirms the charge",
+    });
+    assert.equal(unrelated.length, 0);
+    const related = matchIssueHistory(memory, {
+      featureKey: "payment-retry",
+      category: "correctness",
+      claim: "unrelated project-level decision",
+    });
+    assert.ok(related.some((m) => m.fingerprint === "fp-project"));
 
     // Keyless project decisions still match through the exact fingerprint tier.
     assert.equal(memory.issues.byFingerprint("fp-project").length, 1);

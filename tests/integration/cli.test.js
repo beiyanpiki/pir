@@ -126,13 +126,15 @@ test("pir exit codes: usage error exits 2, unknown finding exits 3", async () =>
   }
 });
 
-test("pir find rejects a non-positive --max-findings as a usage error", async () => {
-  const repo = createTempGitRepo("pir-cli-max-findings-");
+test("pir find rejects invalid numeric budgets as usage errors", async () => {
+  const repo = createTempGitRepo("pir-cli-budgets-");
   try {
-    for (const bad of ["0", "-3", "2.5", "abc"]) {
-      const usage = await pirExpectFail(["find", "--max-findings", bad, "--cwd", repo.dir]);
-      assert.equal(usage.code, 2, `--max-findings ${bad} must be a usage error`);
-      assert.match(usage.stderr, /--max-findings/);
+    for (const flag of ["--max-findings", "--max-rounds", "--max-tokens"]) {
+      for (const bad of ["0", "-3", "2.5", "abc"]) {
+        const usage = await pirExpectFail(["find", flag, bad, "--cwd", repo.dir]);
+        assert.equal(usage.code, 2, `${flag} ${bad} must be a usage error`);
+        assert.ok(usage.stderr.includes(flag));
+      }
     }
   } finally {
     repo.cleanup();

@@ -102,8 +102,14 @@ export async function getRootCommit(repoRoot: string): Promise<string> {
   return (await git(repoRoot, ["rev-list", "--max-parents=0", "HEAD"])).trim().split("\n")[0]!.trim();
 }
 
+/** Resolve a ref once, protecting option parsing and requiring a commit object. */
+export async function resolveCommit(repoRoot: string, ref: string): Promise<string> {
+  if (typeof ref !== "string" || !ref || ref.includes("\0")) throw new Error("invalid commit reference");
+  return (await git(repoRoot, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
+}
+
 export async function getHeadCommit(repoRoot: string): Promise<string> {
-  return (await git(repoRoot, ["rev-parse", "HEAD"])).trim();
+  return resolveCommit(repoRoot, "HEAD");
 }
 
 export async function getRemoteUrl(repoRoot: string): Promise<string | null> {
@@ -185,7 +191,7 @@ export async function getDiffPatch(
 
 export async function readFileAtCommit(repoRoot: string, commit: string, path: string): Promise<string | null> {
   try {
-    return await git(repoRoot, ["show", `${commit}:${path}`]);
+    return await git(repoRoot, ["cat-file", "blob", `${commit}:${path}`]);
   } catch {
     return null;
   }

@@ -1,15 +1,60 @@
-import { readFileSync, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { Type } from "typebox";
-import { readFileAtCommit } from "../changes/git.js";
-import { addedLineNumbers } from "../changes/diff.js";
 import type { ReviewTool } from "../agents/types.js";
-import { safeResolve, toolError, type ToolContext } from "./context.js";
+import { readReviewFile, resolveReviewRevision, safeResolve, toolError, type ReviewRevision, type ToolContext } from "./context.js";
 import type { CodeSymbol } from "../codemap/types.js";
 
-const MAX_FILE_LINES = 800;
 const MAX_WINDOW = 240;
 const MAX_SEARCH_MATCHES = 50;
+const MAX_BODY_CHARS = 16_000;
+const MAX_OUTPUT_CHARS = 24_000;
+const revisionSchema = Type.Optional(Type.Union([Type.Literal("head"), Type.Literal("base"), Type.Literal("merge-base")], {
+  description: "Snapshot: head (default), requested base, or merge-base (old side of diff)",
+}));
+
+function integer(value: unknown, fallback: number, name: string, minimum = 0): number {
+  const n = value === undefined ? fallback : value;
+  if (typeof n !== "number" || !Number.isSafeInteger(n) || n < minimum) {
+    throw new Error(`${name} must be a safe integer >= ${minimum}`);
+  }
+  return n;
+}
+
+function revisionOf(value: unknown): ReviewRevision {
+  if (value === undefined) return "head";
+  if (value !== "head" && value !== "base" && value !== "merge-base") {
+    throw new Error("revision must be head, base, or merge-base");
+  }
+  return value;
+}
+
+function bounded(text: string): { text: string } {
+  return { text: text.length <= MAX_OUTPUT_CHARS ? text : text.slice(0, MAX_OUTPUT_CHARS - 40) + "\n(output character limit reached)" };
+}
+
+/** Page complete lines where possible; even a single huge line is recoverable. */
+function pageLines(lines: string[], offset: number, limit: number, charOffset = 0, prefix = (_i: number) => ""): {
+  lines: string[]; nextOffset: number; charOffset: number;
+} {
+  if (offset > lines.length) throw new Error("offset is beyond the available lines");
+  if (charOffset > (lines[offset]?.length ?? 0)) throw new Error("charOffset is beyond the selected line");
+  const output: string[] = [];
+  let used = 0;
+  let i = offset;
+  for (; i < Math.min(lines.length, offset + limit); i++) {
+    const label = prefix(i);
+    const text = lines[i]!.slice(i === offset ? charOffset : 0);
+    const available = MAX_BODY_CHARS - used - label.length - 1;
+    if (text.length > available) {
+      if (output.length > 0) break;
+      output.push(label + text.slice(0, available));
+      return { lines: output, nextOffset: i, charOffset: charOffset + available };
+    }
+    output.push(label + text);
+    used += label.length + text.length + 1;
+  }
+  return { lines: output, nextOffset: i, charOffset: 0 };
+}
 
 // ---------------------------------------------------------------------------
 // read_code
@@ -18,50 +63,42 @@ const MAX_SEARCH_MATCHES = 50;
 export function createReadCodeTool(ctx: ToolContext): ReviewTool {
   return {
     name: "read_code",
-    description:
-      "Read source code at the reviewed commit. Returns numbered lines. Use windowed reads for large files.",
-    promptSnippet: "read_code: read repository files at the reviewed commit (windowed)",
+    description: "Read an explicit path at an immutable review snapshot, never the working tree. For deletes/renames use the old path with revision=merge-base (or base). Returns numbered, bounded pages and provenance.",
+    promptSnippet: "read_code: pinned head/base/merge-base source, with window continuation",
     parameters: Type.Object({
-      path: Type.String({ description: "Repository-relative file path" }),
-      startLine: Type.Optional(Type.Number({ description: "1-based first line" })),
-      endLine: Type.Optional(Type.Number({ description: "1-based last line (window capped at 240 lines)" })),
+      path: Type.String({ description: "Repository-relative path at the selected revision; no automatic rename mapping" }),
+      revision: revisionSchema,
+      startLine: Type.Optional(Type.Integer({ minimum: 1, description: "1-based first line" })),
+      endLine: Type.Optional(Type.Integer({ minimum: 1, description: "1-based last line; each page capped at 240 lines and 24,000 characters" })),
+      charOffset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset in first line, for oversized-line continuation" })),
     }),
     async execute(params) {
-      const rel = String(params.path);
-      const abs = safeResolve(ctx.repoRoot, rel);
-      if (!abs) return { text: `ERROR: invalid path: ${rel}` };
-      // The review target is the head commit; the working tree may have moved
-      // on since. Fall back to it only for files git cannot provide.
-      let content = await readFileAtCommit(ctx.repoRoot, ctx.headCommit, rel);
-      if (content === null && existsSync(abs) && !statIsDir(abs)) {
-        content = readFileSync(abs, "utf8");
+      try {
+        if (typeof params.path !== "string") throw new Error("path must be a repository-relative string");
+        const revision = revisionOf(params.revision);
+        const start = integer(params.startLine, 1, "startLine", 1);
+        const requestedEnd = integer(params.endLine, Number.MAX_SAFE_INTEGER, "endLine", 1);
+        const charOffset = integer(params.charOffset, 0, "charOffset");
+        if (requestedEnd < start) throw new Error("endLine must not precede startLine");
+        const file = await readReviewFile(ctx, params.path, revision);
+        const provenance = `snapshot: revision=${revision} commit=${file.commit} path=${JSON.stringify(file.path)}`;
+        if (file.content === null) return bounded(`${provenance}\nERROR: file not found at this snapshot; request the actual old/new path explicitly for deletes or renames.`);
+        const lines = file.content === "" ? [] : file.content.split("\n");
+        if (file.content.endsWith("\n")) lines.pop();
+        if (start > Math.max(1, lines.length)) throw new Error("startLine is beyond the file");
+        const end = Math.min(requestedEnd, lines.length);
+        const page = pageLines(lines, start - 1, Math.min(MAX_WINDOW, Math.max(0, end - start + 1)), charOffset, (i) => `${String(i + 1).padStart(5)}| `);
+        const more = page.nextOffset < end;
+        const continuation = more ? { path: file.path, revision, startLine: page.nextOffset + 1, endLine: end, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;
+        return bounded([provenance, `totalLines: ${lines.length}; startLine: ${start}; charOffset: ${charOffset}`, ...page.lines,
+          `truncated: ${more}; continuation: ${JSON.stringify(continuation)}`,
+          end < lines.length ? `Additional file lines after requested endLine: ${lines.length - end}` : "",
+        ].filter(Boolean).join("\n"));
+      } catch (err) {
+        return bounded(toolError("read_code", err));
       }
-      if (content === null) return { text: `ERROR: file not found: ${rel}` };
-      const lines = content.split("\n");
-      const start = Math.max(1, Number(params.startLine ?? 1));
-      const end = Math.min(lines.length, Number(params.endLine ?? lines.length));
-      if (end < start) return { text: `ERROR: empty window` };
-      const windowStart = start;
-      const windowEnd = Math.min(end, start + MAX_WINDOW - 1, start + MAX_FILE_LINES - 1);
-      const rendered: string[] = [];
-      for (let i = windowStart; i <= windowEnd; i++) {
-        rendered.push(`${String(i).padStart(5)}| ${lines[i - 1] ?? ""}`);
-      }
-      const note =
-        lines.length > windowEnd
-          ? `\n(... ${lines.length - windowEnd} more lines; request a narrower window)`
-          : "";
-      return { text: rendered.join("\n") + note };
     },
   };
-}
-
-function statIsDir(abs: string): boolean {
-  try {
-    return statSync(abs).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -71,94 +108,119 @@ function statIsDir(abs: string): boolean {
 export function createSearchTextTool(ctx: ToolContext): ReviewTool {
   return {
     name: "search_text",
-    description: "Search file contents for a literal or regular expression. Returns path:line matches.",
-    promptSnippet: "search_text: ripgrep-style text search across the repository",
+    description: "Case-sensitive search of tracked text at one immutable review commit, not the working tree. Counts matching lines (not occurrences); bounded results have offset continuation. Regex uses Git extended regular expressions.",
+    promptSnippet: "search_text: bounded literal/ERE search of pinned head/base/merge-base",
     parameters: Type.Object({
-      pattern: Type.String({ description: "Text or regex pattern" }),
-      isRegex: Type.Optional(Type.Boolean({ description: "Treat pattern as regex (default false)" })),
-      glob: Type.Optional(Type.String({ description: 'File glob filter, e.g. "*.ts"' })),
-      limit: Type.Optional(Type.Number({ description: "Max matches (default 50)" })),
+      pattern: Type.String({ minLength: 1, maxLength: 4096, description: "Single-line literal or extended regex" }),
+      revision: revisionSchema,
+      isRegex: Type.Optional(Type.Boolean({ description: "Treat pattern as extended regex (default false)" })),
+      glob: Type.Optional(Type.String({ description: "Git wildmatch glob: *.ts matches any depth, src/*.ts one level, ** recursive, ? and [] supported; leading ! excludes" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "Max matching lines (default/cap 50; also character-bounded)" })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "Matching lines to skip, from continuation (default 0)" })),
     }),
     async execute(params) {
-      const pattern = String(params.pattern);
-      const isRegex = Boolean(params.isRegex);
-      const glob = params.glob ? String(params.glob) : undefined;
-      const limit = Math.min(Number(params.limit ?? MAX_SEARCH_MATCHES), MAX_SEARCH_MATCHES);
-      const matches = await rgSearch(ctx.repoRoot, pattern, { isRegex, glob, limit });
-      if (matches.length === 0) return { text: "No matches." };
-      const summary = matches.slice(0, limit).map((m) => `${m.path}:${m.line}: ${m.text.slice(0, 200)}`);
-      return { text: summary.join("\n") };
+      try {
+        if (typeof params.pattern !== "string" || !params.pattern || params.pattern.length > 4096 || /[\0\r\n]/.test(params.pattern)) {
+          throw new Error("pattern must be a nonempty single-line string of at most 4096 characters, without NUL");
+        }
+        if (params.isRegex !== undefined && typeof params.isRegex !== "boolean") throw new Error("isRegex must be a boolean");
+        const revision = revisionOf(params.revision);
+        const isRegex = params.isRegex === true;
+        const limit = Math.min(integer(params.limit, MAX_SEARCH_MATCHES, "limit", 1), MAX_SEARCH_MATCHES);
+        const offset = integer(params.offset, 0, "offset");
+        const pathspec = searchPathspec(ctx.repoRoot, params.glob);
+        const commit = await resolveReviewRevision(ctx, revision);
+        const result = await searchCommit(ctx.repoRoot, commit, params.pattern, { isRegex, pathspec, limit, offset });
+        const continuation = result.hasMore ? { pattern: params.pattern, revision, isRegex, ...(params.glob === undefined ? {} : { glob: params.glob }), limit, offset: offset + result.matches.length } : null;
+        return bounded([`snapshot: revision=${revision} commit=${commit}`,
+          `matchingLines: ${result.hasMore ? ">=" : ""}${result.seen}; returned: ${result.matches.length}; offset: ${offset}; truncated: ${result.hasMore}`,
+          result.matches.length ? result.matches.join("\n") : "No matches.",
+          "Line previews are capped at 240 characters; use read_code for complete lines.",
+          `continuation: ${JSON.stringify(continuation)}`,
+        ].join("\n"));
+      } catch (err) {
+        return bounded(toolError("search_text", err));
+      }
     },
   };
 }
 
-interface TextMatch {
-  path: string;
-  line: number;
-  text: string;
+function searchPathspec(repoRoot: string, value: unknown): string[] {
+  if (value === undefined) return [];
+  if (typeof value !== "string" || value.length > 1024) throw new Error("glob must be a string of at most 1024 characters");
+  const exclude = value.startsWith("!");
+  let glob = exclude ? value.slice(1) : value;
+  if (!safeResolve(repoRoot, glob)) throw new Error("invalid repository-relative glob");
+  glob = glob.replace(/^(?:\.\/)+/, "");
+  if (!glob.includes("/")) glob = `**/${glob}`;
+  return exclude ? [":(top,glob)**", `:(top,glob,exclude)${glob}`] : [`:(top,glob)${glob}`];
 }
 
-async function rgSearch(
-  repoRoot: string,
-  pattern: string,
-  opts: { isRegex: boolean; glob?: string; limit: number },
-): Promise<TextMatch[]> {
-  const args = ["-n", "--no-heading", "-S"];
-  if (!opts.isRegex) args.push("-F");
-  if (opts.glob) args.push("-g", opts.glob);
-  args.push("--", pattern, repoRoot);
-  const out = await new Promise<string | null>((resolve) => {
-    const child = spawn("rg", args, { stdio: ["ignore", "pipe", "ignore"] });
-    let stdout = "";
-    child.stdout.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
-    child.on("error", () => resolve(null));
-    child.on("close", () => resolve(stdout));
-  });
-  if (out === null) return jsSearch(repoRoot, pattern, opts);
-  const matches: TextMatch[] = [];
-  for (const line of out.split("\n")) {
-    if (!line) continue;
-    const rest = line.startsWith(repoRoot + "/") ? line.slice(repoRoot.length + 1) : line;
-    const m = /^([^:]+):(\d+):(.*)$/.exec(rest);
-    if (m) matches.push({ path: m[1]!, line: Number(m[2]), text: m[3]! });
-    if (matches.length >= opts.limit) break;
-  }
-  return matches;
-}
-
-async function jsSearch(
-  repoRoot: string,
-  pattern: string,
-  opts: { isRegex: boolean; glob?: string; limit: number },
-): Promise<TextMatch[]> {
-  const { DegradedCodeMap } = await import("../codemap/provider.js");
-  const files = await new DegradedCodeMap(repoRoot, "search fallback").fileOverview();
-  const matcher = opts.isRegex ? new RegExp(pattern) : null;
-  const matches: TextMatch[] = [];
-  for (const file of files) {
-    if (opts.glob && !simpleGlob(opts.glob, file.path)) continue;
-    let content: string;
-    try {
-      content = readFileSync(`${repoRoot}/${file.path}`, "utf8");
-    } catch {
-      continue;
-    }
-    const lines = content.split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const hit = matcher ? matcher.test(lines[i]!) : lines[i]!.includes(pattern);
-      if (hit) {
-        matches.push({ path: file.path, line: i + 1, text: lines[i]! });
-        if (matches.length >= opts.limit) return matches;
+/** Stream grep records; keep only one bounded preview and stop after one extra hit. */
+async function searchCommit(repoRoot: string, commit: string, pattern: string, opts: {
+  isRegex: boolean; pathspec: string[]; limit: number; offset: number;
+}): Promise<{ matches: string[]; hasMore: boolean; seen: number }> {
+  const args = ["-C", repoRoot, "--no-pager", "grep", "--no-color", "--full-name", "--no-textconv",
+    "--no-column", "--no-heading", "--no-break", "--no-show-function", "--no-function-context",
+    "--no-recurse-submodules", "--threads=1", "-n", "-z", "-I", opts.isRegex ? "-E" : "-F", "-e", pattern, commit, "--", ...opts.pathspec];
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const matches: string[] = [];
+    let seen = 0, used = 0, field = 0;
+    let token = "", file = "", line = "", stderr = "";
+    let hasMore = false;
+    let failure: string | undefined;
+    const timer = setTimeout(() => {
+      failure = "search timed out; narrow the glob or pattern";
+      child.kill();
+    }, 30_000);
+    const stop = (message?: string) => {
+      failure = message;
+      child.stdout.pause();
+      child.kill();
+    };
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(0, 2000); });
+    child.stdout.on("data", (chunk: string) => {
+      if (hasMore || failure) return;
+      let pos = 0;
+      while (pos < chunk.length) {
+        const delimiter = field === 2 ? "\n" : "\0";
+        const end = chunk.indexOf(delimiter, pos);
+        const part = chunk.slice(pos, end < 0 ? chunk.length : end);
+        token += part.slice(0, Math.max(0, (field === 2 ? 240 : 8192) - token.length));
+        if (field !== 2 && token.length >= 8192) { stop("git grep returned an oversized path record"); return; }
+        if (end < 0) break;
+        pos = end + 1;
+        if (field === 0) { file = token.slice(commit.length + 1); field = 1; }
+        else if (field === 1) { line = token; field = 2; }
+        else {
+          seen++;
+          if (seen > opts.offset) {
+            const displayPath = /[\r\n\t]/.test(file) ? JSON.stringify(file) : file;
+            const match = `${displayPath}:${line}: ${token}`;
+            if (matches.length >= opts.limit || used + match.length + 1 > MAX_BODY_CHARS) {
+              hasMore = true; stop(); return;
+            }
+            matches.push(match);
+            used += match.length + 1;
+          }
+          field = 0;
+        }
+        token = "";
       }
-    }
-  }
-  return matches;
+    });
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failure) reject(new Error(failure));
+      else if (!hasMore && code !== 0 && code !== 1) reject(new Error(`git grep failed: ${stderr.trim() || code}`));
+      else resolve({ matches, hasMore, seen });
+    });
+  });
 }
 
-function simpleGlob(glob: string, path: string): boolean {
-  const re = new RegExp("^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
-  return re.test(path);
-}
 
 // ---------------------------------------------------------------------------
 // get_change
@@ -167,29 +229,97 @@ function simpleGlob(glob: string, path: string): boolean {
 export function createGetChangeTool(ctx: ToolContext): ReviewTool {
   return {
     name: "get_change",
-    description: "Get the change under review: per-file diffs with hunk headers and added line numbers.",
-    promptSnippet: "get_change: the diff under review (base..head)",
+    description: "Get the merge-base -> head diff. Defaults to a concise file overview (small diffs include full hunks). Select path+hunkIndex for raw diff lines, including removed code; follow offset/limit and charOffset continuation to recover all content.",
+    promptSnippet: "get_change: merge-base -> head overview; path+hunkIndex+offset pages recover both sides",
     parameters: Type.Object({
-      path: Type.Optional(Type.String({ description: "Filter to one file" })),
+      path: Type.Optional(Type.String({ description: "Filter by current or old repository-relative path" })),
+      hunkIndex: Type.Optional(Type.Integer({ minimum: 0, description: "0-based hunk index; requires path. If omitted with path, pages the hunk index." })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "0-based page offset: files in overview, hunks with path, raw diff lines with path+hunkIndex" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "Page size: default/cap 20/50 files or hunks, 120/240 raw diff lines" })),
+      charOffset: Type.Optional(Type.Integer({ minimum: 0, description: "Character offset within the first diff line (requires path+hunkIndex)" })),
     }),
     async execute(params) {
-      const filter = params.path ? String(params.path) : undefined;
-      const files = ctx.changeSet.files.filter((f) => !filter || f.path === filter);
-      if (files.length === 0) return { text: filter ? `No changes for ${filter}` : "No changes in this changeset." };
-      const parts: string[] = [
-        `base ${ctx.changeSet.base} -> head ${ctx.changeSet.head} (${ctx.changeSet.churn} changed lines, ${ctx.changeSet.files.length} files)`,
-      ];
-      for (const file of files) {
-        parts.push(`\n## ${file.path} [${file.status}] (+${file.additions}/-${file.deletions})`);
-        if (file.oldPath) parts.push(`renamed from ${file.oldPath}`);
-        const added = addedLineNumbers(file);
-        if (added.length > 0) parts.push(`new lines touched: ${added.slice(0, 40).join(", ")}${added.length > 40 ? " ..." : ""}`);
-        const body = file.hunks
-          .map((h) => `${h.header}\n${h.lines.slice(0, 120).join("\n")}${h.lines.length > 120 ? "\n(...)" : ""}`)
-          .join("\n");
-        if (body) parts.push(body);
+      try {
+        const filter = params.path;
+        if (filter !== undefined && (typeof filter !== "string" || !safeResolve(ctx.repoRoot, filter))) {
+          throw new Error("invalid repository-relative path");
+        }
+        if (params.hunkIndex !== undefined && filter === undefined) throw new Error("hunkIndex requires path");
+        if (params.charOffset !== undefined && params.hunkIndex === undefined) throw new Error("charOffset requires path and hunkIndex");
+        const offset = integer(params.offset, 0, "offset");
+        const hunkIndex = params.hunkIndex === undefined ? undefined : integer(params.hunkIndex, 0, "hunkIndex");
+        const limit = Math.min(integer(params.limit, hunkIndex === undefined ? 20 : 120, "limit", 1), hunkIndex === undefined ? 50 : MAX_WINDOW);
+        const charOffset = integer(params.charOffset, 0, "charOffset");
+        const [head, base, mergeBase] = await Promise.all([resolveReviewRevision(ctx), resolveReviewRevision(ctx, "base"), resolveReviewRevision(ctx, "merge-base")]);
+        const header = `merge-base ${mergeBase} -> head ${head} (${ctx.changeSet.churn} changed lines, ${ctx.changeSet.files.length} files)\nrequested base: ${base}`;
+        const files = ctx.changeSet.files.filter((f) => filter === undefined ||
+          safeResolve(ctx.repoRoot, f.path) === safeResolve(ctx.repoRoot, filter as string) ||
+          (f.oldPath !== undefined && safeResolve(ctx.repoRoot, f.oldPath) === safeResolve(ctx.repoRoot, filter as string)));
+        if (files.length === 0) return bounded(`${header}\n${filter === undefined ? "No changes in this changeset." : `No changes for ${JSON.stringify(filter)}`}`);
+        if (filter !== undefined && files.length > 1) {
+          throw new Error("path identifies multiple changed files; use an unambiguous current path");
+        }
+        const file = files[0]!;
+        const fileLabel = (f: typeof file) => `## ${JSON.stringify(f.path)} [${f.status}] (+${f.additions}/-${f.deletions}); hunks: ${f.hunks.length}${f.oldPath ? `; renamed from ${JSON.stringify(f.oldPath)}` : ""}`;
+        if (hunkIndex !== undefined) {
+          const hunk = file.hunks[hunkIndex];
+          if (!hunk) throw new Error("hunkIndex is beyond the available hunks");
+          const page = pageLines(hunk.lines, offset, limit, charOffset);
+          const more = page.nextOffset < hunk.lines.length;
+          const continuation = more ? { path: file.path, hunkIndex, offset: page.nextOffset, limit, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;
+          const nextHunk = hunkIndex + 1 < file.hunks.length ? { path: file.path, hunkIndex: hunkIndex + 1, offset: 0, limit } : null;
+          return bounded([header, fileLabel(file), `hunkIndex: ${hunkIndex}; ${hunk.header}`,
+            `raw diff lines: ${hunk.lines.length}; offset: ${offset}; charOffset: ${charOffset}`,
+            ...page.lines, `truncated: ${more}; continuation: ${JSON.stringify(continuation)}`,
+            `nextHunk: ${JSON.stringify(nextHunk)}`,
+          ].join("\n"));
+        }
+        const items = filter === undefined ? files : file.hunks;
+        if (offset > items.length) throw new Error("offset is beyond the available entries");
+        const parts = [header];
+        if (filter !== undefined) parts.push(fileLabel(file));
+        let used = parts.join("\n").length;
+        let nextOffset = offset;
+        let omittedHunks = false;
+        // Inline complete small diffs, but never let a large body crowd out navigation.
+        let inlineLines = 80;
+        for (; nextOffset < Math.min(items.length, offset + limit); nextOffset++) {
+          let entry: string;
+          if (filter === undefined) {
+            const current = files[nextOffset]!;
+            entry = `${fileLabel(current)}\nget_change: ${JSON.stringify({ path: current.path })}`;
+            const lineCount = current.hunks.reduce((sum, h) => sum + h.lines.length, 0);
+            if (lineCount <= inlineLines && current.hunks.length <= 10) {
+              const bodies = current.hunks.map((h, index) => `hunkIndex: ${index}; ${h.header}\n${h.lines.join("\n")}`).join("\n");
+              if (bodies.length <= 4000 && used + entry.length + bodies.length < MAX_BODY_CHARS) {
+                entry += bodies ? `\n${bodies}` : "";
+                inlineLines -= lineCount;
+              } else omittedHunks ||= current.hunks.length > 0;
+            } else omittedHunks ||= current.hunks.length > 0;
+          } else {
+            const hunk = file.hunks[nextOffset]!;
+            entry = `hunkIndex: ${nextOffset}; ${hunk.header}; raw diff lines: ${hunk.lines.length}\nget_change: ${JSON.stringify({ path: file.path, hunkIndex: nextOffset, offset: 0, limit: 120 })}`;
+            if (hunk.lines.length <= inlineLines) {
+              const body = hunk.lines.join("\n");
+              if (body.length <= 4000 && used + entry.length + body.length < MAX_BODY_CHARS) {
+                entry += body ? `\n${body}` : "";
+                inlineLines -= hunk.lines.length;
+              } else omittedHunks = true;
+            } else omittedHunks = true;
+          }
+          if (used + entry.length + 1 > MAX_BODY_CHARS && nextOffset > offset) break;
+          parts.push(entry);
+          used += entry.length + 1;
+        }
+        const more = nextOffset < items.length;
+        const continuation = more ? { ...(filter === undefined ? {} : { path: file.path }), offset: nextOffset, limit } : null;
+        parts.push(`entries: ${items.length}; returned: ${nextOffset - offset}; offset: ${offset}; truncated: ${more || omittedHunks}`);
+        parts.push(`continuation: ${JSON.stringify(continuation)}`);
+        if (omittedHunks) parts.push("Hunk bodies omitted in overview; use the get_change requests above, then follow continuation for both -removed and +added lines.");
+        return bounded(parts.join("\n"));
+      } catch (err) {
+        return bounded(toolError("get_change", err));
       }
-      return { text: parts.join("\n") };
     },
   };
 }
@@ -206,10 +336,14 @@ function renderSymbols(symbols: CodeSymbol[], cap = 20): string {
     .join("\n") + (symbols.length > cap ? `\n(... ${symbols.length - cap} more)` : "");
 }
 
+function navigationResult(ctx: ToolContext, symbols: CodeSymbol[]): { text: string } {
+  return bounded(`provenance: unpinned ${ctx.codeMap.kind} structural index; navigation only, not evidence of the reviewed snapshot. Verify paths and lines with read_code at head/base/merge-base.\n${renderSymbols(symbols)}`);
+}
+
 export function createFindSymbolTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_symbol",
-    description: "Search the code index for symbols by name. Returns qualified names, kinds and locations.",
+    description: "Navigation only: search an unpinned structural index for symbols. Verify returned paths/lines with read_code at the selected review revision.",
     promptSnippet: "find_symbol: symbol search over the structural index",
     parameters: Type.Object({
       query: Type.String({ description: "Symbol name or fragment" }),
@@ -220,7 +354,7 @@ export function createFindSymbolTool(ctx: ToolContext): ReviewTool {
         const symbols = await ctx.codeMap.searchSymbols(String(params.query), {
           kind: params.kind ? String(params.kind) : undefined,
         });
-        return { text: renderSymbols(symbols) };
+        return navigationResult(ctx, symbols);
       } catch (err) {
         return { text: toolError("find_symbol", err) };
       }
@@ -231,11 +365,11 @@ export function createFindSymbolTool(ctx: ToolContext): ReviewTool {
 export function createFindCallersTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_callers",
-    description: "Who calls this symbol? Requires a qualified symbol name from find_symbol.",
+    description: "Navigation only: approximate callers from an unpinned index. Requires a qualified symbol name from find_symbol; verify with pinned read_code.",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
-        return { text: renderSymbols(await ctx.codeMap.callers(String(params.symbol))) };
+        return navigationResult(ctx, await ctx.codeMap.callers(String(params.symbol)));
       } catch (err) {
         return { text: toolError("find_callers", err) };
       }
@@ -246,11 +380,11 @@ export function createFindCallersTool(ctx: ToolContext): ReviewTool {
 export function createFindCalleesTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_callees",
-    description: "What does this symbol call? Requires a qualified symbol name from find_symbol.",
+    description: "Navigation only: approximate callees from an unpinned index. Requires a qualified symbol name from find_symbol; verify with pinned read_code.",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
-        return { text: renderSymbols(await ctx.codeMap.callees(String(params.symbol))) };
+        return navigationResult(ctx, await ctx.codeMap.callees(String(params.symbol)));
       } catch (err) {
         return { text: toolError("find_callees", err) };
       }
@@ -261,7 +395,7 @@ export function createFindCalleesTool(ctx: ToolContext): ReviewTool {
 export function createFindReferencesTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_references",
-    description: "Approximate references for a symbol: callers plus dependents (impact set).",
+    description: "Navigation only: approximate references (callers and dependents) from an unpinned index, not snapshot evidence. Verify with pinned read_code.",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
@@ -272,7 +406,7 @@ export function createFindReferencesTool(ctx: ToolContext): ReviewTool {
         ]);
         const seen = new Map<string, CodeSymbol>();
         for (const s of [...callers, ...dependents]) seen.set(s.qualifiedName, s);
-        return { text: renderSymbols([...seen.values()]) };
+        return navigationResult(ctx, [...seen.values()]);
       } catch (err) {
         return { text: toolError("find_references", err) };
       }

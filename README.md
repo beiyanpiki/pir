@@ -15,8 +15,9 @@ findings in, structured findings out.
 
 - **Reviewer → Verifier loop, from scratch.** A read-only reviewer session
   explores the diff and must emit candidates through a structured tool
-  (`record_candidate`); every candidate is then independently re-checked by an
-  isolated verifier session before it reaches you. No unverified LLM opinions.
+  (`record_candidate`); reported findings pass through an isolated verifier
+  and retain an explicit confirmed/uncertain status. Unverified candidates
+  remain in a separate pending queue rather than disappearing at budget limits.
 - **Repository Memory that actually changes behavior.** Five layers (project /
   feature / code entity / issue decisions / finding resolutions) in SQLite.
   Tell it once that `retry_count` intentionally counts attempts — the same
@@ -176,7 +177,8 @@ The interactive equivalent ships as `docker/deploy.sh`.
 |---|---|
 | [docs/README.zh-CN.md](docs/README.zh-CN.md) | 完整中文说明(功能、架构、安装、协议) |
 | [docs/for-llm.md](docs/for-llm.md) | Agent-facing deployment & usage guide |
-| [docs/design.md](docs/design.md) | Original architecture spec (the contract this code implements) |
+| [docs/design.md](docs/design.md) | Original architecture spec |
+| [docs/review-loop.md](docs/review-loop.md) | Evidence snapshots, pending candidates, isolation, usage, and evaluation |
 
 ## Quick start
 
@@ -197,7 +199,7 @@ exit-code contract in [docs/for-llm.md](docs/for-llm.md).
 ## Development
 
 ```bash
-npm run build && npm test   # 50 model-free tests (scripted agent sessions)
+npm test                    # build + model-free regression suite
 PIR_EVAL=1 node tests/eval/run-eval.js   # evaluation suite (needs a model)
 ```
 

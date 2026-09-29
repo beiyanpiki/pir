@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeClaimText } from "../findings/identity.js";
 import { parseJsonArray, SUPPRESSION_SOURCES, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
@@ -110,28 +111,24 @@ export class IssueMemoriesRepo {
       .map(toDomain);
   }
 
-  /**
-   * Decisions that could apply to a candidate at symbol / feature scope,
-   * same category only. Keyless project-scope decisions are deliberately
-   * excluded here — they match every otherwise-unrelated candidate; they
-   * still surface through the exact fingerprint and fuzzy tiers.
-   */
+  /** Respect the declared decision scope; exact decisions never broaden by key. */
   matchingScope(input: { featureKey?: string; entityKey?: string; category: string }): IssueMemory[] {
+    const category = normalizeClaimText(input.category);
     const rows = this.store.all<Row>(
       `SELECT * FROM issue_memories
-       WHERE project_id = ? AND stale = 0
-         AND (entity_key IS NOT NULL OR feature_key IS NOT NULL)
-       ORDER BY created_at_commit DESC`,
+       WHERE project_id = ? AND stale = 0 AND scope IN ('symbol', 'feature', 'project')
+       ORDER BY CASE scope WHEN 'symbol' THEN 0 WHEN 'feature' THEN 1 ELSE 2 END, id`,
       this.projectId,
     );
-    return rows
-      .map(toDomain)
-      .filter((m) => {
-        if (m.category !== input.category) return false;
-        if (m.entityKey && input.entityKey && m.entityKey === input.entityKey) return true;
-        if (!m.entityKey && m.featureKey && input.featureKey && m.featureKey === input.featureKey) return true;
-        return false;
-      });
+    return rows.map(toDomain).filter((memory) => {
+      if (category && normalizeClaimText(memory.category) !== category) return false;
+      if (memory.scope === "symbol") {
+        return !!input.entityKey && memory.entityKey === input.entityKey
+          && (!input.featureKey || !memory.featureKey || memory.featureKey === input.featureKey);
+      }
+      if (memory.scope === "feature") return !!input.featureKey && memory.featureKey === input.featureKey;
+      return memory.scope === "project";
+    });
   }
 
   byEntity(entityKey: string): IssueMemory[] {

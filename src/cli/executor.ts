@@ -29,7 +29,7 @@ import {
   verifyFix,
   type MemorySyncResult,
 } from "../app/services.js";
-import { envelope, isReported, renderFindResultText, severityAtLeast } from "../app/output.js";
+import { envelope, findExitCode, renderFindResultText } from "../app/output.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
@@ -56,8 +56,8 @@ Usage:
 Find options:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
-  --max-rounds <n>    reviewer loop rounds (default 2)
-  --max-tokens <n>    token budget estimate (default 400000)
+  --max-rounds <n>    discovery/verification loop rounds (default 2)
+  --max-tokens <n>    session-boundary token budget (default 400000)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
                       out — nothing is padded to reach it
@@ -579,6 +579,14 @@ async function cmdFind(
           degraded: result.degraded,
           stoppedBecause: result.stoppedBecause,
           estimatedTokens: result.estimatedTokens,
+          usage: result.usage ?? null,
+          usageComplete: result.usageComplete,
+          durationMs: result.durationMs,
+          incomplete: result.incomplete,
+          pendingCandidates: result.pendingCandidates,
+          pendingFindings: result.pendingFindings.map((row) => toFindingView(ctx, row)),
+          verificationErrors: result.verificationErrors,
+          uncertaintyReasons: result.uncertaintyReasons,
           findings,
         },
         { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
@@ -592,15 +600,14 @@ async function cmdFind(
         rounds: result.rounds,
         findings,
         stoppedBecause: result.stoppedBecause,
+        incomplete: result.incomplete,
+        pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
       })}\n`,
     );
   }
 
-  if (failOn !== "none" && findings.some((f) => isReported(f) && severityAtLeast(f.severity, failOn))) {
-    return 1;
-  }
-  return 0;
+  return findExitCode(findings, failOn, result.incomplete);
 }
 
 async function cmdMemory(

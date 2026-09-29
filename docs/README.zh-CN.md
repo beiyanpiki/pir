@@ -6,7 +6,7 @@
 
 ## 亮点
 
-- **Reviewer → Verifier 双段闭环,从零实现。** 只读 reviewer 会话探索 diff,必须通过结构化工具(`record_candidate`)产出候选;每个候选再由独立的 verifier 会话复核,才能到达你面前。没有未经证实的 LLM 观点。
+- **Reviewer → Verifier 双段闭环。** 只读 reviewer 通过 `record_candidate` 提交有证据的候选，verifier 独立检查故障路径及变更归因，明确区分 confirmed / rejected / uncertain。超出预算的未验证候选保留在 pending 队列，不会被静默丢弃。
 - **真正改变行为的仓库记忆。** 五层记忆(项目/功能/代码实体/问题裁决/修复历史)存 SQLite。你说一次"retry_count 统计的就是 attempts",同类问题不再上报——而且**每次都由 verifier 对照当前代码复核这条决策**,现实变了会重新打开。
 - **按设计划分的信任边界。** Agent 永远写不了决策类记忆(`expected/wont-fix/false-positive` 只来自用户或 verified fix);reviewer 看不到历史决策(无偏置),只有 verifier 能看;记忆以"证据而非指令"注入,防提示注入。
 - **审你手里的代码,不是你推上去的。** coderabbit-cli 式:客户端把本地状态打成 git bundle 送审——未 push 的提交、甚至**未提交的工作区**(`--uncommitted`)都能审,服务端不需要源仓库凭证。
@@ -144,6 +144,15 @@ pir version
 - 退出码:`0` 正常 | `1` 存在 ≥ `--fail-on` 级别的已报告 findings | `2` 用法错误 | `3` 运行错误
 - 环境变量:`PIR_MODEL`(默认模型覆盖)、`PIR_MEMORY_DB`(单库覆盖)、`PIR_STATE_IN_PROJECT=1`(状态进 `<repo>/.pir/`,docker exec 模式默认)、`PIR_STATE_ROOT`(服务端集中状态)、`PIR_REPOS_ROOT`(服务端仓库根)、`PIR_SERVER_TOKEN`/`PIR_TLS_CERT`/`PIR_TLS_KEY`(serve)、`PIR_KEEP_WORKTREE=1`(保留评审 worktree 调试)、`PIR_SERVER_URL`/`PIR_MODE`(远程模式)、`PIR_CONFIG_DIR`(配置目录,默认 `~/.pir`)、`PIR_NO_WIZARD=1`(禁用首次向导)、`PIR_TRANSCRIPTS=1`(把每次评审的完整会话转录——含 thinking、工具调用与结果——写入状态目录 `transcripts/<runId>/` 下的 JSON;目录位置与 memory.sqlite 同级解析,服务端即 `PIR_STATE_ROOT/<projectId>/transcripts/`,运行结束时 stdout/日志会回显路径)
 
+### 审查完整性与诊断
+
+- Reviewer 按行为风险调查最小因果链；Verifier 同时检查真实性与本次变更归因。固定提交的代码读取、搜索以及 diff 分页支持复核旧版本和被截断内容。
+- `--max-rounds` 同时限制发现轮次和只做复核的轮次。未验证候选单独保存在 `pendingFindings`，数量由 `pendingCandidates` 返回，可用 `pir findings list --status candidate` 查看。
+- JSON 的 `incomplete` 表示仍有待处理工作或复核执行错误。设置 `--fail-on` 时，达到阈值的 finding 返回 1；否则审查不完整返回 3，而不是让门禁误判通过。默认 `--fail-on none` 保留 0 并输出明确诊断。
+- `usage` 为可用的 SDK 实测用量，`usageComplete` 表示是否覆盖所有会话；缺失用量不伪装为零。预算在会话之间检查，不会硬取消已开始的模型请求。
+- 会话不自动加载项目或全局 AGENTS、SYSTEM、skills、extensions 与 hooks；模型和凭证仍沿用既有配置来源。转录是 SDK 会话快照，不是供应商原始请求，thinking 仅在 SDK/供应商提供时可见。
+- 具体行为见 [审查循环说明](review-loop.md)，配对评估见 [评估指南](../tests/eval/README.md)。离线测试通过不等同于已经证明真实模型召回率或成本改善。
+
 ## Docker 两种用法
 
 ```bash
@@ -190,7 +199,7 @@ pir --server https://pir.svc:8790 find --uncommitted --json   # 远程审本地�
 ## 开发
 
 ```bash
-npm run build && npm test    # 50 个免模型测试(脚本化会话驱动整个引擎)
+npm test                    # 构建并执行免模型回归测试
 PIR_EVAL=1 node tests/eval/run-eval.js             # 评估套件(需要模型)
 ```
 

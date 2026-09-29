@@ -438,7 +438,7 @@ test("findIssues: rejected findings do not consume the maxFindings budget", asyn
         category: "correctness",
         severity: "P1",
         anchors: [{ path: "src/pay.ts", startLine: 1 }],
-        evidence: [],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
       });
       await tool("finish_round").execute({ summary: "one more to check", nextFocus: [], needsMoreRounds: true });
     },
@@ -684,7 +684,7 @@ test("runFind service layer returns a renderable outcome", async () => {
   }
 });
 
-test("findIssues: candidates beyond the verification cap stay eligible in later rounds", async () => {
+test("findIssues: candidates beyond the verification cap are drained from the pending queue in later rounds", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const record = (tool, c) =>
@@ -718,24 +718,17 @@ test("findIssues: candidates beyond the verification cap stay eligible in later 
     featureKey: "payment-refund",
   };
   const verifiedTitles = [];
-  let reviewerRound = 0;
+  let reviewerRounds = 0;
   const factory = new FakeSessionFactory({
     reviewerScript: async (tool) => {
-      reviewerRound += 1;
-      if (reviewerRound === 1) {
-        await record(tool, ALPHA);
-        await record(tool, BETA);
-        await tool("finish_round").execute({ summary: "two candidates", nextFocus: [], needsMoreRounds: true });
-        return;
-      }
-      // Re-report BETA: the cap left it unverified in round 1, so it must be
-      // fresh again here instead of discarded as a known duplicate.
+      reviewerRounds += 1;
+      await record(tool, ALPHA);
       await record(tool, BETA);
-      await tool("finish_round").execute({ summary: "re-checked", nextFocus: [], needsMoreRounds: false });
+      await tool("finish_round").execute({ summary: "two candidates", nextFocus: [], needsMoreRounds: true });
     },
     verifierScript: async (tool, text) => {
       for (const c of [ALPHA, BETA]) {
-        if (text.includes(`title: ${c.title}`)) verifiedTitles.push(c.title);
+        if (text.includes(c.title)) verifiedTitles.push(c.title);
       }
       await tool("submit_verdict").execute({
         verdict: "confirmed",
@@ -752,9 +745,16 @@ test("findIssues: candidates beyond the verification cap stay eligible in later 
       factory,
       options: { maxRounds: 2, maxVerificationsPerRound: 1 },
     });
+    // Round 1 discovers both candidates but the verification cap admits only
+    // ALPHA; BETA stays queued instead of being silently discarded.
     assert.equal(outcome.rounds.length, 2);
     assert.equal(outcome.rounds[0].fresh, 2);
-    assert.equal(outcome.rounds[1].fresh, 1);
+    assert.equal(outcome.rounds[0].pending, 1);
+    // Round 2 is a verification-only round: the queued BETA is drained
+    // without paying for another reviewer discovery session.
+    assert.equal(reviewerRounds, 1);
+    assert.equal(outcome.rounds[1].reviewerRan, false);
+    assert.equal(outcome.rounds[1].pending, 0);
     assert.equal(outcome.findings.length, 2);
     assert.deepEqual(verifiedTitles, [ALPHA.title, BETA.title]);
   } finally {

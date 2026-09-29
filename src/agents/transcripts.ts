@@ -1,13 +1,41 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import type { SessionUsage } from "./types.js";
 
 /**
  * Opt-in session transcripts: with PIR_TRANSCRIPTS=1 every reviewer/verifier
- * session of a run is dumped to JSON — the full message list including
- * thinking blocks and tool traffic. Sessions themselves stay in-memory and
- * disposable; this is the only place a conversation survives a run.
+ * session of a run is dumped to JSON, including retained thinking/tool traffic.
+ * These are final SDK session messages, not a provider wire transcript:
+ * compaction can replace earlier context. Usage includes SDK-recorded entries
+ * beyond the retained messages. Sessions themselves stay in-memory.
  */
+export interface SessionTranscript {
+  role: string;
+  model: string;
+  startedAt: string;
+  endedAt: string;
+  error?: string;
+  prompt: string;
+  messages: readonly unknown[];
+  /** Includes model/auth initialization and SDK session construction. */
+  sessionStartedAt?: string;
+  capture?: "session-messages";
+  usage?: SessionUsage;
+  /** False only when the SDK cannot supply stats; never marks estimates real. */
+  usageAvailable?: boolean;
+  /** Deliberate allowlist: no auth, model headers, paths, or ambient settings. */
+  effectiveConfig?: {
+    model: string;
+    thinkingLevel: string;
+    builtinTools: string[];
+    customTools: string[];
+    systemPrompt: "read-only-review-v1";
+    resources: "isolated";
+    settings: "in-memory";
+    toolExecution: "sequential";
+  };
+}
 
 export function transcriptsEnabled(): boolean {
   const value = process.env.PIR_TRANSCRIPTS;

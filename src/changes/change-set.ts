@@ -1,4 +1,4 @@
-import { getDiffPatch, getMergeBase, getNameStatus } from "./git.js";
+import { getDiffPatch, getMergeBase, getNameStatus, resolveCommit } from "./git.js";
 import { parseUnifiedDiff, type FileDiff } from "./diff.js";
 
 export interface ChangedFile extends FileDiff {
@@ -8,8 +8,13 @@ export interface ChangedFile extends FileDiff {
 
 export interface ChangeSet {
   repoRoot: string;
+  /** Requested ref labels, retained for display and compatibility. */
   base: string;
   head: string;
+  /** Immutable commits; optional for legacy/bootstrap contexts. */
+  baseCommit?: string;
+  headCommit?: string;
+  /** Actual old side of the reviewed diff (not necessarily requested base). */
   mergeBase: string;
   files: ChangedFile[];
   patch: string;
@@ -18,10 +23,13 @@ export interface ChangeSet {
 }
 
 export async function buildChangeSet(repoRoot: string, base: string, head: string): Promise<ChangeSet> {
-  const mergeBase = await getMergeBase(repoRoot, base, head);
+  const [baseCommit, headCommit] = await Promise.all([
+    resolveCommit(repoRoot, base), resolveCommit(repoRoot, head),
+  ]);
+  const mergeBase = await getMergeBase(repoRoot, baseCommit, headCommit);
   const [patch, nameStatus] = await Promise.all([
-    getDiffPatch(repoRoot, base, head),
-    getNameStatus(repoRoot, base, head),
+    getDiffPatch(repoRoot, mergeBase, headCommit),
+    getNameStatus(repoRoot, mergeBase, headCommit),
   ]);
   const parsed = parseUnifiedDiff(patch);
   const statusByPath = new Map(nameStatus.map((e) => [e.path, e]));
@@ -62,7 +70,7 @@ export async function buildChangeSet(repoRoot: string, base: string, head: strin
   }
 
   const churn = files.reduce((sum, f) => sum + f.additions + f.deletions, 0);
-  return { repoRoot, base, head, mergeBase, files, patch, churn };
+  return { repoRoot, base, head, baseCommit, headCommit, mergeBase, files, patch, churn };
 }
 
 function languageOf(path: string): string {

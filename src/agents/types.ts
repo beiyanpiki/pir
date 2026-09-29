@@ -20,17 +20,33 @@ export interface ReviewTool {
   execute: (params: Record<string, unknown>) => Promise<AgentToolOutput>;
 }
 
+/** Measured SDK usage; output already includes any billed reasoning tokens. */
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  cost: number;
+  durationMs: number;
+  toolCalls: number;
+  /** Repeated executions of the same read/search tool with identical arguments. */
+  repeatedToolCalls: number;
+}
+
 export interface AgentHandle {
   prompt(text: string): Promise<void>;
   getLastAssistantText(): string | undefined;
   /** Provider/transport error of the last turn, when pi swallowed it into the assistant message instead of rejecting. */
   getLastAssistantError(): string | undefined;
+  /** Cumulative measured usage, including compactions and creation time; undefined if unavailable. */
+  getUsage?(): SessionUsage | undefined;
   dispose(): void;
 }
 
 export interface SessionConfig {
   cwd: string;
-  /** High-level role description prepended to the task prompt. */
+  /** Trusted role description installed in the actual read-only system prompt. */
   systemRole: string;
   tools: ReviewTool[];
   /** Names of pi builtin tools the session may use (read-only set). */
@@ -38,8 +54,9 @@ export interface SessionConfig {
   /** Model id override; falls back to pi settings when unset. */
   model?: string;
   /**
-   * When set, the full conversation of this session (thinking included) is
-   * dumped here as JSON once the prompt settles — see transcripts.ts.
+   * When set, the final SDK message snapshot (retained thinking included) is
+   * dumped here as JSON once the prompt settles — not provider wire traffic.
+   * Compaction can replace earlier context; see transcripts.ts.
    */
   transcriptFile?: string;
 }
