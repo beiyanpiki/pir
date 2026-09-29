@@ -431,6 +431,79 @@ test("issue memories without a fingerprint still union by id", async () => {
   }
 });
 
+test("projects.last_indexed_commit survives a merge only when both replicas agree", async () => {
+  const repo = createTempGitRepo("pir-sync-lic-");
+  const { local, remote } = await openReplicas(repo);
+  try {
+    const setIndexed = (memory, commit) =>
+      memory.store.run("UPDATE projects SET last_indexed_commit = ? WHERE id = ?", commit, memory.identity.projectId);
+    const merge = () =>
+      mergeSnapshots(
+        exportSnapshot(local.store, local.identity.projectId),
+        exportSnapshot(remote.store, remote.identity.projectId),
+      ).merged;
+
+    // Divergent pointers: neither SHA is provably an ancestor on the other
+    // machine — the merged pointer must not guess.
+    setIndexed(local, "a".repeat(40));
+    setIndexed(remote, "b".repeat(40));
+    assert.equal(merge().tables.projects[0].last_indexed_commit, null);
+
+    // One-sided pointer: adopting it could point at a foreign commit — drop it.
+    setIndexed(remote, null);
+    assert.equal(merge().tables.projects[0].last_indexed_commit, null);
+
+    // Agreement: the pointer is meaningful on both sides — keep it.
+    setIndexed(remote, "a".repeat(40));
+    assert.equal(merge().tables.projects[0].last_indexed_commit, "a".repeat(40));
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});
+
+test("feature_entities stats report real deltas, not raw counts", async () => {
+  const repo = createTempGitRepo("pir-sync-festats-");
+  const { local, remote } = await openReplicas(repo);
+  try {
+    const seedLink = (memory, suffix) => {
+      seedFeature(memory, { key: `feat-${suffix}` });
+      memory.entities.upsert({
+        symbolKey: `Svc.${suffix}`,
+        qualifiedName: `Svc.${suffix}`,
+        kind: "method",
+        path: "src/x.ts",
+        signature: null,
+        responsibilities: [],
+        invariants: [],
+        notes: [],
+        featureKeys: [`feat-${suffix}`],
+        source: "agent_summary",
+        signatureHash: null,
+        bodyHash: `hash-${suffix}`,
+        lastSeenCommit: null,
+        stale: false,
+      });
+    };
+    seedLink(local, "shared");
+    seedLink(remote, "shared");
+    seedLink(local, "only-local");
+
+    const { stats } = mergeSnapshots(
+      exportSnapshot(local.store, local.identity.projectId),
+      exportSnapshot(remote.store, remote.identity.projectId),
+    );
+    assert.equal(stats.tables.feature_entities.localOnly, 1);
+    assert.equal(stats.tables.feature_entities.remoteOnly, 0);
+    assert.equal(stats.tables.feature_entities.bothIdentical, 1);
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});
+
 test("guards: project and schema mismatches are loud", async () => {
   const repo = createTempGitRepo("pir-sync-guard-");
   const { local, remote } = await openReplicas(repo);
