@@ -107,11 +107,20 @@ export class ResolutionsRepo {
   }
 
   markVerified(id: string, afterCommit: string | null, fixCommit: string | null): void {
+    const current = this.store.get<Row>("SELECT * FROM finding_resolutions WHERE id = ?", id);
+    if (!current) return;
     this.store.run(
       "UPDATE finding_resolutions SET verified = 1, after_commit = COALESCE(?, after_commit), fix_commit = COALESCE(?, fix_commit) WHERE id = ?",
       afterCommit,
       fixCommit,
       id,
+    );
+    // Versioned so sync's last-write-wins sees verification, not just inserts.
+    this.store.recordMemoryVersion(
+      "finding_resolution",
+      id,
+      { ...toDomain(current), verified: true, afterCommit: afterCommit ?? current.after_commit, fixCommit: fixCommit ?? current.fix_commit },
+      "mark_verified",
     );
   }
 

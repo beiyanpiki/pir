@@ -8,6 +8,7 @@ import {
   deleteUserConfig,
   loadUserConfig,
   maskSecret,
+  resolveTransport,
   runWizard,
   saveUserConfig,
   setConfigValue,
@@ -22,12 +23,15 @@ import {
   memoryBootstrap,
   memoryRefresh,
   memoryStatus,
+  memorySync,
   remember,
   showFinding,
   verifyFix,
+  type MemorySyncResult,
 } from "../app/services.js";
 import { envelope, isReported, renderFindResultText, severityAtLeast } from "../app/output.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
+import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
 export { UsageError } from "./config.js";
 
@@ -36,6 +40,7 @@ export const USAGE = `pir — pi-based code review with repository memory
 Usage:
   pir find [options]                     run the finding loop over a change range
   pir memory status|bootstrap|refresh    manage repository memory
+  pir memory sync [--dry-run]            merge local memory with a pir server's
   pir feedback <id> <decision> [--note]  record user feedback on a finding
   pir feedback <id> priority <P0-P3>     set finding priority
   pir remember <scope> <target> <kind> --text "..."   store code knowledge
@@ -68,6 +73,14 @@ Models options:
   --all               full pi catalog, not just authenticated providers
   --ids               one provider/model per line (script-friendly)
   --provider <p>      restrict the listing to one provider
+
+Memory sync options:
+  pir memory sync merges this project's memory DB with a pir serve instance
+  (server from --server/PIR_SERVER_URL/config). It always runs locally, even
+  in remote mode — both DBs converge; nothing is ever deleted. Conflicts on
+  the same record: the newer write wins, and user knowledge (user_explicit /
+  verified_fix) always beats agent summaries.
+  --dry-run           report what would change without writing either side
 
 Serve options:
   --host <h>          bind address (default 0.0.0.0)
@@ -143,6 +156,8 @@ export const VALUE_FLAGS = new Set([
   "--branch",
   "--name",
   "--dir",
+  "--server",
+  "--token",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -258,6 +273,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
     return await cmdSkill(positional.slice(1), flags, json, emit, out);
+  }
+  // memory sync merges the caller's own DB with a server — a pir serve
+  // instance executing it would "sync" with itself.
+  if (command === "memory" && positional[1] === "sync") {
+    if (opts.cwdGuard) throw new UsageError("memory sync is a client-side command; run it on your machine");
+    if (flags.get("--repo")) throw new UsageError("memory sync does not support --repo (it syncs the local DB of the current checkout)");
   }
 
   let cwd = typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd();
@@ -612,9 +633,61 @@ async function cmdMemory(
       );
       return 0;
     }
+    case "sync": {
+      // Resolve the server through the standard transport precedence; the
+      // flags were already parsed, so rebuild just the tokens resolveTransport
+      // looks at (--server/--token/--insecure/--local) plus env/config.
+      const argvForTransport = ["memory", "sync"];
+      const serverFlag = flags.get("--server");
+      if (typeof serverFlag === "string") argvForTransport.push("--server", serverFlag);
+      const tokenFlag = flags.get("--token");
+      if (typeof tokenFlag === "string") argvForTransport.push("--token", tokenFlag);
+      if (flags.get("--insecure") === true) argvForTransport.push("--insecure");
+      if (flags.get("--local") === true) argvForTransport.push("--local");
+      const transport = resolveTransport({ argv: argvForTransport, env: process.env, config: loadUserConfig() });
+      if (transport.mode !== "remote") {
+        throw new UsageError(
+          "memory sync needs a server — pass --server <url>, set PIR_SERVER_URL, or run `pir config`",
+        );
+      }
+      log(`• merging memory with ${transport.url}`);
+      const result = await memorySync(ctx, {
+        url: transport.url,
+        token: transport.token,
+        insecure: transport.insecure,
+        dryRun: Boolean(flags.get("--dry-run")),
+      });
+      emit(json ? `${envelope("memory.sync", result)}\n` : renderSyncResult(result));
+      return 0;
+    }
     default:
       throw new UsageError(`unknown memory subcommand: ${sub}`);
   }
+}
+
+/** Human-readable summary of a memory sync round trip. */
+function renderSyncResult(result: MemorySyncResult): string {
+  const lines: string[] = [];
+  const rowsChanged = (counts: Record<string, number>): string => {
+    const parts = (Object.keys(result.stats.tables) as SyncTableName[]).filter((table) => (counts[table] ?? 0) > 0);
+    return parts.length > 0 ? parts.map((table) => `${table}=${counts[table]}`).join(" ") : "nothing";
+  };
+  const pushed: Record<string, number> = {};
+  const pulled: Record<string, number> = {};
+  let localWon = 0;
+  let remoteWon = 0;
+  for (const table of Object.keys(result.stats.tables) as SyncTableName[]) {
+    const stats = result.stats.tables[table]!;
+    pushed[table] = stats.localOnly + stats.conflicts.localWon;
+    pulled[table] = result.appliedLocally[table] ?? stats.remoteOnly + stats.conflicts.remoteWon + stats.merged;
+    localWon += stats.conflicts.localWon;
+    remoteWon += stats.conflicts.remoteWon;
+  }
+  lines.push(`${result.dryRun ? "sync dry-run" : "memory synced"} with ${result.server} (project ${result.projectId.slice(0, 10)}…)`);
+  lines.push(`  pushed to server: ${rowsChanged(pushed)}`);
+  lines.push(`  ${result.dryRun ? "would pull:       " : "pulled to local:  "}${rowsChanged(pulled)}`);
+  lines.push(`  conflicts resolved: ${localWon + remoteWon} (local ${localWon}, remote ${remoteWon})`);
+  return `${lines.join("\n")}\n`;
 }
 
 async function cmdFeedback(

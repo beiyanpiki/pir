@@ -118,5 +118,8 @@ export class ProjectMemoriesRepo {
 
   markStale(stale: boolean): void {
     this.store.run("UPDATE project_memories SET stale = ? WHERE project_id = ?", stale ? 1 : 0, this.projectId);
+    // Versioned so sync's last-write-wins sees freshness flips, not just upserts.
+    const current = this.get();
+    if (current) this.store.recordMemoryVersion("project_memory", current.id, current, stale ? "mark_stale" : "mark_fresh");
   }
 }

@@ -2,6 +2,18 @@ export { Memory } from "./memory/index.js";
 export { computeProjectIdentity, memoryDbPath, projectStateDir } from "./memory/identity.js";
 export { applyFeedback, FEEDBACK_DECISIONS } from "./memory/feedback.js";
 export { rememberKnowledge } from "./memory/remember.js";
+export {
+  MEMORY_SCHEMA_VERSION,
+  applySnapshot,
+  emptySnapshot,
+  exportSnapshot,
+  mergeSnapshots,
+  openSyncTargetStore,
+  syncTargetDbPath,
+  type MemorySnapshot,
+  type SyncStats,
+  type SyncResult,
+} from "./memory/sync.js";
 export { buildChangeSet } from "./changes/change-set.js";
 export { parseUnifiedDiff, addedLineNumbers } from "./changes/diff.js";
 export { createCodeMap, DegradedCodeMap, CodeGraphCliAdapter } from "./codemap/provider.js";

@@ -185,6 +185,14 @@ docker compose exec pir repos add git@github.com:team/pay.git --name pay
 docker compose exec pir find --repo pay --branch origin/pr-42 --json
 ```
 
+**Memory sync** merges the user's local memory DB with the server's
+(bidirectional, nothing deleted; conflicting records: newest write wins, user
+knowledge always beats agent summaries). It runs locally even in remote mode:
+
+```bash
+pir memory sync --json                  # server from config/env; use --dry-run to preview
+```
+
 ### 3.3 Give yourself the pir skill
 
 The package ships an agent skill (`skills/pir/SKILL.md`) teaching when and how

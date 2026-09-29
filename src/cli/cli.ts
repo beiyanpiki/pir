@@ -1,11 +1,21 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, parseArgs } from "./executor.js";
 import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
 const LOCAL_ONLY = new Set(["serve", "config", "skill", "help", "version"]);
+
+/**
+ * `memory sync` merges the LOCAL db with a server, so it also always runs in
+ * this process — forwarding it would sync the server's workspace project
+ * instead. The executor resolves the server URL itself.
+ */
+function isLocalSync(argv: string[]): boolean {
+  const positional = parseArgs(argv).positional;
+  return positional[0] === "memory" && positional[1] === "sync";
+}
 
 async function main(argv: string[]): Promise<number> {
   const command = firstPositional(argv);
@@ -33,8 +43,9 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const transport = resolveTransport({ argv, env: process.env, config });
-  // serve/config/skill/version/help (and a bare `pir`) stay client-side.
-  const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command);
+  // serve/config/skill/version/help (and a bare `pir`) stay client-side;
+  // memory sync needs the local repo + local db even in remote mode.
+  const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
   if (transport.mode === "remote" && forwardToServer) {
     const { remoteExec } = await import("./remote.js");
     return remoteExec(transport.url, argv, {

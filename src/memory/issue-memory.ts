@@ -168,7 +168,11 @@ export class IssueMemoriesRepo {
   }
 
   markStale(id: string, stale: boolean): void {
+    const current = this.store.get<Row>("SELECT * FROM issue_memories WHERE id = ?", id);
+    if (!current) return;
     this.store.run("UPDATE issue_memories SET stale = ? WHERE id = ?", stale ? 1 : 0, id);
+    // Versioned so sync's last-write-wins sees staleness flips, not just inserts.
+    this.store.recordMemoryVersion("issue_memory", id, { ...toDomain(current), stale }, stale ? "mark_stale" : "mark_fresh");
   }
 
   invalidateForFingerprint(fingerprint: string): number {

@@ -198,12 +198,17 @@ export class EntitiesRepo {
   }
 
   markSeen(symbolKey: string, commit: string): void {
+    const existing = this.get(symbolKey);
+    if (existing && existing.lastSeenCommit === commit && !existing.stale) return;
     this.store.run(
       "UPDATE code_entities SET last_seen_commit = ?, stale = 0 WHERE project_id = ? AND symbol_key = ?",
       commit,
       this.projectId,
       symbolKey,
     );
+    // Versioned so sync's last-write-wins sees freshness flips, not just upserts.
+    const current = this.get(symbolKey);
+    if (current) this.store.recordMemoryVersion("code_entity", current.id, current, "mark_seen");
   }
 
   /** Entities whose stored body hash no longer matches the file hash at commit. */
@@ -219,6 +224,7 @@ export class EntitiesRepo {
           this.projectId,
           entity.symbolKey,
         );
+        this.store.recordMemoryVersion("code_entity", entity.id, { ...entity, stale: true }, "stale_hash_mismatch");
         count += 1;
       } else if (!entity.bodyHash) {
         this.store.run(
@@ -227,6 +233,12 @@ export class EntitiesRepo {
           commit,
           this.projectId,
           entity.symbolKey,
+        );
+        this.store.recordMemoryVersion(
+          "code_entity",
+          entity.id,
+          { ...entity, bodyHash: current, lastSeenCommit: commit },
+          "backfill_body_hash",
         );
       }
     }

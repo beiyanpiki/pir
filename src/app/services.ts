@@ -1,7 +1,9 @@
+import process from "node:process";
 import { getHeadCommit } from "../changes/git.js";
 import { bootstrapProjectMemory, refreshMemory, type BootstrapOptions, type BootstrapResult, type RefreshResult } from "../memory/bootstrap.js";
 import { applyFeedback, applyPriority, type FeedbackResult } from "../memory/feedback.js";
 import { rememberKnowledge, type RememberResult, type RememberScope, type RememberKind } from "../memory/remember.js";
+import { applySnapshot, exportSnapshot, type MemorySnapshot, type SyncStats } from "../memory/sync.js";
 import { toFindingView, type FindingView } from "./find.js";
 import type { AppContext } from "./context.js";
 import { runVerifier } from "../agents/verifier.js";
@@ -70,6 +72,68 @@ export async function memoryRefresh(
     model: options.model,
     onProgress: options.onProgress,
   });
+}
+
+// ---------------------------------------------------------------------------
+// memory sync service (remote <-> local merge)
+// ---------------------------------------------------------------------------
+
+export interface MemorySyncResult {
+  server: string;
+  projectId: string;
+  dryRun: boolean;
+  stats: SyncStats;
+  /** Rows written into the local DB by applying the merged snapshot (empty on --dry-run). */
+  appliedLocally: Record<string, number>;
+}
+
+/**
+ * Merge this project's local memory DB with a pir serve instance: ship the
+ * local snapshot to POST /v1/memory/sync, let the server merge (the same
+ * deterministic function runs on both sides) and apply the returned merged
+ * snapshot locally. Both DBs converge without deleting anything.
+ */
+export async function memorySync(
+  ctx: AppContext,
+  input: { url: string; token?: string; insecure?: boolean; dryRun?: boolean },
+): Promise<MemorySyncResult> {
+  if (input.insecure) {
+    // Per-process opt-out for self-signed certificates, as in remote.ts —
+    // the pir CLI is short-lived so the blast radius is this invocation only.
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+  const identity = ctx.memory.identity;
+  const snapshot = exportSnapshot(ctx.memory.store, identity.projectId);
+  let response: Response;
+  try {
+    response = await fetch(new URL("/v1/memory/sync", input.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
+      },
+      body: JSON.stringify({
+        projectId: identity.projectId,
+        remoteUrl: identity.remote,
+        normalizedRemote: identity.normalizedRemote,
+        rootCommit: identity.rootCommit,
+        snapshot,
+        dryRun: Boolean(input.dryRun),
+      }),
+    });
+  } catch (err) {
+    throw new Error(`cannot reach ${input.url}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error(`server rejected the request (${response.status}); check --token`);
+  }
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`server error ${response.status}: ${text.slice(0, 400)}`);
+  }
+  const { merged, stats } = (await response.json()) as { merged: MemorySnapshot; stats: SyncStats };
+  const appliedLocally = input.dryRun ? {} : applySnapshot(ctx.memory.store, identity.projectId, merged);
+  return { server: input.url, projectId: identity.projectId, dryRun: Boolean(input.dryRun), stats, appliedLocally };
 }
 
 // ---------------------------------------------------------------------------
