@@ -73,7 +73,8 @@ export interface FindOutcome {
 }
 
 const DEFAULT_MAX_ROUNDS = 2;
-const DEFAULT_MAX_TOKENS = 400_000;
+// No default token cap: review until rounds/findings/wall-clock say stop;
+// --max-tokens opts back into a bounded run.
 const DEFAULT_MAX_VERIFICATIONS = 8;
 const DEFAULT_MAX_FINDINGS = 10;
 
@@ -89,7 +90,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const budget = new Budget({
     maxRounds,
-    maxTokens: positiveInteger(options.maxTokens ?? DEFAULT_MAX_TOKENS, "maxTokens"),
+    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 

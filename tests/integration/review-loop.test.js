@@ -264,3 +264,14 @@ test("partial usage is labelled incomplete and estimated text is not added to me
   assert.equal(budget.usage.totalTokens, 160);
   assert.equal(budget.usageComplete, false);
 });
+
+test("undefined maxTokens means unlimited: spend alone never exhausts the budget", () => {
+  const budget = new Budget({ maxRounds: 2 });
+  budget.chargeText("x".repeat(4_000_000));
+  assert.equal(budget.exhausted(), null);
+  assert.equal(budget.tokenEstimate, 1_000_000);
+
+  const capped = new Budget({ maxRounds: 2, maxTokens: 10 });
+  capped.chargeText("x".repeat(100)); // 25 estimated tokens >= cap of 10
+  assert.match(capped.exhausted(), /token budget exhausted/);
+});

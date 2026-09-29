@@ -260,8 +260,9 @@ $PIR_STATE_ROOT/<projectId>/memory.sqlite   centralized per-project memory
 
 ### 6.1 Supervisor (`supervisor.ts`)
 
-`findIssues(deps) → FindOutcome`. Defaults: `maxRounds = 2`, `maxTokens =
-400_000`, `maxVerifications = 8` per round, `maxFindings = 10` ("a ceiling,
+`findIssues(deps) → FindOutcome`. Defaults: `maxRounds = 2`, `maxTokens`
+unlimited (no cap unless `--max-tokens`; rounds/findings/wall-clock still
+stop the run), `maxVerifications = 8` per round, `maxFindings = 10` ("a ceiling,
 not a target"). Setup: resolve head (`--head` or `HEAD`), base (`--base` or
 `head^`), build the `ChangeSet`, create a run row, build the **memory pack
 once per run** (keyed on changed paths + head commit), assemble the shared

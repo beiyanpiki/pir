@@ -58,7 +58,8 @@ Find options:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    discovery/verification loop rounds (default 2)
-  --max-tokens <n>    session-boundary token budget (default 400000)
+  --max-tokens <n>    optional session-boundary token budget; reviews run
+                      unbounded by default (rounds and findings still cap)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
                       out — nothing is padded to reach it
@@ -67,9 +68,10 @@ Find options:
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
-  --plugins <list>    language packs injecting Go/Java/React-specific review
-                      directions: comma-separated names, "none" to disable,
-                      or "auto" to detect from marker files at head (default)
+  --plugins <list>    language packs injecting language-specific review
+                      directions (golang ships today; more packs follow):
+                      comma-separated names, "none" to disable, or "auto" to
+                      detect from marker files at head (default)
   --no-sync-index     skip codegraph index sync
 
 Models options:

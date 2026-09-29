@@ -6,8 +6,8 @@ Falsification scripts per claim family. Every verdict ends in concrete confirmin
 
 Read the `go` directive in go.mod at head; language semantics depend on it:
 
-- go >= 1.22: loop variables are per-iteration — closure-capture claims are REJECTED unless the module pins an older version.
-- go >= 1.20: the global math/rand auto-seeds — "predictable unseeded rand" claims are rejected.
+- go >= 1.22: loop variables DECLARED by the range clause (`for _, v := range`) are per-iteration — closure-capture claims about those are rejected unless the module pins an older version. A variable merely REUSED via `=` (`for _, v = range`) is still one shared variable: capture claims stand at any version. Read the declaration form before rejecting.
+- go >= 1.20: the global math/rand auto-seeds — "predictable unseeded rand" claims are rejected UNLESS the deployment sets GODEBUG=randautoseed=0 (check runtime/deployment configuration before rejecting).
 - Stdlib API availability (errors.Join, range-over-func/iterators, slices/maps helpers, synctest…) follows that version: for "this cannot compile" claims, check the API's introduction version against go.mod.
 - Map iteration order randomization is the language spec — never a defect.
 
