@@ -196,7 +196,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const languagePacks = await resolveLanguagePacks({
     repoRoot: deps.repoRoot,
     headCommit: head,
-    packs: loadBuiltInPacks(),
+    // "off" must not touch the packs directory at all: `--plugins none` has to
+    // work on installs where built-in packs are absent (e.g. partial images).
+    packs: options.pluginMode === "off" ? [] : loadBuiltInPacks(),
     selection: { mode: options.pluginMode ?? "auto", manual: options.manualPlugins ?? [] },
   });
   if (languagePacks.active.length > 0) {
@@ -442,7 +444,8 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const languagePacks = await resolveLanguagePacks({
     repoRoot: deps.repoRoot,
     headCommit: snapshot.commit,
-    packs: loadBuiltInPacks(),
+    // Same "off bypasses the packs directory" contract as the review flow.
+    packs: options.pluginMode === "off" ? [] : loadBuiltInPacks(),
     selection: { mode: options.pluginMode ?? "auto", manual: options.manualPlugins ?? [] },
     mode: "audit",
   });

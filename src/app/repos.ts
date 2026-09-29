@@ -322,6 +322,19 @@ export interface BundleMeta {
 }
 
 /**
+ * A project dir can be shared with a `repos add` clone; those hold state the
+ * server cannot rebuild from a bundle, so they must never be wiped. A dir that
+ * only ever served bundle fetches (bundle flow never registers) is a cache.
+ */
+function isRegisteredProject(projectId: string): boolean {
+  try {
+    return Object.values(readRegistry()).some((entry) => entry.projectId === projectId);
+  } catch {
+    return true; // unreadable registry: assume registered rather than risk wiping
+  }
+}
+
+/**
  * Materialize a review workspace from a client-supplied git bundle — the
  * coderabbit-cli style flow: the client ships its LOCAL state (including
  * unpushed commits), the server never needs credentials for the origin.
@@ -347,17 +360,35 @@ export async function materializeFromBundle(
 
   try {
     if (isNew) await git(dir, ["init", "--quiet"]);
-    try {
+    const fetchBundle = (): Promise<string> =>
       // The client packs under refs/pir/bundle-head; an explicit refspec is
       // required because a bare `git fetch <bundle>` insists on HEAD.
-      await git(dir, ["fetch", "--quiet", bundleFile, "+refs/pir/bundle-head:refs/pir/last-bundle"]);
+      git(dir, ["fetch", "--quiet", bundleFile, "+refs/pir/bundle-head:refs/pir/last-bundle"]);
+    try {
+      await fetchBundle();
     } catch (err) {
-      if (meta.base === null) throw err; // was already a full bundle
-      // Thin bundle but the base is unknown here — caller must resend full.
-      const error = new Error("need-full") as Error & { needFull?: boolean };
-      error.needFull = true;
-      if (isNew) rmSync(dir, { recursive: true, force: true });
-      throw error;
+      if (meta.base !== null) {
+        // Thin bundle but the base is unknown here — caller must resend full.
+        const error = new Error("need-full") as Error & { needFull?: boolean };
+        error.needFull = true;
+        if (isNew) rmSync(dir, { recursive: true, force: true });
+        throw error;
+      }
+      // Already a full bundle, so the failure means the pre-existing cache
+      // repo itself is broken (refs surviving objects that do not — e.g. an
+      // interrupted gc/repack across a container redeploy). Bundle caches are
+      // pure rebuildable state: wipe and re-fetch from this full bundle,
+      // unless the dir also backs a registered clone.
+      if (isNew || isRegisteredProject(projectId)) throw err;
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      try {
+        await git(dir, ["init", "--quiet"]);
+        await fetchBundle();
+        process.stderr.write(`pir: rebuilt corrupt bundle cache repo at ${dir}\n`);
+      } catch {
+        throw err; // the bundle itself is unusable — surface the original failure
+      }
     }
     // Older clients forwarded raw refs ("HEAD", "origin/x", a branch name)
     // as the head; nothing by that name exists in this repo (or it resolves
