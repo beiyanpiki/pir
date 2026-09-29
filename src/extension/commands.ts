@@ -1,8 +1,9 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
+import { runAudit } from "../app/audit.js";
 import { feedback, feedbackPriority, listFindings, memoryBootstrap, memoryRefresh, memoryStatus, remember, showFinding, verifyFix } from "../app/services.js";
-import { renderFindResultText } from "../app/output.js";
+import { renderAuditResultText, renderFindResultText } from "../app/output.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 
 /** Tokenize a command argument string, honoring double-quoted segments. */
@@ -19,6 +20,15 @@ export function tokenizeArgs(args: string): string[] {
 function extractFlag(tokens: string[], name: string): string | undefined {
   const i = tokens.indexOf(name);
   return i >= 0 ? tokens[i + 1] : undefined;
+}
+
+/** Collect every value following a repeatable flag: --path a --path b -> [a, b]. */
+function extractRepeatedFlag(tokens: string[], name: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === name && tokens[i + 1] !== undefined) values.push(tokens[i + 1]!);
+  }
+  return values;
 }
 
 export function registerReviewCommands(pi: ExtensionAPI): void {
@@ -42,6 +52,45 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
         });
         const findings = result.findings.map((row) => toFindingView(app, row));
         ctx.ui.notify(renderFindResultText({ degraded: result.degraded, plugins: result.plugins, rounds: result.rounds, findings, stoppedBecause: result.stoppedBecause, pendingCandidates: result.pendingCandidates, incomplete: result.incomplete, transcriptDir: result.transcriptDir }), "info");
+      } finally {
+        ctx.ui.setStatus("review", undefined);
+        app.memory.close();
+      }
+    },
+  });
+
+  pi.registerCommand("review-audit", {
+    description: "Full-repository audit of the committed HEAD snapshot (current-state review, no change attribution)",
+    getArgumentCompletions: (prefix) => {
+      const options = ["--path", "--skip", "--head", "--max-tokens", "--max-findings", "--model"].filter((o) => o.startsWith(prefix));
+      return options.length > 0 ? options.map((value) => ({ value, label: value })) : null;
+    },
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const tokens = tokenizeArgs(args);
+      const app = await createAppContext(ctx.cwd);
+      try {
+        ctx.ui.setStatus("review", "audit running…");
+        const result = await runAudit(app, {
+          head: extractFlag(tokens, "--head"),
+          includePaths: extractRepeatedFlag(tokens, "--path"),
+          skipGlobs: extractRepeatedFlag(tokens, "--skip"),
+          maxTokens: extractFlag(tokens, "--max-tokens") !== undefined ? Number(extractFlag(tokens, "--max-tokens")) : undefined,
+          maxFindings: extractFlag(tokens, "--max-findings") !== undefined ? Number(extractFlag(tokens, "--max-findings")) : undefined,
+          model: extractFlag(tokens, "--model"),
+        });
+        const findings = result.findings.map((row) => toFindingView(app, row));
+        ctx.ui.notify(renderAuditResultText({
+          degraded: result.degraded,
+          dirtyWorktree: result.dirtyWorktree,
+          plugins: result.plugins,
+          coverage: result.coverage,
+          findings,
+          stoppedBecause: result.stoppedBecause,
+          incomplete: result.incomplete,
+          incompleteReasons: result.incompleteReasons,
+          pendingCandidates: result.pendingCandidates,
+          transcriptDir: result.transcriptDir,
+        }), "info");
       } finally {
         ctx.ui.setStatus("review", undefined);
         app.memory.close();

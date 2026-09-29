@@ -3,6 +3,7 @@ import { getHeadCommit } from "../changes/git.js";
 import { buildRepoSnapshot } from "../changes/snapshot.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import { deduplicateCandidates } from "../findings/dedup.js";
+import { claimSimilarity } from "../findings/identity.js";
 import { SEVERITY_ORDER, type MemoryMatch, type UncertaintyReason, type VerifierResult } from "../findings/types.js";
 import type { Memory } from "../memory/index.js";
 import { buildMemoryPack, matchIssueHistory } from "../memory/retrieval.js";
@@ -356,6 +357,19 @@ export interface AuditUnitView {
   attempts: number;
 }
 
+/**
+ * Reported findings that a deterministic pass suspects describe the same
+ * underlying defect (same category + shared anchor path, or same entity with
+ * mid-band claim similarity). Suspected only: nothing is merged or
+ * suppressed — cross-module paraphrases need adjudication (P1) and
+ * independent defects must stay independent.
+ */
+export interface SuspectedDuplicateGroup {
+  representative: string;
+  members: string[];
+  reason: string;
+}
+
 export interface AuditOutcome {
   head: string;
   mode: "audit";
@@ -368,6 +382,8 @@ export interface AuditOutcome {
   };
   coverage: CoverageSummary;
   units: AuditUnitView[];
+  /** Deterministic same-defect suspects among reported findings (advisory). */
+  suspectedDuplicates: SuspectedDuplicateGroup[];
   rounds: RoundInfo[];
   findings: FindingRow[];
   pendingFindings: FindingRow[];
@@ -427,15 +443,16 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     headCommit: snapshot.commit,
     packs: loadBuiltInPacks(),
     selection: { mode: options.pluginMode ?? "auto", manual: options.manualPlugins ?? [] },
+    mode: "audit",
   });
-  // P0: built-in pack guidance still assumes diff attribution; injecting it
-  // into audit sessions would demand change-attribution evidence. Packs are
-  // detected and reported, but their guidance is withheld until audit-aware
-  // variants exist.
+  // Audit sessions receive only packs with audit-aware guidance variants;
+  // change-mode guidance assumes diff attribution and is withheld (empty render).
   if (languagePacks.active.length > 0) {
     deps.onProgress?.({
       type: "info",
-      message: `language packs detected (${languagePacks.active.map((p) => p.name).join(", ")}); guidance withheld in audit mode (diff-attribution assumptions)`,
+      message: languagePacks.reviewerGuidance || languagePacks.verifierGuidance
+        ? `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version}`).join(", ")} (audit guidance)`
+        : `language packs detected (${languagePacks.active.map((p) => p.name).join(", ")}); no audit-aware guidance yet, withheld`,
     });
   }
 
@@ -481,7 +498,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
         const verifiedBefore = state.verified.length;
         const drained = await drainVerifications(
           { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
-            transcriptDir, onProgress: deps.onProgress, round: state.round, audit: true },
+            verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress: deps.onProgress, round: state.round, audit: true },
           state, budget, { maxVerifications, maxFindings }, errors,
         );
         for (const finding of state.verified.slice(verifiedBefore)) persistVerified(finding);
@@ -517,6 +534,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           verificationCapacity: maxVerifications, focus: state.focus,
           priorSummary: unitSummaries.get(unit.id),
           investigationFeedback: state.investigationFeedback, model: options.model,
+          languageGuidance: languagePacks.reviewerGuidance,
           transcriptFile: transcriptDir ? path.join(transcriptDir, `reviewer-${unit.id}-a${attempt}.json`) : undefined,
           audit: { snapshot, unit, attempt, maxAttempts: maxUnitAttempts, unitsTotal: plan.units.length, unitsRemaining: queue.length },
         });
@@ -627,6 +645,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     files: unit.ownedPaths.length,
     attempts: attempts.get(unit.unitId) ?? 0,
   }));
+  const suspectedDuplicates = suspectCrossUnitDuplicates(state.verified);
   const pendingFindings = state.pending
     .map((candidate) => (candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined))
     .filter((row): row is FindingRow => row !== undefined);
@@ -639,6 +658,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     },
     coverage,
     units: unitViews,
+    suspectedDuplicates,
     rounds: state.rounds,
     findings: persisted,
     pendingFindings,
@@ -657,4 +677,50 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     plugins: languagePacks.active,
     ...(transcriptDir ? { transcriptDir } : {}),
   };
+}
+
+/**
+ * Deterministic duplicate suspects among reported findings: same category
+ * plus a shared anchor path, or same entityKey with claim similarity in the
+ * 0.5–0.82 band that the exact dedup deliberately does NOT merge. Advisory
+ * output only — merging paraphrases across modules needs adjudication and
+ * must never suppress an independent defect.
+ */
+function suspectCrossUnitDuplicates(reported: VerifiedFinding[]): SuspectedDuplicateGroup[] {
+  const REPORTED_SET = new Set(["confirmed", "uncertain"]);
+  const items = reported.filter((finding) => REPORTED_SET.has(finding.status));
+  const groups: SuspectedDuplicateGroup[] = [];
+  const assigned = new Set<string>();
+  const keyOf = (finding: VerifiedFinding): string => `${finding.identity.fingerprint}:${finding.displayId ?? ""}`;
+  for (let i = 0; i < items.length; i++) {
+    const anchor = items[i]!;
+    if (assigned.has(keyOf(anchor))) continue;
+    const members: string[] = [];
+    let reason = "";
+    for (let j = i + 1; j < items.length; j++) {
+      const other = items[j]!;
+      if (assigned.has(keyOf(other)) || other.category !== anchor.category) continue;
+      const sharedPath = anchor.anchors.some((a) => other.anchors.some((b) => a.path === b.path));
+      const sameEntity = !!anchor.entityKey && anchor.entityKey === other.entityKey;
+      const similarity = sameEntity
+        ? claimSimilarity(anchor.identity.normalizedClaim, other.identity.normalizedClaim)
+        : 0;
+      if (sharedPath || (sameEntity && similarity >= 0.5)) {
+        members.push(other.displayId ?? other.identity.fingerprint.slice(0, 8));
+        assigned.add(keyOf(other));
+        reason ||= sharedPath
+          ? "same category and shared anchor path"
+          : `same entity, claim similarity ${similarity.toFixed(2)}`;
+      }
+    }
+    if (members.length > 0) {
+      assigned.add(keyOf(anchor));
+      groups.push({
+        representative: anchor.displayId ?? anchor.identity.fingerprint.slice(0, 8),
+        members,
+        reason,
+      });
+    }
+  }
+  return groups;
 }

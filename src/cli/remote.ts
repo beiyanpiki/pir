@@ -29,13 +29,13 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
 }
 
 /**
- * Only a plain `find` over the caller's own checkout ships as a bundle.
+ * A plain `find` or `audit` over the caller's own checkout ships as a bundle.
  * parseArgs is the authority on the command (it skips value-flag values, so
  * `--model glm find` is still a find), matching the server's own check.
  */
 export function wantsBundle(cleanedArgv: string[]): boolean {
   const command = parseArgs(cleanedArgv).positional[0];
-  return command === "find" && !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="));
+  return (command === "find" || command === "audit") && !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="));
 }
 
 async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions): Promise<number> {
@@ -43,9 +43,15 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     "../changes/git.js"
   );
   const cwd = process.cwd();
+  // Audit reviews a pinned snapshot: no comparison base, no working-tree mode.
+  const isAudit = parseArgs(argv).positional[0] === "audit";
   if (!(await isGitRepo(cwd))) {
-    process.stderr.write("pir: remote find requires a git repository (or use --repo)\n");
+    process.stderr.write("pir: remote find/audit requires a git repository (or use --repo)\n");
     return 3;
+  }
+  if (isAudit && argv.includes("--uncommitted")) {
+    process.stderr.write("pir: audit reviews committed snapshots only; --uncommitted is a find-only flag\n");
+    return 2;
   }
 
   const flags = new Map<string, string>();
@@ -68,18 +74,24 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     head = await createWorkingTreeSnapshot(cwd);
     argv = argv.filter((a) => a !== "--uncommitted");
   }
-  let base: string | null = flags.get("--base") ?? null;
-  if (base) {
-    base = (await git(cwd, ["rev-parse", "--verify", `${base}^{commit}`])).trim();
+  let base: string | null = null;
+  if (isAudit) {
+    // No comparison base exists for audits; ship the head-pinned bundle.
+    argv = pinRefsToShas(argv, { base: null, head });
   } else {
-    // Mirror the executor's default: HEAD^ when it exists.
-    try {
-      base = (await git(cwd, ["rev-parse", "--verify", "HEAD^"])).trim();
-    } catch {
-      base = null;
+    const baseFlag = flags.get("--base");
+    if (baseFlag) {
+      base = (await git(cwd, ["rev-parse", "--verify", `${baseFlag}^{commit}`])).trim();
+    } else {
+      // Mirror the executor's default: HEAD^ when it exists.
+      try {
+        base = (await git(cwd, ["rev-parse", "--verify", "HEAD^"])).trim();
+      } catch {
+        base = null;
+      }
     }
+    argv = pinRefsToShas(argv, { base, head });
   }
-  argv = pinRefsToShas(argv, { base, head });
 
   const [remoteUrl, rootCommit] = await Promise.all([getRemoteUrl(cwd), getRootCommit(cwd)]);
   const { createBundle } = await import("../app/repos.js");
@@ -103,8 +115,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     });
   };
 
-  process.stderr.write(`pir: shipping local state ${base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
-  let response = await send(base !== null);
+  process.stderr.write(`pir: shipping local state ${!isAudit && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
+  // Audits ship a full-history bundle from the start (there is no thin/base
+  // form to miss); find keeps its thin-first, one-retry-full strategy.
+  let response = await send(!isAudit && base !== null);
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);

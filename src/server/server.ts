@@ -33,7 +33,7 @@ const MAX_SYNC_BYTES = 64 * 1024 * 1024;
  * management (repos: server-side clones, purge) belongs to /v1/exec, and
  * models/config/skill/serve have no business running against a worktree.
  */
-const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "memory", "findings", "feedback", "remember", "verify-fix"]);
+const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir

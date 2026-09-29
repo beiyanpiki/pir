@@ -129,6 +129,8 @@ export function renderAuditResultText(input: {
   incompleteReasons: string[];
   pendingCandidates?: number;
   transcriptDir?: string;
+  /** Advisory: reported findings that may describe the same defect. */
+  suspectedDuplicates?: Array<{ representative: string; members: string[]; reason: string }>;
 }): string {
   const lines: string[] = [];
   if (input.degraded) {
@@ -138,7 +140,7 @@ export function renderAuditResultText(input: {
     lines.push("note: working tree has uncommitted changes; the audit covers the committed HEAD snapshot only");
   }
   if (input.plugins?.length) {
-    lines.push(`language packs detected: ${input.plugins.map((p) => p.name).join(", ")} (guidance withheld in audit mode)`);
+    lines.push(`language packs: ${input.plugins.map((p) => p.name).join(", ")} (audit-aware guidance where available)`);
   }
   const c = input.coverage;
   lines.push(
@@ -149,7 +151,7 @@ export function renderAuditResultText(input: {
   lines.push(`stopped: ${input.stoppedBecause}`);
   if (input.incomplete) {
     lines.push(`audit incomplete: ${input.incompleteReasons.join("; ")}`);
-    lines.push('coverage is process accounting — "reviewed" means the allotted review sessions completed, not a guarantee every defect was found');
+    lines.push('coverage is process accounting — "reviewed" means the allotted review sessions completed, not a guarantee that every defect was found');
   }
   if (input.pendingCandidates) {
     lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
@@ -171,6 +173,13 @@ export function renderAuditResultText(input: {
     lines.push(`Suppressed by prior decisions / rejected (${suppressed.length}):`);
     for (const f of suppressed) {
       lines.push(`  ${f.displayId} [${f.status}] ${f.title}`);
+    }
+  }
+  if (input.suspectedDuplicates?.length) {
+    lines.push("");
+    lines.push(`Suspected duplicate reports (advisory, not merged — ${input.suspectedDuplicates.length}):`);
+    for (const group of input.suspectedDuplicates) {
+      lines.push(`  ${group.representative} ~= ${group.members.join(", ")} (${group.reason})`);
     }
   }
   return lines.join("\n");

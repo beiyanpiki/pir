@@ -14,7 +14,7 @@ test("planner partitions every selected text file into disjoint owned ranges", a
     const snap = await buildRepoSnapshot(repo.dir, "HEAD", { includePaths: [], skipGlobs: [] });
     const plan = await planAuditUnits(snap);
     assert.equal(plan.plannerVersion, PLANNER_VERSION);
-    assert.ok(plan.units.length >= 2, "25 files exceed MAX_FILES_PER_UNIT=20 -> split");
+    assert.ok(plan.units.length >= 5, "25 files exceed MAX_FILES_PER_UNIT=5 -> split");
 
     // No range overlap within a file; every selected text file owned at least once.
     const rangesByFile = new Map();
@@ -46,18 +46,18 @@ test("planner partitions every selected text file into disjoint owned ranges", a
 test("planner splits oversized files into sequential line-range chunks", async () => {
   const repo = createTempGitRepo("pir-plan-big-");
   try {
-    // >100KB so the exact line count is used; 1300 lines -> chunks of 800 + 500.
+    // >100KB so the exact line count is used; 1300 lines -> chunks of 500+500+300.
     const lines = Array.from({ length: 1300 }, (_, i) => `export const line${i} = "${"x".repeat(85)}${i}"; // padding to cross the exact-count threshold`);
     repo.write("src/huge/generated.ts", `${lines.join("\n")}\n`);
     repo.commit("big");
     const snap = await buildRepoSnapshot(repo.dir, "HEAD", { includePaths: [], skipGlobs: [] });
     const plan = await planAuditUnits(snap);
     const owned = plan.units.flatMap((unit) => unit.owned.filter((range) => range.path === "src/huge/generated.ts"));
-    assert.ok(owned.length >= 2, "large file is chunked");
+    assert.ok(owned.length >= 3, "large file is chunked");
     assert.equal(owned[0].startLine, 1);
-    assert.equal(owned[0].endLine, 800);
-    assert.equal(owned[1].startLine, 801);
-    assert.equal(owned[1].endLine, null);
+    assert.equal(owned[0].endLine, 500);
+    assert.equal(owned[1].startLine, 501);
+    assert.equal(owned.at(-1).endLine, null);
   } finally {
     repo.cleanup();
   }
@@ -107,7 +107,7 @@ test("coverage ledger keeps the identity equation exact through unit transitions
 test("coverage marks a file partial while only some owning units are reviewed", async () => {
   const repo = createTempGitRepo("pir-cov-part-");
   try {
-    // 7000 exact-count lines: chunked into 800-line ranges, and the 3000-line
+    // 7000 exact-count lines: chunked into 500-line ranges, and the 1200-line
     // unit cap spreads consecutive ranges across several owning units.
     const lines = Array.from({ length: 7000 }, (_, i) => `export const l${i} = ${i}; ${"pad".repeat(12)}`);
     repo.write("src/huge/one.ts", `${lines.join("\n")}\n`);

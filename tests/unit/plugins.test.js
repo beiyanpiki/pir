@@ -195,3 +195,22 @@ test("runReviewerRound forwards language guidance into the session prompt", asyn
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /GO_DIRECTIONS_INLINE/);
 });
+
+test("audit-aware guidance renders in audit mode and is withheld without variants", async () => {
+  const { loadBuiltInPacks, renderGuidance } = await import("../../dist/plugins/loader.js");
+  const packs = loadBuiltInPacks();
+  const go = packs.find((pack) => pack.name === "golang");
+  assert.ok(go, "golang pack present");
+  assert.ok(go.reviewerAuditGuidance && go.verifierAuditGuidance, "golang ships audit variants");
+
+  const entries = [{ pack: go, activation: "manual" }];
+  const auditReviewer = renderGuidance(entries, "reviewer", undefined, "audit");
+  const changeReviewer = renderGuidance(entries, "reviewer", undefined, "change");
+  assert.match(auditReviewer, /current-state audit/i);
+  assert.doesNotMatch(auditReviewer, /this change touched/i);
+  assert.match(changeReviewer, /this change touched/i);
+
+  // A pack without audit variants must render nothing in audit mode.
+  const changeOnly = { ...go, reviewerAuditGuidance: undefined };
+  assert.equal(renderGuidance([{ pack: changeOnly, activation: "manual" }], "reviewer", undefined, "audit"), "");
+});

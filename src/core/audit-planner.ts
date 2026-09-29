@@ -26,12 +26,15 @@ export interface ReviewWorkUnit {
   lineEstimate: number;
 }
 
-export const PLANNER_VERSION = 1;
-const MAX_FILES_PER_UNIT = 20;
-const MAX_LINES_PER_UNIT = 3000;
+export const PLANNER_VERSION = 2;
+// Dogfooding on pir's own src/core showed a 9-file unit burning ~480K tokens
+// in one reviewer session (paginated reads + investigation loops). Units are
+// sized so a session stays inside a realistic context budget.
+const MAX_FILES_PER_UNIT = 5;
+const MAX_LINES_PER_UNIT = 1200;
 /** Single files above this are split into sequential range chunks. */
-const SPLIT_FILE_LINES = 1200;
-const CHUNK_LINES = 800;
+const SPLIT_FILE_LINES = 800;
+const CHUNK_LINES = 500;
 /** Size above which an exact line count is worth one bounded blob read. */
 const EXACT_COUNT_BYTES = 100_000;
 const ESTIMATED_LINE_BYTES = 40;

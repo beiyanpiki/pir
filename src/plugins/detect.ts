@@ -28,13 +28,15 @@ export async function detectPacks(repoRoot: string, headCommit: string, packs: L
 /**
  * Resolve the run's packs: detect at head (auto), honor the manual list, or
  * disable. Unknown manual names are a hard error — silently reviewing without
- * guidance the user explicitly asked for would mislead.
+ * guidance the user explicitly asked for would mislead. In audit mode only
+ * packs with audit-aware guidance variants are rendered.
  */
 export async function resolveLanguagePacks(deps: {
   repoRoot: string;
   headCommit: string;
   packs: LanguagePack[];
   selection: PluginSelection;
+  mode?: "change" | "audit";
 }): Promise<LanguagePackRun> {
   if (deps.selection.mode === "off") return { active: [], reviewerGuidance: "", verifierGuidance: "" };
   const byName = new Map(deps.packs.map((pack) => [pack.name, pack]));
@@ -50,9 +52,10 @@ export async function resolveLanguagePacks(deps: {
     const detected = await detectPacks(deps.repoRoot, deps.headCommit, deps.packs);
     entries = detected.map((active) => ({ pack: byName.get(active.name)!, activation: "auto" as const }));
   }
+  const mode = deps.mode ?? "change";
   return {
     active: entries.map(({ pack, activation }) => ({ name: pack.name, version: pack.version, activation })),
-    reviewerGuidance: renderGuidance(entries, "reviewer"),
-    verifierGuidance: renderGuidance(entries, "verifier"),
+    reviewerGuidance: renderGuidance(entries, "reviewer", undefined, mode),
+    verifierGuidance: renderGuidance(entries, "verifier", undefined, mode),
   };
 }

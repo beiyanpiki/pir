@@ -61,6 +61,15 @@ export function loadLanguagePack(dir: string): LanguagePack {
   const verifierGuidance = readFileSync(verifierPath, "utf8").trim();
   if (!reviewerGuidance) throw new Error(`empty reviewer guidance in ${dir}`);
   if (!verifierGuidance) throw new Error(`empty verifier guidance in ${dir}`);
+  // Audit variants are optional: a pack shipping only change guidance must
+  // stay loadable (its guidance is simply withheld from audit sessions).
+  const readOptional = (key: string): string | undefined => {
+    if (guidance[key] === undefined) return undefined;
+    const file = readFileSync(path.resolve(dir, expectString(guidance[key], `guidance.${key}`)), "utf8").trim();
+    return file.length > 0 ? file : undefined;
+  };
+  const reviewerAuditGuidance = readOptional("reviewerAudit");
+  const verifierAuditGuidance = readOptional("verifierAudit");
   return {
     name,
     title: expectString(manifest.title, "title"),
@@ -69,6 +78,8 @@ export function loadLanguagePack(dir: string): LanguagePack {
     extensions,
     reviewerGuidance,
     verifierGuidance,
+    ...(reviewerAuditGuidance ? { reviewerAuditGuidance } : {}),
+    ...(verifierAuditGuidance ? { verifierAuditGuidance } : {}),
   };
 }
 
@@ -96,10 +107,18 @@ export function renderGuidance(
   entries: Array<{ pack: LanguagePack; activation: PluginActivation }>,
   role: "reviewer" | "verifier",
   budgetChars = GUIDANCE_BUDGET_CHARS,
+  mode: "change" | "audit" = "change",
 ): string {
   const sections = entries
-    .map((entry) => ({ entry, text: role === "reviewer" ? entry.pack.reviewerGuidance : entry.pack.verifierGuidance }))
-    .filter(({ text }) => text.length > 0);
+    .map((entry) => ({
+      entry,
+      // Audit sessions only receive packs with audit-aware variants: change
+      // guidance assumes diff attribution and must not leak into audits.
+      text: role === "reviewer"
+        ? (mode === "audit" ? entry.pack.reviewerAuditGuidance : entry.pack.reviewerGuidance)
+        : (mode === "audit" ? entry.pack.verifierAuditGuidance : entry.pack.verifierGuidance),
+    }))
+    .filter(({ text }) => (text ?? "").length > 0);
   if (sections.length === 0) return "";
   const body = sections
     .map(({ entry, text }) => `[${entry.pack.name}@${entry.pack.version}, ${entry.activation}]\n${text}`)

@@ -796,6 +796,7 @@ async function cmdAudit(
           incompleteReasons: result.incompleteReasons,
           pendingCandidates: result.pendingCandidates,
           pendingFindings: result.pendingFindings.map((row) => toFindingView(ctx, row)),
+          suspectedDuplicates: result.suspectedDuplicates,
           verificationErrors: result.verificationErrors,
           uncertaintyReasons: result.uncertaintyReasons,
           findings,
@@ -817,6 +818,7 @@ async function cmdAudit(
         incompleteReasons: result.incompleteReasons,
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
+        suspectedDuplicates: result.suspectedDuplicates,
       })}\n`,
     );
   }
