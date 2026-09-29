@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -204,4 +204,122 @@ export async function commitExists(repoRoot: string, ref: string): Promise<boole
   } catch {
     return false;
   }
+}
+
+/**
+ * Exact line counts for many blobs in ONE git process (`cat-file --batch`):
+ * stream each blob's bytes and count newlines without materializing them.
+ * Audits feed every reviewable file through this — line estimates (size/40)
+ * understate dense code and let units overflow their context budget.
+ */
+export async function batchCountLines(
+  repoRoot: string,
+  objectIds: string[],
+  options: { timeoutMs?: number } = {},
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (objectIds.length === 0) return counts;
+  const pending = [...new Set(objectIds)];
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", repoRoot, "cat-file", "--batch"], { stdio: ["pipe", "pipe", "pipe"] });
+    let stderr = "";
+    let failure: string | undefined;
+    const timer = setTimeout(() => {
+      failure = "cat-file --batch timed out";
+      child.kill();
+    }, options.timeoutMs ?? 120_000);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(0, 2000); });
+    child.stdout.on("error", (err) => { failure ??= String(err); });
+
+    let buffer: Buffer[] = [];
+    let buffered = 0;
+    let headerRest = Buffer.alloc(0);
+    let expected = -1; // bytes of blob body still expected; -2 = record delimiter
+    let current: string | null = null;
+    let lineCount = 0;
+    const pump = (): void => {
+      while (true) {
+        if (expected === -2) {
+          // cat-file --batch terminates every record with one extra \n after
+          // the blob body; skip exactly one delimiter byte before the next header.
+          if (buffered === 0) return;
+          const head = buffer[0]!;
+          if (head[0] !== 0x0a) {
+            failure = "cat-file --batch record delimiter missing";
+            child.kill();
+            return;
+          }
+          buffered -= 1;
+          if (head.length === 1) buffer.shift();
+          else buffer[0] = head.subarray(1);
+          expected = -1;
+        }
+        if (expected >= 0) {
+          const take = Math.min(buffered, expected);
+          let remaining = take;
+          while (remaining > 0) {
+            const head = buffer[0]!;
+            const piece = head.subarray(0, Math.min(head.length, remaining));
+            lineCount += countByte(piece, 0x0a);
+            remaining -= piece.length;
+            buffered -= piece.length;
+            if (piece.length === head.length) buffer.shift();
+            else buffer[0] = head.subarray(piece.length);
+          }
+          expected -= take;
+          if (expected === 0) {
+            counts.set(current!, lineCount);
+            expected = -2; // one delimiter newline follows the body
+            current = null;
+            headerRest = Buffer.alloc(0);
+            continue; // consume the record delimiter before any next header
+          } else return; // need more body bytes
+        }
+        const merged = Buffer.concat([headerRest, ...buffer]);
+        const newline = merged.indexOf(0x0a);
+        if (newline < 0) {
+          headerRest = merged;
+          buffer = [];
+          buffered = 0;
+          return;
+        }
+        const header = merged.subarray(0, newline).toString("utf8");
+        buffer = [merged.subarray(newline + 1)];
+        buffered = buffer[0]!.length;
+        headerRest = Buffer.alloc(0);
+        const parts = header.split(" ");
+        if (parts.length !== 3 || parts[1] !== "blob") {
+          failure ??= `cat-file --batch unexpected header: ${header.slice(0, 120)}`;
+          child.kill();
+          return;
+        }
+        current = parts[0]!;
+        lineCount = 0;
+        expected = Number(parts[2]);
+      }
+    };
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (failure) return;
+      buffer.push(chunk);
+      buffered += chunk.length;
+      pump();
+    });
+    child.on("error", (err) => { clearTimeout(timer); reject(err); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failure) reject(new Error(`${failure}: ${stderr.trim()}`));
+      else if (code !== 0) reject(new Error(`git cat-file --batch failed: ${stderr.trim() || code}`));
+      else if (counts.size < pending.length) reject(new Error(`cat-file --batch counted ${counts.size} of ${pending.length} blobs`));
+      else resolve(counts);
+    });
+    for (const oid of pending) child.stdin.write(`${oid}\n`);
+    child.stdin.end();
+  });
+}
+
+function countByte(buf: Buffer, byte: number): number {
+  let count = 0;
+  for (let i = 0; i < buf.length; i++) if (buf[i] === byte) count += 1;
+  return count;
 }

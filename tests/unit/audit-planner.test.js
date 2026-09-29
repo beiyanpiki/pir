@@ -46,7 +46,7 @@ test("planner partitions every selected text file into disjoint owned ranges", a
 test("planner splits oversized files into sequential line-range chunks", async () => {
   const repo = createTempGitRepo("pir-plan-big-");
   try {
-    // >100KB so the exact line count is used; 1300 lines -> chunks of 500+500+300.
+    // 1300 exact-counted lines -> chunks of 500+500+300 (planner counts lines exactly).
     const lines = Array.from({ length: 1300 }, (_, i) => `export const line${i} = "${"x".repeat(85)}${i}"; // padding to cross the exact-count threshold`);
     repo.write("src/huge/generated.ts", `${lines.join("\n")}\n`);
     repo.commit("big");

@@ -1,5 +1,5 @@
 import type { RepoSnapshot } from "../changes/snapshot.js";
-import { readFileAtCommit } from "../changes/git.js";
+import { batchCountLines } from "../changes/git.js";
 import { selectedReviewableEntries } from "../changes/snapshot.js";
 
 /**
@@ -26,30 +26,21 @@ export interface ReviewWorkUnit {
   lineEstimate: number;
 }
 
-export const PLANNER_VERSION = 2;
+export const PLANNER_VERSION = 3;
 // Dogfooding on pir's own src/core showed a 9-file unit burning ~480K tokens
 // in one reviewer session (paginated reads + investigation loops). Units are
-// sized so a session stays inside a realistic context budget.
+// sized so a session stays inside a realistic context budget, and line
+// counts are EXACT (one streamed cat-file --batch pass): size/40 estimates
+// understate dense code and let units silently overflow the budget.
 const MAX_FILES_PER_UNIT = 5;
 const MAX_LINES_PER_UNIT = 1200;
 /** Single files above this are split into sequential range chunks. */
 const SPLIT_FILE_LINES = 800;
 const CHUNK_LINES = 500;
-/** Size above which an exact line count is worth one bounded blob read. */
-const EXACT_COUNT_BYTES = 100_000;
-const ESTIMATED_LINE_BYTES = 40;
 
 function moduleOf(path: string): string {
   const segments = path.split("/");
   return segments.length > 2 ? `${segments[0]!}/${segments[1]!}` : segments.length > 1 ? segments[0]! : ".";
-}
-
-async function lineCount(repoRoot: string, commit: string, path: string, size: number | null): Promise<number> {
-  if (size === null || size === 0) return 0;
-  if (size <= EXACT_COUNT_BYTES) return Math.max(1, Math.ceil(size / ESTIMATED_LINE_BYTES));
-  const content = await readFileAtCommit(repoRoot, commit, path);
-  if (content === null) return 1;
-  return content.split("\n").length;
 }
 
 export interface AuditPlan {
@@ -61,6 +52,10 @@ export interface AuditPlan {
 
 export async function planAuditUnits(snapshot: RepoSnapshot): Promise<AuditPlan> {
   const reviewable = selectedReviewableEntries(snapshot);
+  const exactLines = await batchCountLines(
+    snapshot.repoRoot,
+    reviewable.map((entry) => entry.objectId),
+  );
   const byModule = new Map<string, typeof reviewable>();
   for (const entry of reviewable) {
     const module = moduleOf(entry.path);
@@ -76,7 +71,7 @@ export async function planAuditUnits(snapshot: RepoSnapshot): Promise<AuditPlan>
   for (const module of [...byModule.keys()].sort()) {
     const files: FileRanges[] = [];
     for (const entry of byModule.get(module)!) {
-      const total = Math.max(1, await lineCount(snapshot.repoRoot, snapshot.commit, entry.path, entry.size));
+      const total = Math.max(1, exactLines.get(entry.objectId) ?? 1);
       const ranges: OwnedRange[] =
         total > SPLIT_FILE_LINES
           ? splitIntoChunks(entry.path, total)
