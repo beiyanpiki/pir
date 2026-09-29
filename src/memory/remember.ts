@@ -43,8 +43,9 @@ export function rememberKnowledge(memory: Memory, input: RememberInput): Remembe
   }
 
   if (input.scope === "feature") {
-    memory.features.appendUserKnowledge(input.target!, "invariant", input.text, input.commit);
-    return { scope: input.scope, target: input.target, stored: "invariants", eventId };
+    const kind = input.kind === "note" ? "note" : "invariant";
+    memory.features.appendUserKnowledge(input.target!, kind, input.text, input.commit);
+    return { scope: input.scope, target: input.target, stored: kind === "note" ? "responsibilities" : "invariants", eventId };
   }
 
   memory.entities.appendUserKnowledge(input.target!, input.kind === "note" ? "note" : "invariant", input.text, input.commit);

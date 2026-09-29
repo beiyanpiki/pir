@@ -498,6 +498,22 @@ async function cmdModels(
   return { code: 0, output: out.join("") };
 }
 
+/** Positive-integer flag: same contract for every numeric CLI limit. */
+function positiveIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+  const raw = flags.get(name);
+  if (raw === undefined) return undefined;
+  // A boolean means the flag was parsed without a value; Number(true) === 1
+  // would silently accept it.
+  if (typeof raw !== "string") {
+    throw new UsageError(`invalid ${name}: a value is required (positive integer)`);
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError(`invalid ${name}: ${raw} (positive integer required)`);
+  }
+  return value;
+}
+
 async function cmdFind(
   ctx: Ctx,
   _args: string[],
@@ -508,18 +524,12 @@ async function cmdFind(
 ): Promise<number> {
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  let maxFindings: number | undefined;
-  if (flags.get("--max-findings") !== undefined) {
-    maxFindings = Number(flags.get("--max-findings"));
-    if (!Number.isInteger(maxFindings) || maxFindings < 1) {
-      throw new UsageError(`invalid --max-findings: ${flags.get("--max-findings")} (positive integer required)`);
-    }
-  }
+  const maxFindings = positiveIntFlag(flags, "--max-findings");
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
-    maxRounds: flags.get("--max-rounds") !== undefined ? Number(flags.get("--max-rounds")) : undefined,
-    maxTokens: flags.get("--max-tokens") !== undefined ? Number(flags.get("--max-tokens")) : undefined,
+    maxRounds: positiveIntFlag(flags, "--max-rounds"),
+    maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
     model: flags.get("--model") as string | undefined,
     onProgress: (event) => log(`• ${event.message}`),
@@ -590,7 +600,7 @@ async function cmdMemory(
     case "bootstrap": {
       const result = await memoryBootstrap(ctx, {
         model: flags.get("--model") as string | undefined,
-        maxBatches: flags.get("--max-batches") !== undefined ? Number(flags.get("--max-batches")) : undefined,
+        maxBatches: positiveIntFlag(flags, "--max-batches"),
         onProgress: (m) => log(`• ${m}`),
       });
       emit(

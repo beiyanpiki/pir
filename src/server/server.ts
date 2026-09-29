@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -98,7 +99,7 @@ export async function startServer(input: {
       return;
     }
     if (req.method === "POST" && (url.pathname === "/v1/exec" || url.pathname === "/v1/review")) {
-      if (input.token && req.headers.authorization !== `Bearer ${input.token}`) {
+      if (input.token && !isAuthorizedRequest(req.headers.authorization, input.token)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "missing or invalid bearer token" }));
         return;
@@ -148,24 +149,6 @@ export async function startServer(input: {
 
       const bundle = Buffer.from(parsed.bundleBase64, "base64");
       const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
-      let materialized: import("../app/repos.js").MaterializedReview;
-      try {
-        materialized = (await materializeFromBundle(bundle, {
-          remoteUrl: parsed.remoteUrl ?? null,
-          rootCommit: parsed.rootCommit,
-          base: parsed.base ?? null,
-          head: parsed.head,
-        })).review;
-      } catch (err) {
-        if ((err as { needFull?: boolean }).needFull) {
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ needFull: true }));
-          return;
-        }
-        throw err;
-      }
-      log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
-
       // Force the review into the worktree; drop any client --cwd (both the
       // two-token and the --cwd=path form).
       const cleanedArgv: string[] = [];
@@ -177,30 +160,54 @@ export async function startServer(input: {
         if (argv[i]!.startsWith("--cwd=")) continue;
         cleanedArgv.push(argv[i]!);
       }
-      // Older clients also forward raw refs in argv — pin them to the SHAs
-      // this request actually materialized so the diff resolves in a repo
-      // without remote-tracking refs.
-      const pinnedArgv = pinRefsToShas(cleanedArgv, {
+      // Materialization, command execution and worktree cleanup share one
+      // queue slot: the bundle fetch and the worktree operate on the shared
+      // per-project repo directory, which no other in-flight task may touch.
+      const meta = {
+        remoteUrl: parsed.remoteUrl ?? null,
+        rootCommit: parsed.rootCommit,
         base: parsed.base ?? null,
-        head: materialized.headCommit,
-      });
-      const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
-      try {
-        const result = await enqueue(() =>
-          executePirCommand(effectiveArgv, {
-            cwdGuard: materialized!.worktree,
-            dbPath: reviewDbPath(materialized!.projectId),
+        head: parsed.head,
+      };
+      const outcome = await enqueue(async (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> => {
+        let materialized: import("../app/repos.js").MaterializedReview | null = null;
+        try {
+          try {
+            materialized = (await materializeFromBundle(bundle, meta)).review;
+          } catch (err) {
+            if ((err as { needFull?: boolean }).needFull) return { needFull: true };
+            throw err;
+          }
+          log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
+
+          // Older clients also forwarded raw refs in argv — pin them to the
+          // SHAs this request actually materialized so the diff resolves in a
+          // repo without remote-tracking refs.
+          const pinnedArgv = pinRefsToShas(cleanedArgv, {
+            base: meta.base,
+            head: materialized.headCommit,
+          });
+          const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
+          const result = await executePirCommand(effectiveArgv, {
+            cwdGuard: materialized.worktree,
+            dbPath: reviewDbPath(materialized.projectId),
             onLog: (message) => {
               logLines.push(message);
               log(`${cleanedArgv.join(" ")} :: ${message}`);
             },
-          }),
-        );
+          });
+          return { needFull: false, code: result.code, output: result.output };
+        } finally {
+          await materialized?.cleanup();
+        }
+      });
+      if (outcome.needFull) {
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
-      } finally {
-        await materialized.cleanup();
+        res.end(JSON.stringify({ needFull: true }));
+        return;
       }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ code: outcome.code, output: outcome.output, log: logLines }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof UsageError) {
@@ -266,6 +273,19 @@ export async function startServer(input: {
     log,
     close: () => server.close(),
   };
+}
+
+/**
+ * Constant-time bearer check: a direct string compare leaks how much of the
+ * token matched through comparison timing. Length is checked first because
+ * timingSafeEqual rejects mismatched buffer lengths.
+ */
+function isAuthorizedRequest(header: unknown, token: string): boolean {
+  if (typeof header !== "string") return false;
+  const expected = Buffer.from(`Bearer ${token}`, "utf8");
+  const received = Buffer.from(header, "utf8");
+  if (received.length !== expected.length) return false;
+  return timingSafeEqual(received, expected);
 }
 
 function parseServeArgs(argv: string[]): ServeOptions {

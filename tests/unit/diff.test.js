@@ -74,3 +74,24 @@ test("addedLineNumbers returns head-side line numbers of added lines", () => {
   assert.deepEqual(addedLineNumbers(files[1]), [1, 2]);
   assert.deepEqual(addedLineNumbers(files[2]), []);
 });
+
+test("parseUnifiedDiff keeps ---/+++ prefixed lines inside hunk bodies", () => {
+  const patch = `diff --git a/log.md b/log.md
+index 1111111..2222222 100644
+--- a/log.md
++++ b/log.md
+@@ -1,3 +1,3 @@
+ context line
+--- removed separator line
++++ added separator line
+ context line
+`;
+  const { files } = parseUnifiedDiff(patch);
+  assert.equal(files.length, 1);
+  const file = files[0];
+  assert.equal(file.additions, 1);
+  assert.equal(file.deletions, 1);
+  const body = file.hunks[0].lines.join("\n");
+  assert.match(body, /--- removed separator line/);
+  assert.match(body, /\+\+\+ added separator line/);
+});
