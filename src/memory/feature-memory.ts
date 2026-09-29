@@ -121,12 +121,17 @@ export class FeaturesRepo {
   }
 
   markValidated(key: string, commit: string): void {
+    const existing = this.get(key);
+    if (existing && existing.validatedAtCommit === commit && !existing.stale) return;
     this.store.run(
       "UPDATE features SET validated_at_commit = ?, stale = 0 WHERE project_id = ? AND key = ?",
       commit,
       this.projectId,
       key,
     );
+    // Versioned so sync's last-write-wins sees validation, not just upserts.
+    const current = this.get(key);
+    if (current) this.store.recordMemoryVersion("feature", current.id, current, "mark_validated");
   }
 
   appendUserKnowledge(key: string, kind: "invariant" | "note", text: string, commit: string | null): void {

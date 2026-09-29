@@ -100,6 +100,20 @@ pir --local find --json                           # one-off override, either dir
 pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
 ```
 
+**Memory sync (local ⇄ server):** memories accumulated on your machine and on
+a `pir serve` instance are separate SQLite DBs keyed by the same projectId.
+`pir memory sync` merges them bidirectionally — both sides converge, and rows
+describing the same logical record (same feature key, symbol key, or finding
+fingerprint) collapse onto the winning replica's rows. On a conflicting record
+the newer write wins, and user knowledge (`user_explicit` / `verified_fix`)
+always beats agent summaries regardless of timestamps. The command always runs
+locally (even in remote mode) and takes `--dry-run`:
+
+```bash
+pir memory sync --server https://pir.svc:8790 --token T --insecure --json
+pir memory sync --dry-run                         # report what would change
+```
+
 **Skill for your coding agent:** `pir skill install` drops a ready-made
 LLM skill (`skills/pir/SKILL.md` in this repo) into `~/.agents/skills/pir/`,
 teaching the agent when and how to drive the CLI — install, modes, JSON
@@ -173,6 +187,7 @@ pir feedback F-12 expected --note "intentional"   # teach repository memory
 pir find --json                       # same issue no longer reported
 pir verify-fix F-13                   # confirm a fix removed the trigger
 pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
+pir memory sync --server https://pir.svc:8790 --token T --insecure   # merge local & server memory
 ```
 
 CLI reference, the full memory-trust model, and Docker details are covered in

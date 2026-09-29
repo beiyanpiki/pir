@@ -5,6 +5,9 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { promisify } from "node:util";
+import { sha256 } from "../core/types.js";
+import { MEMORY_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
+import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,6 +25,8 @@ export interface ServeOptions {
 const MAX_BODY_BYTES = 1024 * 1024;
 // Bundle uploads carry the client's history (full bundles on first contact).
 const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
+// Memory snapshots carry every summary row of one project.
+const MAX_SYNC_BYTES = 64 * 1024 * 1024;
 
 /**
  * /v1/review reviews the bundle the client shipped — nothing else. Registry
@@ -98,7 +103,10 @@ export async function startServer(input: {
       res.end(JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls) }));
       return;
     }
-    if (req.method === "POST" && (url.pathname === "/v1/exec" || url.pathname === "/v1/review")) {
+    if (
+      req.method === "POST" &&
+      (url.pathname === "/v1/exec" || url.pathname === "/v1/review" || url.pathname === "/v1/memory/sync")
+    ) {
       if (input.token && !isAuthorizedRequest(req.headers.authorization, input.token)) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "missing or invalid bearer token" }));
@@ -106,13 +114,20 @@ export async function startServer(input: {
       }
       if (url.pathname === "/v1/review") {
         void handleReview(req, res);
+      } else if (url.pathname === "/v1/memory/sync") {
+        void handleMemorySync(req, res);
       } else {
         void handleExec(req, res);
       }
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "not found", endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review"] }));
+    res.end(
+      JSON.stringify({
+        error: "not found",
+        endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review", "POST /v1/memory/sync"],
+      }),
+    );
   };
 
   /**
@@ -216,6 +231,81 @@ export async function startServer(input: {
         return;
       }
       log(`review error: ${message}`);
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: message }));
+    }
+  }
+
+  /**
+   * Bidirectional memory merge: the client ships its snapshot, we merge it
+   * with the server-side DB for that project (the same deterministic,
+   * symmetric function the client applies), persist the result and return it
+   * so both sides converge. projectId is re-derived from the shipped identity
+   * so a token holder cannot clobber another project's memory.
+   */
+  async function handleMemorySync(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const body = await readBody(req, MAX_SYNC_BYTES);
+      const parsed = JSON.parse(body) as {
+        projectId?: string;
+        remoteUrl?: string | null;
+        normalizedRemote?: string | null;
+        rootCommit?: string;
+        snapshot?: MemorySnapshot;
+        dryRun?: boolean;
+      };
+      if (!parsed.projectId || !parsed.rootCommit || !parsed.snapshot) {
+        throw new Error("body must include projectId, rootCommit and snapshot");
+      }
+      const normalizedRemote = parsed.normalizedRemote ?? null;
+      const derived = sha256(`${normalizedRemote ?? "local"}\u0000${parsed.rootCommit}`);
+      if (derived !== parsed.projectId) {
+        throw new Error("projectId does not match the shipped identity (remote + rootCommit)");
+      }
+      const snapshot = parsed.snapshot;
+      if (snapshot.projectId !== parsed.projectId) {
+        throw new Error("snapshot belongs to a different project than the request");
+      }
+      if (snapshot.schemaVersion !== MEMORY_SCHEMA_VERSION) {
+        throw new Error(
+          `snapshot schema ${snapshot.schemaVersion} != server schema ${MEMORY_SCHEMA_VERSION}; upgrade pir so both sides match`,
+        );
+      }
+      const payload = await enqueue(async () => {
+        // dryRun must not leave a trace: when the project has no server DB
+        // yet, merge against a synthetic empty snapshot instead of creating
+        // one. The client's snapshot goes FIRST so the stats read from the
+        // caller's perspective.
+        const dbPath = syncTargetDbPath(parsed.projectId!);
+        if (parsed.dryRun) {
+          if (!existsSync(dbPath)) {
+            return mergeSnapshots(snapshot, emptySnapshot(parsed.projectId!));
+          }
+          const store = SqliteStore.open(dbPath);
+          try {
+            return mergeSnapshots(snapshot, exportSnapshot(store, parsed.projectId!));
+          } finally {
+            store.close();
+          }
+        }
+        const store = openSyncTargetStore(parsed.projectId!, {
+          remote: parsed.remoteUrl ?? null,
+          normalizedRemote,
+          rootCommit: parsed.rootCommit!,
+        });
+        try {
+          const result = mergeSnapshots(snapshot, exportSnapshot(store, parsed.projectId!));
+          applySnapshot(store, parsed.projectId!, result.merged);
+          return result;
+        } finally {
+          store.close();
+        }
+      });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(payload));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`memory sync error: ${message}`);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     }

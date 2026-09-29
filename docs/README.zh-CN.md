@@ -120,7 +120,7 @@ Docker 下按 provider 注入凭证:`-e PI_API_KEY__deepseek=sk-...`(或整份
 pir find [--base <ref>] [--head <ref>] [--uncommitted] [--json]
          [--max-rounds N] [--max-tokens N] [--max-findings N]
          [--fail-on P0|P1|P2|P3|none] [--model <id>] [--no-sync-index]
-pir memory status|bootstrap|refresh [--json] [--max-batches N] [--model <id>]
+pir memory status|bootstrap|refresh|sync [--json] [--max-batches N] [--model <id>]
 pir feedback <id> <decision> [--note "..."]      # decision 见下
 pir feedback <id> priority P0|P1|P2|P3
 pir remember project|feature <k>|symbol <k> invariant|note|risk --text "..."
@@ -135,6 +135,8 @@ pir version
 ```
 
 全局:`--json`、`--cwd <path>`、`--quiet`;远端模式 `--server <url> --token <t> [--insecure]`(`pir --server ... models` 列的是**服务端**可用的模型),`--local` 单次强制本地。模式解析优先级:`--server` > `--local` > `PIR_SERVER_URL` > `PIR_MODE` > `~/.pir/config.json`;`serve`/`config`/`skill`/`version` 始终本地执行。
+
+**记忆同步(`pir memory sync`)**:本地机器与 `pir serve` 服务端的记忆是两个独立 SQLite 库(同一 `projectId` 定位)。`pir memory sync` 通过 `POST /v1/memory/sync` 双向合并——两侧收敛到同一结果;描述同一逻辑记录的行(相同 feature key、symbol key 或 finding fingerprint)会收敛到胜者一侧的行。冲突规则:同一记录以**较新写入**为准(`memory_versions` 时间戳),但用户知识(`user_explicit`/`verified_fix`)永远压过 agent 摘要,不受时间影响。同步范围是五层记忆(项目/项目记忆/功能/代码实体/问题裁决/修复历史);findings、评审运行与审计日志属于会话产物,不参与同步。该命令**始终在本地执行**(即使处于 remote 模式——转发会在服务端的 workspace 上跑错对象),支持 `--dry-run`(只报告不落盘)与时钟偏差由用户优先规则兜底。
 
 - `--model <id>`:`<provider>/<model>` 或模糊 id(`pir models` 查目录);缺省时依次取 `PIR_MODEL` 环境变量、`~/.pir/config.json` 的 `model`、pi settings 默认
 - `--max-findings N`:单次运行最多报告的 findings 数(默认 10,只计 confirmed/uncertain,被拒绝或被历史决策压下的不占额度)。**上限而非目标**:证据不足时少报、零报才是正确结果;系统不会为凑满数量而伪造 finding 或提交无关紧要的琐碎问题
