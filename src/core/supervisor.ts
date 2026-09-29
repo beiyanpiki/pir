@@ -22,6 +22,14 @@ import { applyVerdict, createReviewState, reportedCount, type RoundInfo } from "
 import type { VerifiedFinding } from "../findings/types.js";
 import type { FindingRow } from "../memory/finding-store.js";
 import type { CandidateFinding } from "../findings/types.js";
+import {
+  createRunEventSink,
+  writeRunManifest,
+  type RunCounts,
+  type RunEventSink,
+  type RunFindingSummary,
+  type RunSessionRef,
+} from "../observability/run-events.js";
 import path from "node:path";
 
 export interface FindOptions {
@@ -91,6 +99,35 @@ function positiveInteger(value: number, name: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// Observability helpers: counters and finding summaries shared by the run-end
+// events and run.json manifests emitted at every terminal path.
+// ---------------------------------------------------------------------------
+
+type ReviewState = ReturnType<typeof createReviewState>;
+
+function runCounts(state: ReviewState): RunCounts {
+  return {
+    rounds: state.round,
+    candidates: state.known.length,
+    confirmed: state.verified.filter((f) => f.status === "confirmed").length,
+    rejected: state.verified.filter((f) => f.status === "rejected").length,
+    uncertain: state.verified.filter((f) => f.status === "uncertain").length,
+    pending: state.pending.length,
+  };
+}
+
+type FindingSummarySource = { displayId?: string | null; title: string; severity: string; status?: string };
+
+function summarizeFindings(rows: readonly FindingSummarySource[]): RunFindingSummary[] {
+  return rows.map((row) => ({
+    displayId: row.displayId ?? null,
+    title: row.title,
+    severity: row.severity,
+    status: row.status ?? "candidate",
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // Shared verification drain — the single verification orchestration used by
 // both the change loop and the audit loop.
 // ---------------------------------------------------------------------------
@@ -115,6 +152,9 @@ interface DrainDeps {
   round: number;
   /** Audit mode: current-state verification (no change attribution). */
   audit?: boolean;
+  /** Observability: live event sink and transcript index for verifier sessions. */
+  sink: RunEventSink;
+  sessionFiles: RunSessionRef[];
 }
 
 async function drainVerifications(
@@ -144,7 +184,18 @@ async function drainVerifications(
       transcriptFile: deps.transcriptDir
         ? path.join(deps.transcriptDir, `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`)
         : undefined,
+      onSessionEvent: deps.sink.session({
+        sessionKind: "verifier", role: "finding verifier", model: deps.model, round: deps.round,
+        ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
+      }),
     });
+    if (deps.transcriptDir) {
+      deps.sessionFiles.push({
+        file: `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`,
+        sessionKind: "verifier", round: deps.round,
+        ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
+      });
+    }
     budget.chargeSession(verdict.usage, deps.verifierGuidance, verdict.rationale);
     state.pending.shift();
     counters.verified += 1;
@@ -186,7 +237,22 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const run = deps.memory.findings.createRun({ base, head });
   const state = createReviewState(base, head, maxRounds);
   const transcriptDir = transcriptsEnabled() ? runTranscriptDir(deps.memory.store.dbPath, run.id) : undefined;
-  if (transcriptDir) deps.onProgress?.({ type: "info", message: `transcripts: ${transcriptDir}` });
+  const startedAtMs = Date.now();
+  const sink = createRunEventSink(run.id, deps.memory.identity.projectId);
+  const sessionFiles: RunSessionRef[] = [];
+  sink.runStarted({ mode: "change", base, head, model: options.model ?? null });
+  // Progress fans out to the caller AND the observability sink; round-end
+  // carries the round record that was just pushed to state.rounds.
+  const onProgress = (event: FindEvent): void => {
+    deps.onProgress?.(event);
+    sink.progress({
+      phase: event.type,
+      message: event.message,
+      ...(event.round !== undefined ? { round: event.round } : {}),
+      ...(event.type === "round-end" ? { roundInfo: state.rounds[state.rounds.length - 1] } : {}),
+    });
+  };
+  if (transcriptDir) onProgress({ type: "info", message: `transcripts: ${transcriptDir}` });
 
   const memoryPack = buildMemoryPack(deps.memory, {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
@@ -202,7 +268,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     selection: { mode: options.pluginMode ?? "auto", manual: options.manualPlugins ?? [] },
   });
   if (languagePacks.active.length > 0) {
-    deps.onProgress?.({
+    onProgress({
       type: "info",
       message: `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`,
     });
@@ -223,19 +289,22 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       const stop = shouldStop(state, budget);
       if (stop.stop) { state.stoppedBecause = stop.reason!; break; }
       state.round += 1;
-      deps.onProgress?.({ type: "round-start", round: state.round, message: `review round ${state.round}${state.pending.length ? " (pending verification)" : ""}` });
+      onProgress({ type: "round-start", round: state.round, message: `review round ${state.round}${state.pending.length ? " (pending verification)" : ""}` });
 
       let result: ReviewerRoundResult | undefined;
       let freshCount = 0;
       // Drain existing work before paying for another discovery session.
       if (state.pending.length === 0 && needsReview) {
+        const reviewerFile = `reviewer-r${state.round}.json`;
+        if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round });
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
           maxRounds, maxFindings, findingsRemaining: maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
           investigationFeedback: state.investigationFeedback, model: options.model,
           languageGuidance: languagePacks.reviewerGuidance,
-          transcriptFile: transcriptDir ? path.join(transcriptDir, `reviewer-r${state.round}.json`) : undefined,
+          transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
+          onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round }),
         });
         budget.chargeSession(result.usage, memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
@@ -255,7 +324,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
       const drained = await drainVerifications(
         { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
-          verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress: deps.onProgress, round: state.round },
+          verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round,
+          sink, sessionFiles },
         state, budget, { maxVerifications, maxFindings }, errors,
       );
 
@@ -272,7 +342,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       // Information gain counts non-rejected verdicts; drained.verified
       // includes rejections, which are dry by definition.
       calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
-      deps.onProgress?.({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
+      onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
     }
   } catch (error) {
     if (error instanceof ReviewerRoundError) {
@@ -288,6 +358,21 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       rejected: state.verified.filter((f) => f.status === "rejected").length, uncertain: state.verified.filter((f) => f.status === "uncertain").length,
       status: "failed", notes: error instanceof Error ? error.message : String(error),
     });
+    const failureMessage = error instanceof Error ? error.message : String(error);
+    sink.runEnded({
+      status: "failed", stoppedBecause: failureMessage, durationMs: budget.elapsedMs,
+      ...(budget.usage ? { usage: budget.usage } : {}),
+      counts: runCounts(state), findings: summarizeFindings([...state.verified, ...state.pending]),
+    });
+    writeRunManifest(transcriptDir, {
+      schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change", status: "failed",
+      base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+      stoppedBecause: failureMessage, incomplete: true, maxFindings, rounds: state.rounds,
+      plugins: languagePacks.active, sessions: sessionFiles,
+      ...(budget.usage ? { usage: budget.usage } : {}),
+      durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
+      files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+    });
     throw error;
   }
 
@@ -302,7 +387,25 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     uncertain: state.verified.filter((f) => f.status === "uncertain").length,
     status: incomplete ? "incomplete" : "completed", notes: `${state.stoppedBecause ?? "completed"}; ${state.pending.length} pending`,
   });
-  deps.onProgress?.({ type: "done", message: `stopped: ${state.stoppedBecause ?? "completed"}; ${state.pending.length} pending` });
+  onProgress({ type: "done", message: `stopped: ${state.stoppedBecause ?? "completed"}; ${state.pending.length} pending` });
+  sink.runEnded({
+    status: incomplete ? "incomplete" : "completed",
+    stoppedBecause: state.stoppedBecause ?? "completed",
+    durationMs: budget.elapsedMs,
+    ...(budget.usage ? { usage: budget.usage } : {}),
+    counts: runCounts(state),
+    findings: summarizeFindings([...persisted, ...pendingFindings]),
+  });
+  writeRunManifest(transcriptDir, {
+    schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change",
+    status: incomplete ? "incomplete" : "completed",
+    base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, maxFindings, rounds: state.rounds,
+    plugins: languagePacks.active, sessions: sessionFiles,
+    ...(budget.usage ? { usage: budget.usage } : {}),
+    durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
+    files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+  });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,
     pendingCandidates: state.pending.length, incomplete, verificationErrors: errors.verificationErrors, uncertaintyReasons: errors.uncertaintyReasons,
@@ -438,7 +541,20 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const run = deps.memory.findings.createRun({ base: null, head, mode: "audit" });
   const state = createReviewState("(snapshot)", head, Number.MAX_SAFE_INTEGER);
   const transcriptDir = transcriptsEnabled() ? runTranscriptDir(deps.memory.store.dbPath, run.id) : undefined;
-  if (transcriptDir) deps.onProgress?.({ type: "info", message: `transcripts: ${transcriptDir}` });
+  const startedAtMs = Date.now();
+  const sink = createRunEventSink(run.id, deps.memory.identity.projectId);
+  const sessionFiles: RunSessionRef[] = [];
+  sink.runStarted({ mode: "audit", base: null, head, model: options.model ?? null });
+  const onProgress = (event: FindEvent): void => {
+    deps.onProgress?.(event);
+    sink.progress({
+      phase: event.type,
+      message: event.message,
+      ...(event.round !== undefined ? { round: event.round } : {}),
+      ...(event.type === "round-end" ? { roundInfo: state.rounds[state.rounds.length - 1] } : {}),
+    });
+  };
+  if (transcriptDir) onProgress({ type: "info", message: `transcripts: ${transcriptDir}` });
 
   const toolCtx: ToolContext = { repoRoot: deps.repoRoot, headCommit: snapshot.commit, codeMap: deps.codeMap, memory: deps.memory };
   const languagePacks = await resolveLanguagePacks({
@@ -452,7 +568,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   // Audit sessions receive only packs with audit-aware guidance variants;
   // change-mode guidance assumes diff attribution and is withheld (empty render).
   if (languagePacks.active.length > 0) {
-    deps.onProgress?.({
+    onProgress({
       type: "info",
       message: languagePacks.reviewerGuidance || languagePacks.verifierGuidance
         ? `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version}`).join(", ")} (audit guidance)`
@@ -498,11 +614,12 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       }
       if (state.pending.length > 0) {
         state.round += 1;
-        deps.onProgress?.({ type: "round-start", round: state.round, message: `verification drain (round ${state.round})` });
+        onProgress({ type: "round-start", round: state.round, message: `verification drain (round ${state.round})` });
         const verifiedBefore = state.verified.length;
         const drained = await drainVerifications(
           { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
-            verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress: deps.onProgress, round: state.round, audit: true },
+            verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round, audit: true,
+            sink, sessionFiles },
           state, budget, { maxVerifications, maxFindings }, errors,
         );
         for (const finding of state.verified.slice(verifiedBefore)) persistVerified(finding);
@@ -511,7 +628,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           confirmed: drained.confirmed, rejected: drained.rejected, uncertain: drained.uncertain, suppressed: drained.suppressed,
           pending: state.pending.length, reviewerRan: false, summary: "Verified queued candidates",
         });
-        deps.onProgress?.({ type: "round-end", round: state.round, message: `verification drain: ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
+        onProgress({ type: "round-end", round: state.round, message: `verification drain: ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
         continue;
       }
       if (queue.length === 0) {
@@ -524,13 +641,15 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       attempts.set(unit.id, attempt);
       state.round += 1;
       const ownedPaths = [...new Set(unit.owned.map((range) => range.path))];
-      deps.onProgress?.({ type: "round-start", round: state.round, message: `unit ${unit.id} (${unit.module}) attempt ${attempt}/${maxUnitAttempts}: ${ownedPaths.length} files` });
+      onProgress({ type: "round-start", round: state.round, message: `unit ${unit.id} (${unit.module}) attempt ${attempt}/${maxUnitAttempts}: ${ownedPaths.length} files` });
       const memoryPack = buildMemoryPack(deps.memory, {
         changedPaths: [],
         focusPaths: ownedPaths,
         featureKeys: [], entityKeys: [], headCommit: snapshot.commit,
       });
       let result: ReviewerRoundResult;
+      const reviewerFile = `reviewer-${unit.id}-a${attempt}.json`;
+      if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round, unitId: unit.id, attempt });
       try {
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
@@ -539,8 +658,12 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           priorSummary: unitSummaries.get(unit.id),
           investigationFeedback: state.investigationFeedback, model: options.model,
           languageGuidance: languagePacks.reviewerGuidance,
-          transcriptFile: transcriptDir ? path.join(transcriptDir, `reviewer-${unit.id}-a${attempt}.json`) : undefined,
+          transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           audit: { snapshot, unit, attempt, maxAttempts: maxUnitAttempts, unitsTotal: plan.units.length, unitsRemaining: queue.length },
+          onSessionEvent: sink.session({
+            sessionKind: "reviewer", role: "code reviewer", model: options.model,
+            round: state.round, unitId: unit.id, attempt,
+          }),
         });
       } catch (error) {
         if (error instanceof ReviewerRoundError) {
@@ -555,12 +678,11 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
             confirmed: 0, rejected: 0, uncertain: 0, suppressed: 0, pending: state.pending.length,
             reviewerRan: true, summary: `reviewer failed on unit ${unit.id}: ${error.message}`,
           });
-          deps.onProgress?.({ type: "round-end", round: state.round, message: `unit ${unit.id} failed: ${error.message}` });
+          onProgress({ type: "round-end", round: state.round, message: `unit ${unit.id} failed: ${error.message}` });
           continue;
         }
         throw error;
-      }
-      budget.chargeSession(result.usage, memoryPack.text, result.assistantText, result.summary);
+      }      budget.chargeSession(result.usage, memoryPack.text, result.assistantText, result.summary);
       const dedup = deduplicateCandidates(result.candidates, state.known);
       state.known.push(...dedup.fresh);
       state.pending.push(...dedup.fresh);
@@ -599,16 +721,30 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
         reviewerRan: true, summary: `unit ${unit.id} (${unit.module}): ${result.summary}`,
       });
       expandFrontier(state, result, []);
-      deps.onProgress?.({ type: "round-end", round: state.round, message: `unit ${unit.id}: ${dedup.fresh.length} new candidates, ${state.pending.length} pending verification` });
+      onProgress({ type: "round-end", round: state.round, message: `unit ${unit.id}: ${dedup.fresh.length} new candidates, ${state.pending.length} pending verification` });
     }
   } catch (error) {
     for (const finding of state.verified) persistVerified(finding);
+    const failureMessage = error instanceof Error ? error.message : String(error);
     deps.memory.findings.finishRun(run.id, {
       rounds: state.round, candidates: state.known.length,
       confirmed: state.verified.filter((f) => f.status === "confirmed").length,
       rejected: state.verified.filter((f) => f.status === "rejected").length,
       uncertain: state.verified.filter((f) => f.status === "uncertain").length,
-      status: "failed", notes: error instanceof Error ? error.message : String(error),
+      status: "failed", notes: failureMessage,
+    });
+    sink.runEnded({
+      status: "failed", stoppedBecause: failureMessage, durationMs: budget.elapsedMs,
+      ...(budget.usage ? { usage: budget.usage } : {}),
+      counts: runCounts(state), findings: summarizeFindings([...state.verified, ...state.pending]),
+    });
+    writeRunManifest(transcriptDir, {
+      schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit", status: "failed",
+      base: null, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+      stoppedBecause: failureMessage, incomplete: true, maxFindings, rounds: state.rounds,
+      plugins: languagePacks.active, sessions: sessionFiles,
+      ...(budget.usage ? { usage: budget.usage } : {}),
+      durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
     });
     throw error;
   }
@@ -640,7 +776,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     })),
     files: ledger.fileRecords(),
   });
-  deps.onProgress?.({ type: "done", message: `stopped: ${stoppedBecause}; coverage ${coverage.filesReviewed}/${coverage.filesInScope} reviewed, ${state.pending.length} pending` });
+  onProgress({ type: "done", message: `stopped: ${stoppedBecause}; coverage ${coverage.filesReviewed}/${coverage.filesInScope} reviewed, ${state.pending.length} pending` });
   const unitViews: AuditUnitView[] = ledger.unitRecords().map((unit) => ({
     id: unit.unitId,
     module: plan.units.find((planned) => planned.id === unit.unitId)?.module ?? "",
@@ -653,6 +789,25 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const pendingFindings = state.pending
     .map((candidate) => (candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined))
     .filter((row): row is FindingRow => row !== undefined);
+  sink.runEnded({
+    status: incomplete ? "incomplete" : "completed",
+    stoppedBecause,
+    durationMs: budget.elapsedMs,
+    ...(budget.usage ? { usage: budget.usage } : {}),
+    counts: runCounts(state),
+    findings: summarizeFindings([...persisted, ...pendingFindings]),
+  });
+  writeRunManifest(transcriptDir, {
+    schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit",
+    status: incomplete ? "incomplete" : "completed",
+    base: null, head: snapshot.commit, model: options.model ?? null,
+    startedAt: startedAtMs, finishedAt: Date.now(),
+    stoppedBecause, incomplete, maxFindings, rounds: state.rounds,
+    plugins: languagePacks.active, sessions: sessionFiles,
+    ...(budget.usage ? { usage: budget.usage } : {}),
+    durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
+    coverage, units: unitViews,
+  });
   return {
     head: snapshot.commit,
     mode: "audit",

@@ -56,9 +56,15 @@ export interface SessionConfig {
   /**
    * When set, the final SDK message snapshot (retained thinking included) is
    * dumped here as JSON once the prompt settles — not provider wire traffic.
-   * Compaction can replace earlier context; see transcripts.ts.
+   * Compaction can replace earlier messages; see transcripts.ts.
    */
   transcriptFile?: string;
+  /**
+   * Live observation tap: receives every SDK session event (deltas, message
+   * ends, tool executions) as-is. Purely observational — errors thrown by the
+   * callback would fail the review, so consumers must not throw.
+   */
+  onEvent?: (event: unknown) => void;
 }
 
 export interface AgentSessionFactory {

@@ -5,6 +5,7 @@ import type { CandidateFinding } from "../findings/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
 import type { ReviewWorkUnit } from "../core/audit-planner.js";
 import type { ToolContext } from "../tools/context.js";
+import type { SessionEventEmitter } from "../observability/run-events.js";
 import {
   createFindCallersTool,
   createFindCalleesTool,
@@ -82,6 +83,8 @@ export interface ReviewerDeps {
   languageGuidance?: string;
   /** Audit mode: current-state review of one work unit (no diff attribution). */
   audit?: ReviewerAuditScope;
+  /** Live observation tap for this round's session (web UI). */
+  onSessionEvent?: SessionEventEmitter;
 }
 
 /**
@@ -121,6 +124,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     builtinTools: [...READONLY_BUILTIN_TOOLS],
     model: deps.model,
     transcriptFile: deps.transcriptFile,
+    ...(deps.onSessionEvent ? { onEvent: (event: unknown) => deps.onSessionEvent!.sdkEvent(event) } : {}),
   });
 
   let assistantText = "";
@@ -163,6 +167,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           structuralQueries: sessionCtx.codeMap.structuralQueries,
           languageGuidance: deps.languageGuidance,
         });
+    deps.onSessionEvent?.sessionStarted(prompt);
     await session.prompt(prompt);
     assistantText = session.getLastAssistantText() ?? "";
     // Some providers resolve an errored turn rather than rejecting it.
@@ -178,6 +183,10 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     } catch (cause) {
       failure ??= { cause };
     }
+    deps.onSessionEvent?.sessionEnded(
+      failure ? (failure.cause instanceof Error ? failure.cause.message : String(failure.cause)) : undefined,
+      usage,
+    );
     try {
       session.dispose();
     } catch (cause) {

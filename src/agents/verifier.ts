@@ -3,6 +3,7 @@ import { READONLY_BUILTIN_TOOLS } from "./types.js";
 import { auditVerifierPrompt, verifierPrompt } from "./prompts.js";
 import type { CandidateFinding, MemoryMatch, VerifierResult } from "../findings/types.js";
 import type { ToolContext } from "../tools/context.js";
+import type { SessionEventEmitter } from "../observability/run-events.js";
 import {
   createFindCallersTool, createFindCalleesTool, createFindReferencesTool, createFindSymbolTool,
   createGetChangeTool, createMemoryTools, createReadCodeTool, createSearchTextTool,
@@ -21,6 +22,8 @@ export interface VerifierDeps {
   languageGuidance?: string;
   /** Audit mode: current-state verification without change attribution. */
   audit?: boolean;
+  /** Live observation tap for this session (web UI). */
+  onSessionEvent?: SessionEventEmitter;
 }
 
 /** Verify technical realness independently of historical acceptance. */
@@ -57,6 +60,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
         createSubmitVerdictTool(collector, deps.priorDecisions.map((match) => match.memoryId)),
       ],
       builtinTools: [...READONLY_BUILTIN_TOOLS], model: deps.model, transcriptFile: deps.transcriptFile,
+      ...(deps.onSessionEvent ? { onEvent: (event: unknown) => deps.onSessionEvent!.sdkEvent(event) } : {}),
     });
     const fixHistory = deps.ctx.memory?.resolutions.byEntityOrFeature({
       entityKey: deps.candidate.entityKey, featureKey: deps.candidate.featureKey,
@@ -69,7 +73,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
     const fixHistoryView = fixHistory.map((fix) => ({
       originalClaim: fix.originalClaim, afterCommit: fix.afterCommit, verified: fix.verified,
     }));
-    await session.prompt(deps.audit
+    const prompt = deps.audit
       ? auditVerifierPrompt({
           candidate: deps.candidate,
           head: deps.ctx.headCommit,
@@ -87,7 +91,9 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
           priorDecisions,
           fixHistory: fixHistoryView,
           languageGuidance: deps.languageGuidance,
-        }));
+        });
+    deps.onSessionEvent?.sessionStarted(prompt);
+    await session.prompt(prompt);
     const providerError = session.getLastAssistantError();
     if (providerError) {
       result = sessionFailure(providerError);
@@ -107,6 +113,10 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
       } catch {
         console.error("verifier warning: session usage unavailable");
       }
+      deps.onSessionEvent?.sessionEnded(
+        result.uncertaintyReason === "provider-error" ? result.rationale : undefined,
+        usage,
+      );
       try { session.dispose(); } catch {
         console.error("verifier warning: session disposal failed");
       }
