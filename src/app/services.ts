@@ -87,6 +87,9 @@ export interface MemorySyncResult {
   appliedLocally: Record<string, number>;
 }
 
+/** Snapshots can be large, but a server that accepts and never answers must not hang the CLI. */
+const SYNC_TIMEOUT_MS = 120_000;
+
 /**
  * Merge this project's local memory DB with a pir serve instance: ship the
  * local snapshot to POST /v1/memory/sync, let the server merge (the same
@@ -108,6 +111,7 @@ export async function memorySync(
   try {
     response = await fetch(new URL("/v1/memory/sync", input.url), {
       method: "POST",
+      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
       headers: {
         "content-type": "application/json",
         ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
