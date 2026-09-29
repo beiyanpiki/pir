@@ -105,8 +105,8 @@ Modes:
   Local by default. The first interactive run starts a setup wizard and
   writes ~/.pir/config.json (mode local|remote, server url/token, default
   model; re-run with \`pir config\`). In remote mode every command is
-  forwarded to a pir serve instance — except serve/config/skill/version,
-  which always run locally. Precedence: --server flag > --local flag >
+  forwarded to a pir serve instance — except serve/config/skill/plugins/
+  version, which always run locally (plugins inspects the local checkout). Precedence: --server flag > --local flag >
   PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.
 
 Remote mode:

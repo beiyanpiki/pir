@@ -43,7 +43,8 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const transport = resolveTransport({ argv, env: process.env, config });
-  // serve/config/skill/version/help (and a bare `pir`) stay client-side;
+  // serve/config/skill/plugins/version/help (and a bare `pir`) stay
+  // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
   if (transport.mode === "remote" && forwardToServer) {
