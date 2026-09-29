@@ -34,6 +34,10 @@ services:
       # PIR_TRANSCRIPTS=1: dump full reviewer/verifier conversations (thinking
       # included) per run under /data/state/<projectId>/transcripts/<runId>/
       - PIR_TRANSCRIPTS=${PIR_TRANSCRIPTS:-}
+      # Read-only web UI (https://<host>:<port>/): set PIR_WEB_UI=1 and a
+      # dedicated viewer token; transcripts auto-enable with the UI on.
+      - PIR_WEB_UI=${PIR_WEB_UI:-}
+      - PIR_WEB_UI_TOKEN=${PIR_WEB_UI_TOKEN:-}
       - PIR_REPOS_ROOT=/data/repos
       - PIR_STATE_ROOT=/data/state
     volumes:

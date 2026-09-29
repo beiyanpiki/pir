@@ -37,3 +37,19 @@ A glossary of the terms this codebase uses. Implementation details live in
 - **Memory pack** — the bounded, evidence-framed knowledge excerpt a
   reviewer session receives. Issue decisions are deliberately excluded from
   it (verifier-only).
+- **Run (review run)** — one review request: a `review_runs` row with its
+  own run id, verdicts and (when transcripts are on) a transcript directory.
+  The unit the web UI pages over; distinct from the sessions inside it.
+- **Session transcript** — the settled SDK message dump (prompt, thinking,
+  tool traffic, usage) of one reviewer/verifier session, written under
+  `<stateRoot>/<projectId>/transcripts/<runId>/`. Final messages, not a wire
+  capture; compaction may have replaced earlier context.
+- **Run manifest (run.json)** — the persisted counterpart of the stdout
+  envelope (rounds, plugins, usage, files/coverage) written next to a run's
+  transcripts, so finished runs are renderable without re-running anything.
+- **Run event** — the live observation record (run/session lifecycle,
+  streaming deltas, tool results) emitted by the supervisor into a
+  process-local bus; buffered by the serve web registry, never persisted.
+- **Live run** — a run executing inside a given `pir serve` process; only
+  such runs can stream to the web UI. Runs from other processes (e.g. local
+  CLI invocations) appear only after they finish, via their transcripts.
