@@ -143,8 +143,16 @@ git install builds itself via `prepare`):
 
 ```bash
 npx -y github:beiyanpiki/pir find --json     # one-off
+npx -y github:beiyanpiki/pir audit --json    # full-repo audit of committed HEAD
 npm i -g github:beiyanpiki/pir               # persistent `pir`
 ```
+
+`audit` reviews a pinned committed snapshot (no `--base`, no
+`--uncommitted`): `--path <file|dir-prefix>` (repeatable) selects scope,
+`--skip <glob>` excludes; the envelope carries per-file `coverage`
+(`reviewed/partial/unreviewed/blocked/failed/excluded/notSelected`) and
+`incomplete` is true whenever any in-scope file did not finish — treat that
+as "not fully audited", never as a clean sweep. Exit codes match `find`.
 
 ### 3.1 Modes & first-run config
 

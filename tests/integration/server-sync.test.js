@@ -10,7 +10,7 @@ import { startServer } from "../../dist/server/server.js";
 import { SqliteStore } from "../../dist/memory/sqlite-store.js";
 import { FeaturesRepo } from "../../dist/memory/feature-memory.js";
 import { computeProjectIdentity } from "../../dist/memory/identity.js";
-import { MEMORY_SCHEMA_VERSION, applySnapshot, exportSnapshot } from "../../dist/memory/sync.js";
+import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, exportSnapshot } from "../../dist/memory/sync.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -160,7 +160,7 @@ test("/v1/memory/sync: rejects an identity that does not hash to the claimed pro
       remoteUrl: identity.remote,
       normalizedRemote: identity.normalizedRemote,
       rootCommit: identity.rootCommit,
-      snapshot: { schemaVersion: MEMORY_SCHEMA_VERSION, projectId: "0".repeat(64), exportedAt: 0, tables: {}, writeTimes: {} },
+      snapshot: { schemaVersion: MEMORY_WIRE_SCHEMA_VERSION, projectId: "0".repeat(64), exportedAt: 0, tables: {}, writeTimes: {} },
     }),
   });
   assert.equal(response.status, 400);
@@ -174,7 +174,7 @@ test("/v1/memory/sync: dryRun computes the merge without writing the server DB",
   const identity = await computeProjectIdentity(repo.dir);
 
   const empty = {
-    schemaVersion: MEMORY_SCHEMA_VERSION,
+    schemaVersion: MEMORY_WIRE_SCHEMA_VERSION,
     projectId: identity.projectId,
     exportedAt: Date.now(),
     tables: {
@@ -220,7 +220,7 @@ test("/v1/memory/sync: a second sync pulls server-only rows back to the client",
   seedServerFeature(stateRoot, identity.projectId, "server-only", "summarized on the server");
   // The client starts with an empty (but valid) snapshot.
   const emptySnapshot = {
-    schemaVersion: MEMORY_SCHEMA_VERSION,
+    schemaVersion: MEMORY_WIRE_SCHEMA_VERSION,
     projectId: identity.projectId,
     exportedAt: Date.now(),
     tables: {

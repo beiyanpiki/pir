@@ -5,6 +5,13 @@ import { memoryFreshnessAnnotation } from "./freshness.js";
 
 export interface MemoryPackInput {
   changedPaths: string[];
+  /**
+   * Selection focus when a run has no semantic "changed" paths (audit mode):
+   * entity/feature retrieval keys in on these paths while freshness
+   * annotations stay derived from changedPaths only. Falls back to
+   * changedPaths when omitted.
+   */
+  focusPaths?: string[];
   featureKeys: string[];
   entityKeys: string[];
   headCommit: string;
@@ -68,7 +75,8 @@ export function buildMemoryPack(memory: Memory, input: MemoryPackInput, maxToken
     return { text: "", sections: [], approxTokens: 0, truncated: true };
   }
   const changedPaths = new Set(input.changedPaths);
-  const byPath = memory.entities.byPaths([...changedPaths]);
+  const focusPaths = input.focusPaths?.length ? new Set(input.focusPaths) : changedPaths;
+  const byPath = memory.entities.byPaths([...focusPaths]);
   const entityKeys = new Set([...input.entityKeys, ...byPath.map((entity) => entity.symbolKey)]);
   const entities = [...entityKeys].map((key) => memory.entities.get(key))
     .filter((entity): entity is NonNullable<typeof entity> => entity !== null)

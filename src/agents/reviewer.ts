@@ -1,7 +1,9 @@
 import type { AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
-import { reviewerPrompt } from "./prompts.js";
+import { auditReviewerPrompt, reviewerPrompt } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
+import type { RepoSnapshot } from "../changes/snapshot.js";
+import type { ReviewWorkUnit } from "../core/audit-planner.js";
 import type { ToolContext } from "../tools/context.js";
 import {
   createFindCallersTool,
@@ -9,6 +11,7 @@ import {
   createFindReferencesTool,
   createFindSymbolTool,
   createGetChangeTool,
+  createListSnapshotFilesTool,
   createMemoryTools,
   createReadCodeTool,
   createSearchTextTool,
@@ -31,6 +34,8 @@ export interface ReviewerRoundResult {
   unresolvedQuestions?: string[];
   blockers?: string[];
   usage?: SessionUsage;
+  /** Audit mode: pinned head paths read during this session (coverage evidence). */
+  readPaths?: string[];
 }
 
 /** Incomplete rounds remain failures, but retain evidence for error persistence. */
@@ -44,6 +49,16 @@ export class ReviewerRoundError extends Error {
     this.candidates = [...candidates];
     this.usage = usage ? { ...usage } : undefined;
   }
+}
+
+/** Audit-mode scheduling inputs for one reviewer session. */
+export interface ReviewerAuditScope {
+  snapshot: RepoSnapshot;
+  unit: ReviewWorkUnit;
+  attempt: number;
+  maxAttempts: number;
+  unitsTotal: number;
+  unitsRemaining: number;
 }
 
 export interface ReviewerDeps {
@@ -65,31 +80,42 @@ export interface ReviewerDeps {
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
   languageGuidance?: string;
+  /** Audit mode: current-state review of one work unit (no diff attribution). */
+  audit?: ReviewerAuditScope;
 }
 
 /**
- * One reviewer round: a fresh isolated session explores the change and must
- * emit candidates through record_candidate and end via finish_round.
+ * One reviewer round: a fresh isolated session explores the target and must
+ * emit candidates through record_candidate and end via finish_round. Change
+ * mode reviews the base..head diff; audit mode reviews one snapshot unit.
  */
 export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoundResult> {
   const collector: CandidateCollector = { candidates: [] };
   const outcome: RoundOutcome = { summary: "", nextFocus: [], needsMoreRounds: false, submitted: false };
+  const readPaths = new Set<string>();
+  // The observer is per-session: only this session's pinned head reads count
+  // toward this unit's coverage evidence.
+  const sessionCtx: ToolContext = deps.audit
+    ? { ...deps.ctx, readObserver: (path, revision) => { if (revision === "head") readPaths.add(path); } }
+    : deps.ctx;
 
   const tools = [
-    createGetChangeTool(deps.ctx),
-    createReadCodeTool(deps.ctx),
-    createSearchTextTool(deps.ctx),
-    createFindSymbolTool(deps.ctx),
-    createFindCallersTool(deps.ctx),
-    createFindCalleesTool(deps.ctx),
-    createFindReferencesTool(deps.ctx),
-    ...createMemoryTools(deps.ctx),
-    createRecordCandidateTool(deps.ctx, collector, deps.round),
+    ...(deps.audit
+      ? [createListSnapshotFilesTool(sessionCtx, deps.audit.snapshot)]
+      : [createGetChangeTool(sessionCtx)]),
+    createReadCodeTool(sessionCtx),
+    createSearchTextTool(sessionCtx),
+    createFindSymbolTool(sessionCtx),
+    createFindCallersTool(sessionCtx),
+    createFindCalleesTool(sessionCtx),
+    createFindReferencesTool(sessionCtx),
+    ...createMemoryTools(sessionCtx),
+    createRecordCandidateTool(sessionCtx, collector, deps.round),
     createFinishRoundTool(outcome),
   ];
 
   const session = await deps.factory.createSession({
-    cwd: deps.ctx.repoRoot,
+    cwd: sessionCtx.repoRoot,
     systemRole: "code reviewer",
     tools,
     builtinTools: [...READONLY_BUILTIN_TOOLS],
@@ -101,22 +127,43 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
   let usage: SessionUsage | undefined;
   let failure: { cause: unknown } | undefined;
   try {
-    await session.prompt(reviewerPrompt({
-      base: deps.ctx.changeSet.baseCommit ?? deps.ctx.changeSet.base,
-      head: deps.ctx.changeSet.headCommit ?? deps.ctx.headCommit,
-      mergeBase: deps.mergeBase ?? deps.ctx.changeSet.mergeBase,
-      round: deps.round,
-      maxRounds: deps.maxRounds,
-      maxFindings: deps.maxFindings,
-      findingsRemaining: deps.findingsRemaining,
-      verificationCapacity: deps.verificationCapacity,
-      focus: deps.focus,
-      priorSummary: deps.priorSummary,
-      investigationFeedback: deps.investigationFeedback,
-      memoryPack: deps.memoryPack,
-      structuralQueries: deps.ctx.codeMap.structuralQueries,
-      languageGuidance: deps.languageGuidance,
-    }));
+    const prompt = deps.audit
+      ? auditReviewerPrompt({
+          head: sessionCtx.headCommit,
+          unitId: deps.audit.unit.id,
+          module: deps.audit.unit.module,
+          attempt: deps.audit.attempt,
+          maxAttempts: deps.audit.maxAttempts,
+          owned: deps.audit.unit.owned,
+          unitsTotal: deps.audit.unitsTotal,
+          unitsRemaining: deps.audit.unitsRemaining,
+          maxFindings: deps.maxFindings,
+          findingsRemaining: deps.findingsRemaining,
+          verificationCapacity: deps.verificationCapacity,
+          focus: deps.focus,
+          priorSummary: deps.priorSummary,
+          investigationFeedback: deps.investigationFeedback,
+          memoryPack: deps.memoryPack,
+          structuralQueries: sessionCtx.codeMap.structuralQueries,
+          languageGuidance: deps.languageGuidance,
+        })
+      : reviewerPrompt({
+          base: sessionCtx.changeSet ? (sessionCtx.changeSet.baseCommit ?? sessionCtx.changeSet.base) : sessionCtx.headCommit,
+          head: sessionCtx.changeSet?.headCommit ?? sessionCtx.headCommit,
+          mergeBase: deps.mergeBase ?? sessionCtx.changeSet?.mergeBase,
+          round: deps.round,
+          maxRounds: deps.maxRounds,
+          maxFindings: deps.maxFindings,
+          findingsRemaining: deps.findingsRemaining,
+          verificationCapacity: deps.verificationCapacity,
+          focus: deps.focus,
+          priorSummary: deps.priorSummary,
+          investigationFeedback: deps.investigationFeedback,
+          memoryPack: deps.memoryPack,
+          structuralQueries: sessionCtx.codeMap.structuralQueries,
+          languageGuidance: deps.languageGuidance,
+        });
+    await session.prompt(prompt);
     assistantText = session.getLastAssistantText() ?? "";
     // Some providers resolve an errored turn rather than rejecting it.
     const providerError = session.getLastAssistantError();
@@ -150,5 +197,6 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     unresolvedQuestions: outcome.unresolvedQuestions ?? [],
     blockers: outcome.blockers ?? [],
     usage,
+    ...(deps.audit ? { readPaths: [...readPaths] } : {}),
   };
 }

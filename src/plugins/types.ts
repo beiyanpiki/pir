@@ -17,6 +17,13 @@ export interface LanguagePack {
   reviewerGuidance: string;
   /** Verifier-role guidance (markdown), injected as trusted review directions. */
   verifierGuidance: string;
+  /**
+   * Audit-mode variants (current-state phrasing, no change attribution).
+   * Optional: a pack without them stays change-only and its guidance is
+   * withheld from audit sessions instead of demanding diff attribution.
+   */
+  reviewerAuditGuidance?: string;
+  verifierAuditGuidance?: string;
 }
 
 /** A pack selected for a run, with how it was selected. */

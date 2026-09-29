@@ -235,9 +235,11 @@ export async function runWizard(): Promise<UserConfig> {
       }
       const token = (await rl.question("Bearer token (empty if the server has none; input is echoed): ")).trim();
       const insecureAnswer = (
-        await rl.question("Accept the server's self-signed certificate? [Y/n] ")
+        await rl.question("Accept the server's self-signed certificate? [y/N] ")
       ).trim().toLowerCase();
-      config.server = { url, ...(token ? { token } : {}), ...(insecureAnswer === "" || insecureAnswer.startsWith("y") ? { insecure: true } : {}) };
+      // Opt-in only: a bare Enter keeps TLS verification on; the user must
+      // type y to accept a self-signed certificate.
+      config.server = { url, ...(token ? { token } : {}), ...(insecureAnswer.startsWith("y") ? { insecure: true } : {}) };
     }
 
     const model = (

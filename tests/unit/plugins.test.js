@@ -35,6 +35,26 @@ test("built-in golang pack loads with a valid manifest and guidance within budge
   }
 });
 
+test("built-in typescript pack loads with a valid manifest and guidance within budget", () => {
+  const packs = loadBuiltInPacks();
+  const typescript = packs.find((pack) => pack.name === "typescript");
+  assert.ok(typescript, `typescript pack present among: ${packs.map((p) => p.name).join(", ")}`);
+  assert.equal(typescript.title, "TypeScript");
+  assert.match(typescript.version, /^\d+\.\d+\.\d+$/);
+  assert.deepEqual(typescript.markerFiles, ["tsconfig.json"]);
+  assert.deepEqual(typescript.extensions, ["ts", "tsx", "mts", "cts"]);
+  assert.match(typescript.reviewerGuidance, /^# TypeScript review directions/);
+  assert.match(typescript.reviewerGuidance, /## Async and the event loop/);
+  assert.match(typescript.reviewerGuidance, /## Modules and ESM\/CJS/);
+  assert.match(typescript.verifierGuidance, /^# TypeScript verification playbooks/);
+  assert.match(typescript.verifierGuidance, /Config gate/);
+  for (const role of ["reviewer", "verifier"]) {
+    const rendered = renderGuidance([{ pack: typescript, activation: "auto" }], role);
+    assert.ok(!rendered.includes("TRUNCATED"), `${role} guidance must not truncate (got ${rendered.length} chars)`);
+    assert.ok(rendered.length <= GUIDANCE_BUDGET_CHARS, `${role} guidance within budget`);
+  }
+});
+
 test("renderGuidance returns empty string without packs and truncates over budget", () => {
   assert.equal(renderGuidance([], "reviewer"), "");
   const verbose = {
@@ -70,6 +90,25 @@ test("detectPacks activates by marker file at the pinned head commit, not the wo
     assert.ok(golang, "go.mod at head activates golang even when the working tree lost it");
     assert.equal(golang.activation, "auto");
     assert.match(golang.version, /^\d+\.\d+\.\d+$/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("detectPacks activates typescript by tsconfig.json at the pinned head commit", async () => {
+  const packs = loadBuiltInPacks();
+  const repo = createTempGitRepo("pir-plugins-detect-ts-");
+  try {
+    const before = await detectPacks(repo.dir, repo.commit("empty history"), packs);
+    assert.equal(before.some((p) => p.name === "typescript"), false);
+
+    repo.write("tsconfig.json", '{ "compilerOptions": { "strict": true } }\n');
+    repo.write("src/index.ts", "export const x: number = 1;\n");
+    const head = repo.commit("add typescript project");
+    const active = await detectPacks(repo.dir, head, packs);
+    const typescript = active.find((p) => p.name === "typescript");
+    assert.ok(typescript, "tsconfig.json at head activates typescript");
+    assert.equal(typescript.activation, "auto");
   } finally {
     repo.cleanup();
   }
@@ -155,4 +194,23 @@ test("runReviewerRound forwards language guidance into the session prompt", asyn
   );
   assert.equal(prompts.length, 1);
   assert.match(prompts[0], /GO_DIRECTIONS_INLINE/);
+});
+
+test("audit-aware guidance renders in audit mode and is withheld without variants", async () => {
+  const { loadBuiltInPacks, renderGuidance } = await import("../../dist/plugins/loader.js");
+  const packs = loadBuiltInPacks();
+  const go = packs.find((pack) => pack.name === "golang");
+  assert.ok(go, "golang pack present");
+  assert.ok(go.reviewerAuditGuidance && go.verifierAuditGuidance, "golang ships audit variants");
+
+  const entries = [{ pack: go, activation: "manual" }];
+  const auditReviewer = renderGuidance(entries, "reviewer", undefined, "audit");
+  const changeReviewer = renderGuidance(entries, "reviewer", undefined, "change");
+  assert.match(auditReviewer, /current-state audit/i);
+  assert.doesNotMatch(auditReviewer, /this change touched/i);
+  assert.match(changeReviewer, /this change touched/i);
+
+  // A pack without audit variants must render nothing in audit mode.
+  const changeOnly = { ...go, reviewerAuditGuidance: undefined };
+  assert.equal(renderGuidance([{ pack: changeOnly, activation: "manual" }], "reviewer", undefined, "audit"), "");
 });

@@ -1,6 +1,6 @@
 import type { AgentHandle, AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
-import { verifierPrompt } from "./prompts.js";
+import { auditVerifierPrompt, verifierPrompt } from "./prompts.js";
 import type { CandidateFinding, MemoryMatch, VerifierResult } from "../findings/types.js";
 import type { ToolContext } from "../tools/context.js";
 import {
@@ -19,6 +19,8 @@ export interface VerifierDeps {
   transcriptFile?: string;
   /** Rendered built-in language-pack playbooks for this session's prompt. */
   languageGuidance?: string;
+  /** Audit mode: current-state verification without change attribution. */
+  audit?: boolean;
 }
 
 /** Verify technical realness independently of historical acceptance. */
@@ -47,7 +49,8 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
     session = await deps.factory.createSession({
       cwd: deps.ctx.repoRoot, systemRole: "finding verifier",
       tools: [
-        createGetChangeTool(deps.ctx), createReadCodeTool(deps.ctx), createSearchTextTool(deps.ctx),
+        ...(deps.audit ? [] : [createGetChangeTool(deps.ctx)]),
+        createReadCodeTool(deps.ctx), createSearchTextTool(deps.ctx),
         createFindSymbolTool(deps.ctx), createFindReferencesTool(deps.ctx),
         createFindCallersTool(deps.ctx), createFindCalleesTool(deps.ctx),
         ...createMemoryTools(deps.ctx), ...historyTools,
@@ -58,22 +61,33 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
     const fixHistory = deps.ctx.memory?.resolutions.byEntityOrFeature({
       entityKey: deps.candidate.entityKey, featureKey: deps.candidate.featureKey,
     }) ?? [];
-    await session.prompt(verifierPrompt({
-      candidate: deps.candidate,
-      base: deps.ctx.changeSet.baseCommit ?? deps.ctx.changeSet.base,
-      head: deps.ctx.changeSet.headCommit ?? deps.ctx.headCommit,
-      mergeBase: deps.ctx.changeSet.mergeBase,
-      structuralQueries: deps.ctx.codeMap.structuralQueries,
-      priorDecisions: deps.priorDecisions.map((match) => ({
-        memoryId: match.memoryId, decision: match.decision, claim: match.claim,
-        trigger: match.trigger, rationale: match.rationale, scope: match.scope,
-        source: match.source, stale: match.stale,
-      })),
-      fixHistory: fixHistory.map((fix) => ({
-        originalClaim: fix.originalClaim, afterCommit: fix.afterCommit, verified: fix.verified,
-      })),
-      languageGuidance: deps.languageGuidance,
+    const priorDecisions = deps.priorDecisions.map((match) => ({
+      memoryId: match.memoryId, decision: match.decision, claim: match.claim,
+      trigger: match.trigger, rationale: match.rationale, scope: match.scope,
+      source: match.source, stale: match.stale,
     }));
+    const fixHistoryView = fixHistory.map((fix) => ({
+      originalClaim: fix.originalClaim, afterCommit: fix.afterCommit, verified: fix.verified,
+    }));
+    await session.prompt(deps.audit
+      ? auditVerifierPrompt({
+          candidate: deps.candidate,
+          head: deps.ctx.headCommit,
+          structuralQueries: deps.ctx.codeMap.structuralQueries,
+          priorDecisions,
+          fixHistory: fixHistoryView,
+          languageGuidance: deps.languageGuidance,
+        })
+      : verifierPrompt({
+          candidate: deps.candidate,
+          base: deps.ctx.changeSet?.baseCommit ?? deps.ctx.changeSet?.base,
+          head: deps.ctx.changeSet?.headCommit ?? deps.ctx.headCommit,
+          mergeBase: deps.ctx.changeSet?.mergeBase,
+          structuralQueries: deps.ctx.codeMap.structuralQueries,
+          priorDecisions,
+          fixHistory: fixHistoryView,
+          languageGuidance: deps.languageGuidance,
+        }));
     const providerError = session.getLastAssistantError();
     if (providerError) {
       result = sessionFailure(providerError);

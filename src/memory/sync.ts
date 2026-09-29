@@ -7,6 +7,14 @@ import { projectStateDir } from "./identity.js";
 export const MEMORY_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]!.version;
 
 /**
+ * Wire version for memory sync, decoupled from the SQLite migration level:
+ * migrations may add run-local tables (audit coverage, run modes) without
+ * breaking snapshot exchange between pir versions. Bump ONLY when the
+ * syncable knowledge tables' shape changes.
+ */
+export const MEMORY_WIRE_SCHEMA_VERSION = 4;
+
+/**
  * Column lists are pinned on purpose: a snapshot is a wire format between pir
  * versions, and apply writes exactly these columns. When a migration adds a
  * column, extend the list here in the same change.
@@ -129,7 +137,7 @@ export function exportSnapshot(store: SqliteStore, projectId: string): MemorySna
     }
   }
   return {
-    schemaVersion: MEMORY_SCHEMA_VERSION,
+    schemaVersion: MEMORY_WIRE_SCHEMA_VERSION,
     projectId,
     exportedAt: Date.now(),
     tables: {
@@ -166,7 +174,7 @@ export function syncTargetDbPath(projectId: string): string {
 /** An empty snapshot representing "this side has never seen the project". */
 export function emptySnapshot(projectId: string): MemorySnapshot {
   return {
-    schemaVersion: MEMORY_SCHEMA_VERSION,
+    schemaVersion: MEMORY_WIRE_SCHEMA_VERSION,
     projectId,
     exportedAt: 0,
     tables: {
@@ -405,9 +413,9 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
     throw new Error(`snapshot project mismatch: ${local.projectId} vs ${remote.projectId}`);
   }
   for (const side of [local, remote]) {
-    if (side.schemaVersion !== MEMORY_SCHEMA_VERSION) {
+    if (side.schemaVersion !== MEMORY_WIRE_SCHEMA_VERSION) {
       throw new Error(
-        `snapshot schema version ${side.schemaVersion} does not match ${MEMORY_SCHEMA_VERSION}; ` +
+        `snapshot schema version ${side.schemaVersion} does not match ${MEMORY_WIRE_SCHEMA_VERSION}; ` +
           "upgrade pir so both sides share one schema",
       );
     }
@@ -540,7 +548,7 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
   }
 
   const merged: MemorySnapshot = {
-    schemaVersion: MEMORY_SCHEMA_VERSION,
+    schemaVersion: MEMORY_WIRE_SCHEMA_VERSION,
     projectId: local.projectId,
     exportedAt: Math.max(local.exportedAt, remote.exportedAt),
     tables: {
@@ -576,9 +584,9 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
   if (snapshot.projectId !== projectId) {
     throw new Error(`snapshot belongs to project ${snapshot.projectId}, not ${projectId}`);
   }
-  if (snapshot.schemaVersion !== MEMORY_SCHEMA_VERSION) {
+  if (snapshot.schemaVersion !== MEMORY_WIRE_SCHEMA_VERSION) {
     throw new Error(
-      `snapshot schema version ${snapshot.schemaVersion} does not match ${MEMORY_SCHEMA_VERSION}; ` +
+      `snapshot schema version ${snapshot.schemaVersion} does not match ${MEMORY_WIRE_SCHEMA_VERSION}; ` +
         "upgrade pir so both sides share one schema",
     );
   }

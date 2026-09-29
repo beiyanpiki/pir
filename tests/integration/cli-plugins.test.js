@@ -54,6 +54,32 @@ test("pir plugins list activates golang by go.mod at HEAD", async () => {
   }
 });
 
+test("pir plugins list activates typescript by tsconfig.json at HEAD", async () => {
+  const repo = createTempGitRepo("pir-plugins-ts-");
+  try {
+    repo.write("tsconfig.json", '{ "compilerOptions": { "strict": true } }\n');
+    repo.write("index.ts", "export const x = 1;\n");
+    repo.commit("add typescript project");
+
+    const json = await pir(["plugins", "list", "--json", "--cwd", repo.dir]);
+    const parsed = JSON.parse(json.stdout);
+    const typescript = parsed.data.packs.find((p) => p.name === "typescript");
+    assert.ok(typescript, "typescript pack listed");
+    assert.equal(typescript.active, true);
+    assert.equal(typescript.activation, "auto");
+    assert.deepEqual(typescript.markerFiles, ["tsconfig.json"]);
+
+    const golang = parsed.data.packs.find((p) => p.name === "golang");
+    assert.equal(golang.active, false, "golang stays inactive in a TS-only repo");
+
+    const text = await pir(["plugins", "list", "--cwd", repo.dir]);
+    assert.match(text.stdout, /typescript@\d+\.\d+\.\d+ \(TypeScript\)/);
+    assert.match(text.stdout, /\[active\]/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("pir plugins list reports inactive packs in a non-Go repo", async () => {
   const repo = createTempGitRepo("pir-plugins-nongo-");
   try {

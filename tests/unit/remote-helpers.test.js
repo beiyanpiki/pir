@@ -55,11 +55,14 @@ test("pinRefsToShas never touches --base/--head appearing as another flag's valu
   );
 });
 
-test("wantsBundle: only a find without --repo (either form) ships a bundle", () => {
+test("wantsBundle: a find or audit without --repo (either form) ships a bundle", () => {
   assert.equal(wantsBundle(["find", "--json"]), true);
   assert.equal(wantsBundle(["find"]), true);
+  assert.equal(wantsBundle(["audit", "--json", "--path", "src"]), true);
+  assert.equal(wantsBundle(["audit"]), true);
   assert.equal(wantsBundle(["find", "--repo", "demo"]), false);
   assert.equal(wantsBundle(["find", "--repo=demo"]), false);
+  assert.equal(wantsBundle(["audit", "--repo", "demo"]), false);
   assert.equal(wantsBundle(["memory", "status"]), false);
   assert.equal(wantsBundle(["--json"]), false);
 });

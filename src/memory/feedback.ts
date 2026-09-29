@@ -58,6 +58,14 @@ const DECISION_TO_ISSUE: Partial<Record<FeedbackDecision, string>> = {
  * writes decision memories — agents never call this path.
  */
 export async function applyFeedback(memory: Memory, input: FeedbackInput): Promise<FeedbackResult> {
+  // Validate before ANY write: an unknown decision would otherwise be
+  // persisted as an undefined status and an unreadable audit event.
+  if (!(FEEDBACK_DECISIONS as readonly string[]).includes(input.decision)) {
+    throw new Error(`invalid decision: ${input.decision} (one of: ${FEEDBACK_DECISIONS.join(", ")})`);
+  }
+  if (input.priority !== undefined && input.priority !== null && !/^[Pp][0-3]$/.test(input.priority)) {
+    throw new Error(`invalid priority: ${input.priority} (P0..P3)`);
+  }
   const finding = memory.findings.get(input.findingId);
   if (!finding) {
     throw new Error(`finding not found: ${input.findingId}`);

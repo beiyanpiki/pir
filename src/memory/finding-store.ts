@@ -28,8 +28,13 @@ export interface FindingRow {
 export interface ReviewRunRow {
   id: string;
   projectId: string;
-  base: string;
+  /** "change" | "audit"; legacy rows backfilled as "change". */
+  mode: string;
+  /** Null for audits: there is no comparison base, never a fake one. */
+  base: string | null;
   head: string;
+  /** Review target metadata (JSON) when recorded. */
+  target: string | null;
   startedAt: number;
   finishedAt: number | null;
   status: string;
@@ -232,22 +237,27 @@ export class FindingStore {
     return parseJsonObject<MemoryMatch[]>(row.memoryMatches) ?? [];
   }
 
-  createRun(base: string, head: string): ReviewRunRow {
+  createRun(input: { base: string | null; head: string; mode?: "change" | "audit"; target?: unknown }): ReviewRunRow {
     const id = randomUUID();
     const startedAt = Date.now();
+    const mode = input.mode ?? "change";
     this.store.run(
-      "INSERT INTO review_runs (id, project_id, base, head, started_at, status) VALUES (?, ?, ?, ?, ?, 'running')",
+      "INSERT INTO review_runs (id, project_id, mode, base, head, target, started_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'running')",
       id,
       this.projectId,
-      base,
-      head,
+      mode,
+      input.base,
+      input.head,
+      input.target === undefined ? null : JSON.stringify(input.target),
       startedAt,
     );
     return {
       id,
       projectId: this.projectId,
-      base,
-      head,
+      mode,
+      base: input.base,
+      head: input.head,
+      target: input.target === undefined ? null : JSON.stringify(input.target),
       startedAt,
       finishedAt: null,
       status: "running",
@@ -258,6 +268,24 @@ export class FindingStore {
       uncertain: 0,
       notes: null,
     };
+  }
+
+  /**
+   * Audit checkpoint flow: a candidate row persisted at collection time is
+   * updated in place with its verdict — same row, same display id, never a
+   * re-insert.
+   */
+  updateVerified(id: string, finding: VerifiedFinding): FindingRow | null {
+    const now = Date.now();
+    this.store.run(
+      "UPDATE findings SET status = ?, verifier_rationale = ?, memory_matches = ?, updated_at = ? WHERE id = ?",
+      finding.status,
+      finding.verifierRationale ?? null,
+      JSON.stringify(finding.memoryMatches ?? []),
+      now,
+      id,
+    );
+    return this.get(id);
   }
 
   finishRun(

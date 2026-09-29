@@ -6,7 +6,7 @@ import https from "node:https";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sha256 } from "../core/types.js";
-import { MEMORY_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
+import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
 import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
 
@@ -33,7 +33,7 @@ const MAX_SYNC_BYTES = 64 * 1024 * 1024;
  * management (repos: server-side clones, purge) belongs to /v1/exec, and
  * models/config/skill/serve have no business running against a worktree.
  */
-const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "memory", "findings", "feedback", "remember", "verify-fix"]);
+const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
@@ -266,9 +266,9 @@ export async function startServer(input: {
       if (snapshot.projectId !== parsed.projectId) {
         throw new Error("snapshot belongs to a different project than the request");
       }
-      if (snapshot.schemaVersion !== MEMORY_SCHEMA_VERSION) {
+      if (snapshot.schemaVersion !== MEMORY_WIRE_SCHEMA_VERSION) {
         throw new Error(
-          `snapshot schema ${snapshot.schemaVersion} != server schema ${MEMORY_SCHEMA_VERSION}; upgrade pir so both sides match`,
+          `snapshot schema ${snapshot.schemaVersion} != server schema ${MEMORY_WIRE_SCHEMA_VERSION}; upgrade pir so both sides match`,
         );
       }
       const payload = await enqueue(async () => {

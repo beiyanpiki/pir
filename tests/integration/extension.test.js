@@ -35,11 +35,11 @@ function makeCtx(repoDir) {
   };
 }
 
-test("extension factory registers the four /review-* commands", async () => {
+test("extension factory registers the five /review-* commands", async () => {
   const { commands, events } = await loadExtension();
   assert.deepEqual(
     [...commands.keys()].sort(),
-    ["review-feedback", "review-find", "review-memory", "review-remember"],
+    ["review-audit", "review-feedback", "review-find", "review-memory", "review-remember"],
   );
   assert.ok(commands.get("review-feedback").description.length > 0);
   assert.ok(events.includes("session_shutdown"));

@@ -76,7 +76,8 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           let snapshot = snapshots.get(rel);
           if (!snapshot) {
             snapshot = await readReviewFile(ctx, rel, "head");
-            if (snapshot.content === null && ctx.changeSet.files.some((file) => file.status === "deleted" && file.path === snapshot!.path)) {
+            // Deleted-file fallback is change-mode only: an audit has no old side.
+            if (snapshot.content === null && ctx.changeSet?.files.some((file) => file.status === "deleted" && file.path === snapshot!.path)) {
               snapshot = await readReviewFile(ctx, rel, "merge-base");
             }
             if (snapshot.content === null) throw new Error(`File not found in pinned head (or an entirely deleted file at merge-base): ${rel}`);

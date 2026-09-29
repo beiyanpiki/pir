@@ -214,18 +214,12 @@ export async function verifyFix(
   }
 
   const head = await getHeadCommit(ctx.repoRoot);
+  // No synthetic changeSet: fix verification reads current code at head.
+  // Aliasing base/merge-base to head would silently serve post-fix content
+  // to revision="base" requests instead of failing explicitly.
   const toolCtx: ToolContext = {
     repoRoot: ctx.repoRoot,
     headCommit: head,
-    changeSet: {
-      repoRoot: ctx.repoRoot,
-      base: head,
-      head,
-      mergeBase: head,
-      files: [],
-      patch: "",
-      churn: 0,
-    },
     codeMap: ctx.codeMap,
     memory: ctx.memory,
   };
