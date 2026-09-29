@@ -140,6 +140,48 @@ test("same-source conflict: the newer write wins", async () => {
   }
 });
 
+test("merged writeTimes keep the table-name contract and re-merge correctly", async () => {
+  const repo = createTempGitRepo("pir-sync-writetimes-");
+  const { local, remote } = await openReplicas(repo);
+  try {
+    seedFeature(local, { key: "pay", source: "user_explicit", summary: "v1" });
+    backdateWrites(local, 1000);
+    seedFeature(remote, { key: "pay", source: "user_explicit", summary: "v2" });
+    backdateWrites(remote, 2000);
+
+    const snapLocal = exportSnapshot(local.store, local.identity.projectId);
+    const snapRemote = exportSnapshot(remote.store, remote.identity.projectId);
+    const { merged } = mergeSnapshots(snapLocal, snapRemote);
+
+    // Keys are TABLE names (the exportSnapshot/timeOf namespace), never the
+    // memory-type names, and per-id times are the union of both sides.
+    assert.deepEqual(Object.keys(merged.writeTimes).sort(), [
+      "code_entities",
+      "features",
+      "finding_resolutions",
+      "issue_memories",
+      "project_memories",
+    ]);
+    const localId = snapLocal.tables.features.find((f) => f.key === "pay").id;
+    const remoteId = snapRemote.tables.features.find((f) => f.key === "pay").id;
+    assert.equal(merged.writeTimes.features[localId], 1000);
+    assert.equal(merged.writeTimes.features[remoteId], 2000);
+
+    // A merged snapshot is itself a valid merge input: against a third replica
+    // holding an older-timestamped rewrite of the same key, the timestamps
+    // carried inside `merged` must keep LWW working.
+    const third = structuredClone(snapLocal);
+    third.tables.features[0].summary = "v3";
+    third.writeTimes.features[localId] = 1500;
+    const { merged: chained } = mergeSnapshots(merged, third);
+    assert.equal(chained.tables.features.find((f) => f.key === "pay").summary, "v2");
+  } finally {
+    local.close();
+    remote.close();
+    repo.cleanup();
+  }
+});
+
 test("features with per-replica ids collapse to one id; feature_entities unions and remaps", async () => {
   const repo = createTempGitRepo("pir-sync-links-");
   const { local, remote } = await openReplicas(repo);

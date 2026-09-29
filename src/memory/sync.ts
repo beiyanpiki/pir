@@ -425,9 +425,10 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
   stats.tables.issue_memories = issues.stats;
   stats.tables.finding_resolutions = resolutions.stats;
 
+  // writeTimes carry the versioned tables only (the map's VALUES — its keys
+  // are memory-type names, a different namespace than snapshot writeTimes).
   const writeTimes: Record<string, Record<string, number>> = {};
-  for (const table of Object.keys(MEMORY_TYPE_TO_TABLE) as SyncTableName[]) {
-    if (table === "feature_entities" || table === "projects") continue;
+  for (const table of Object.values(MEMORY_TYPE_TO_TABLE)) {
     writeTimes[table] = {};
     for (const source of [local, remote]) {
       for (const [id, ts] of Object.entries(source.writeTimes[table] ?? {})) {
