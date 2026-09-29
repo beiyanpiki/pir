@@ -37,6 +37,11 @@ ENV HOME=/home/pi \
 COPY --from=build /build/node_modules /app/node_modules
 COPY --from=build /build/dist /app/dist
 COPY package.json /app/package.json
+# Built-in language packs (dist/plugins/loader.js resolves ../../plugins) and
+# the shipped skill (dist/cli/executor.js resolves ../../skills) are runtime
+# data, not build inputs — without them every review fails at pack loading.
+COPY plugins /app/plugins
+COPY skills /app/skills
 COPY docker/entrypoint.sh /usr/local/bin/pir-entrypoint
 COPY docker/auth-seed.cjs /usr/local/bin/pir-auth-seed
 RUN chmod +x /app/dist/cli/cli.js /usr/local/bin/pir-entrypoint \

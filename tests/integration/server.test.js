@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, existsSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, existsSync, readdirSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -234,6 +234,101 @@ test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree
   } finally {
     await review.cleanup();
   }
+});
+
+test("materializeFromBundle rebuilds a corrupt bundle-cache repo from a full bundle", async (t) => {
+  const repo = createTempGitRepo("pir-heal-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-heal-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-heal-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("base change");
+  repo.write("src/b.ts", "export const b = 2;\n");
+  const headCommit = repo.commit("head change");
+
+  const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+  const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+  const meta = { remoteUrl, rootCommit, base: null, head: headCommit };
+  const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+
+  // First contact populates the per-project bundle cache.
+  const first = await materializeFromBundle(bundle, meta);
+  await first.review.cleanup();
+
+  // The incident failure mode: an interrupted gc/repack across a container
+  // redeploy leaves packfiles that no longer match their index — refs survive
+  // while their objects are unreadable, so every subsequent fetch fails.
+  const cacheDir = path.join(reposRoot, projectIdFor(remoteUrl, rootCommit));
+  for (const pack of readdirSync(path.join(cacheDir, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))) {
+    const packPath = path.join(cacheDir, ".git", "objects", "pack", pack);
+    chmodSync(packPath, 0o644);
+    truncateSync(packPath, 100);
+  }
+
+  const healed = await materializeFromBundle(bundle, meta);
+  try {
+    assert.equal(healed.review.headCommit, headCommit);
+    assert.ok(existsSync(path.join(cacheDir, ".git", "objects")), "cache repo was rebuilt, not left headless");
+  } finally {
+    await healed.review.cleanup();
+  }
+});
+
+test("materializeFromBundle never wipes a project dir that backs a registered repo", async (t) => {
+  const repo = createTempGitRepo("pir-keepreg-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-keepreg-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-keepreg-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("base change");
+  repo.write("src/b.ts", "export const b = 2;\n");
+  const headCommit = repo.commit("head change");
+
+  const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+  const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+  const meta = { remoteUrl, rootCommit, base: null, head: headCommit };
+  const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+
+  const first = await materializeFromBundle(bundle, meta);
+  await first.review.cleanup();
+
+  const projectId = projectIdFor(remoteUrl, rootCommit);
+  // Same projectId as the bundle cache: the registered clone must win.
+  writeFileSync(
+    path.join(reposRoot, "repos.json"),
+    JSON.stringify({ demo: { name: "demo", url: remoteUrl, projectId, addedAt: Date.now() } }),
+  );
+  const cacheDir = path.join(reposRoot, projectId);
+  const packsBefore = readdirSync(path.join(cacheDir, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"));
+  for (const pack of packsBefore) {
+    chmodSync(path.join(cacheDir, ".git", "objects", "pack", pack), 0o644);
+    truncateSync(path.join(cacheDir, ".git", "objects", "pack", pack), 100);
+  }
+
+  await assert.rejects(materializeFromBundle(bundle, meta));
+  assert.ok(existsSync(cacheDir), "registered project dir must survive a failed full-bundle fetch");
+  const packsAfter = readdirSync(path.join(cacheDir, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"));
+  assert.deepEqual(packsAfter, packsBefore, "and it must not be silently rebuilt either");
 });
 
 test("/v1/review tolerates older clients that forward raw refs (head + argv)", async (t) => {

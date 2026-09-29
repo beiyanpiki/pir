@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import {
@@ -13,6 +13,19 @@ import {
 } from "../../dist/plugins/index.js";
 import { reviewerPrompt, verifierPrompt } from "../../dist/agents/prompts.js";
 import { runReviewerRound } from "../../dist/agents/reviewer.js";
+
+test("the docker image ships plugins/ and skills/ next to dist/", () => {
+  // loadBuiltInPacks() throws when the directory is absent, which made every
+  // server review fail on v0.3.0 images built without these COPY lines.
+  const dockerfile = readFileSync(path.resolve("Dockerfile"), "utf8");
+  assert.match(dockerfile, /^COPY plugins \/\S*\/plugins$/m, "Dockerfile must COPY plugins/ into the image");
+  assert.match(dockerfile, /^COPY skills \/\S*\/skills$/m, "Dockerfile must COPY skills/ into the image");
+  assert.doesNotMatch(
+    readFileSync(path.resolve(".dockerignore"), "utf8"),
+    /^\*\*\/\*\.md$/m,
+    ".dockerignore must not exclude the packs' nested guidance markdown",
+  );
+});
 
 test("built-in golang pack loads with a valid manifest and guidance within budget", () => {
   const packs = loadBuiltInPacks();
