@@ -66,6 +66,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     }
   }
 
+  if (argv.includes("--uncommitted") && (flags.has("--head") || argv.some((a) => a.startsWith("--head=")))) {
+    process.stderr.write("pir: --uncommitted reviews the working tree and cannot be combined with an explicit --head\n");
+    return 2;
+  }
   const headFlag = flags.get("--head");
   let head = headFlag
     ? (await git(cwd, ["rev-parse", "--verify", `${headFlag}^{commit}`])).trim()
@@ -118,7 +122,13 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   process.stderr.write(`pir: shipping local state ${!isAudit && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
   // Audits ship a full-history bundle from the start (there is no thin/base
   // form to miss); find keeps its thin-first, one-retry-full strategy.
-  let response = await send(!isAudit && base !== null);
+  let response: Response;
+  try {
+    response = await send(!isAudit && base !== null);
+  } catch (err) {
+    process.stderr.write(`pir: cannot reach ${url.origin}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 3;
+  }
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);

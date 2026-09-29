@@ -131,7 +131,13 @@ function parseGitPaths(line: string): { a?: string; b?: string } {
 
 function unquoteAPrefix(token: string): string | undefined {
   if (token.startsWith('"') && token.endsWith('"')) {
-    return stripAPrefix(JSON.parse(token) as string);
+    // A malformed quoted token must degrade to its raw text, not crash the
+    // whole parse (git emits C-quoted paths for any non-ASCII bytes).
+    try {
+      return stripAPrefix(JSON.parse(token) as string);
+    } catch {
+      return stripAPrefix(token.slice(1, -1));
+    }
   }
   return stripAPrefix(token);
 }

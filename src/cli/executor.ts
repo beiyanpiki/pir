@@ -84,7 +84,8 @@ Audit options (current-state review; no diff, no change attribution):
                       support * ** ?; a plain value acts as a file/dir prefix
   --head <ref>        snapshot commit to audit (default: HEAD). The committed
                       tree only: uncommitted changes are never audited
-  --max-tokens <n>    whole-run token budget across all units (default 400K)
+  --max-tokens <n>    optional whole-run token budget across all units;
+                      unlimited unless set (rounds and findings still cap)
   --max-findings <n>  whole-run cap on reported findings (default 10)
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
   Coverage is process accounting: "reviewed" means the allotted sessions
@@ -337,6 +338,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   if (flags.get("--uncommitted")) {
     if (command !== "find") throw new UsageError("--uncommitted applies to find only");
     if (flags.get("--repo")) throw new UsageError("--uncommitted and --repo are mutually exclusive");
+    if (flags.has("--head")) throw new UsageError("--uncommitted and --head are mutually exclusive");
     const { createWorkingTreeSnapshot } = await import("../changes/git.js");
     const snapshot = await createWorkingTreeSnapshot(cwd);
     flags.delete("--uncommitted");

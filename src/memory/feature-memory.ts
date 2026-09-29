@@ -163,6 +163,8 @@ export class FeaturesRepo {
     } else {
       if (!draft.responsibilities.includes(text)) draft.responsibilities.push(text);
     }
-    this.upsert({ ...draft, source: "user_explicit", confidence: 1, stale: false, validatedAtCommit: commit });
+    // Keep the existing stale flag (see entities: appending is not revalidation).
+    const stale = existing ? existing.stale : false;
+    this.upsert({ ...draft, source: "user_explicit", confidence: 1, stale, validatedAtCommit: commit });
   }
 }

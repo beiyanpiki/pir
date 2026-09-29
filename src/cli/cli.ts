@@ -2,7 +2,7 @@
 import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, parseArgs } from "./executor.js";
 import { drainAndExit } from "./exit.js";
-import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard } from "./config.js";
+import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
 const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version"]);
@@ -19,7 +19,18 @@ function isLocalSync(argv: string[]): boolean {
 
 async function main(argv: string[]): Promise<number> {
   const command = firstPositional(argv);
-  let config = loadUserConfig();
+  let config: UserConfig | null = null;
+  try {
+    config = loadUserConfig();
+  } catch (err) {
+    // A corrupt config.json must not brick the whole CLI — least of all
+    // `pir config`, the documented way out. Other commands fail loudly.
+    if (command === "config" || command === "help" || command === undefined || command === "version") {
+      process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)} (continuing; 'pir config reset' removes the file)\n`);
+    } else {
+      throw err;
+    }
+  }
 
   if (!config && shouldRunWizard(argv, command)) {
     config = await runWizard();

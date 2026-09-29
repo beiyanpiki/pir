@@ -49,42 +49,46 @@ export class AuditStore {
     private readonly projectId: string,
   ) {}
 
-  /** Persist the full ledger for a finished (or stopped) audit run. */
-  async persistRunState(runId: string, state: AuditRunState): Promise<void> {
+  /** Persist the full ledger for a finished (or stopped) audit run — atomically. */
+  persistRunState(runId: string, state: AuditRunState): void {
     const now = Date.now();
-    this.store.run(
-      "UPDATE review_runs SET target = ? WHERE id = ? AND project_id = ?",
-      JSON.stringify(state.snapshot),
-      runId,
-      this.projectId,
-    );
-    this.store.run("DELETE FROM audit_work_units WHERE run_id = ?", runId);
-    for (const unit of state.units) {
+    // One transaction: a failure mid-write must not leave the ledger with
+    // deleted-but-not-reinserted rows.
+    this.store.transaction(() => {
       this.store.run(
-        "INSERT INTO audit_work_units (run_id, unit_id, state, attempts, files, reason, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "UPDATE review_runs SET target = ? WHERE id = ? AND project_id = ?",
+        JSON.stringify(state.snapshot),
         runId,
-        unit.unitId,
-        unit.state,
-        unit.attempts,
-        unit.files,
-        unit.reason ?? null,
-        now,
+        this.projectId,
       );
-    }
-    this.store.run("DELETE FROM audit_file_coverage WHERE run_id = ?", runId);
-    for (const file of state.files) {
-      this.store.run(
-        "INSERT INTO audit_file_coverage (run_id, path, blob_id, state, reason, ranges_total, ranges_reviewed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        runId,
-        file.path,
-        file.blobId,
-        file.state,
-        file.reason ?? null,
-        file.rangesTotal,
-        file.rangesReviewed,
-        now,
-      );
-    }
+      this.store.run("DELETE FROM audit_work_units WHERE run_id = ?", runId);
+      for (const unit of state.units) {
+        this.store.run(
+          "INSERT INTO audit_work_units (run_id, unit_id, state, attempts, files, reason, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+          runId,
+          unit.unitId,
+          unit.state,
+          unit.attempts,
+          unit.files,
+          unit.reason ?? null,
+          now,
+        );
+      }
+      this.store.run("DELETE FROM audit_file_coverage WHERE run_id = ?", runId);
+      for (const file of state.files) {
+        this.store.run(
+          "INSERT INTO audit_file_coverage (run_id, path, blob_id, state, reason, ranges_total, ranges_reviewed, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          runId,
+          file.path,
+          file.blobId,
+          file.state,
+          file.reason ?? null,
+          file.rangesTotal,
+          file.rangesReviewed,
+          now,
+        );
+      }
+    });
   }
 
   units(runId: string): AuditUnitRow[] {

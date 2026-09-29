@@ -200,7 +200,10 @@ export class EntitiesRepo {
     } else {
       if (!draft.notes.includes(text)) draft.notes.push(text);
     }
-    return this.upsert({ ...draft, source: "user_explicit", lastSeenCommit: commit ?? draft.lastSeenCommit, stale: false });
+    // Keep the existing stale flag: appending text does not revalidate the
+    // stored summary against the current code (only hash matching clears it).
+    const stale = existing ? existing.stale : false;
+    return this.upsert({ ...draft, source: "user_explicit", lastSeenCommit: commit ?? draft.lastSeenCommit, stale });
   }
 
   markSeen(symbolKey: string, commit: string): void {

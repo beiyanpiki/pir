@@ -80,7 +80,6 @@ export interface FindOutcome {
 }
 
 const DEFAULT_MAX_ROUNDS = 2;
-const DEFAULT_MAX_TOKENS = 400_000;
 const DEFAULT_MAX_VERIFICATIONS = 8;
 const DEFAULT_MAX_FINDINGS = 10;
 /** Audit: discovery attempts per work unit before it settles as reviewed/blocked. */
@@ -176,7 +175,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const budget = new Budget({
     maxRounds,
-    maxTokens: positiveInteger(options.maxTokens ?? DEFAULT_MAX_TOKENS, "maxTokens"),
+    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 
@@ -268,7 +267,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       else if (drained.feedbackVerdicts.length) {
         state.focus = [...new Set([...drained.feedbackVerdicts.filter((v) => v.verdict === "uncertain").map((v) => v.codeFeedback!), ...state.focus])].slice(0, 16);
       }
-      calculateInformationGain(state, freshCount, drained.verified);
+      // Information gain counts non-rejected verdicts; drained.verified
+      // includes rejections, which are dry by definition.
+      calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
       deps.onProgress?.({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
     }
   } catch (error) {
@@ -410,7 +411,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
   const budget = new Budget({
     maxRounds: Number.MAX_SAFE_INTEGER,
-    maxTokens: positiveInteger(options.maxTokens ?? DEFAULT_MAX_TOKENS, "maxTokens"),
+    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 

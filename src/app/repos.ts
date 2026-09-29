@@ -34,6 +34,11 @@ export interface RepoEntry {
 }
 
 export function reposRoot(): string {
+  // HOME may legitimately be unset (containers, systemd services, CI): fail
+  // with actionable guidance instead of a bare TypeError from path.join.
+  if (!process.env.PIR_REPOS_ROOT && !process.env.XDG_DATA_HOME && !process.env.HOME) {
+    throw new Error("cannot locate the repos root: HOME and XDG_DATA_HOME are unset (set PIR_REPOS_ROOT)");
+  }
   const root = process.env.PIR_REPOS_ROOT ?? path.join(process.env.XDG_DATA_HOME ?? path.join(process.env.HOME!, ".local", "share"), "pir", "repos");
   mkdirSync(root, { recursive: true });
   return root;
@@ -328,11 +333,17 @@ export async function materializeFromBundle(
   const projectId = projectIdFor(meta.remoteUrl, meta.rootCommit);
   const dir = repoDirFor(projectId);
   const isNew = !existsSync(dir);
-  if (isNew) mkdirSync(dir, { recursive: true });
 
+  // Write the bundle temp file BEFORE creating the repo dir: a failed write
+  // (ENOSPC/EACCES on tmpdir) must not leave a poisoned empty repo behind.
   const bundleFile = path.join(tmpdir(), `pir-bundle-${randomUUID()}.bundle`);
   const { writeFile } = await import("node:fs/promises");
-  await writeFile(bundleFile, bundle);
+  try {
+    await writeFile(bundleFile, bundle);
+  } catch (err) {
+    throw new Error(`failed to write bundle temp file ${bundleFile}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (isNew) mkdirSync(dir, { recursive: true });
 
   try {
     if (isNew) await git(dir, ["init", "--quiet"]);

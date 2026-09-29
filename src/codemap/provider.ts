@@ -72,11 +72,15 @@ export class DegradedCodeMap implements CodeMapProvider {
   }
 
   async fileOverview(): Promise<FileSummary[]> {
+    // Async walk: yields the event loop between directories so a large repo
+    // cannot stall concurrent work, and lstat-only so symlinked directories
+    // are never followed (no recursion loops, no escaping the repo root).
+    const { readdir, lstat } = await import("node:fs/promises");
     const out: FileSummary[] = [];
-    const walk = (dir: string): void => {
+    const walk = async (dir: string): Promise<void> => {
       let entries;
       try {
-        entries = readdirSync(dir);
+        entries = await readdir(dir);
       } catch {
         return;
       }
@@ -85,12 +89,12 @@ export class DegradedCodeMap implements CodeMapProvider {
         const full = path.join(dir, entry);
         let st;
         try {
-          st = statSync(full);
+          st = await lstat(full);
         } catch {
           continue;
         }
         if (st.isDirectory()) {
-          walk(full);
+          await walk(full);
         } else if (st.isFile() && TEXT_EXTENSIONS.has(path.extname(entry).slice(1).toLowerCase())) {
           const rel = path.relative(this.repoRoot, full);
           if (!isListable(rel)) continue;
@@ -98,7 +102,7 @@ export class DegradedCodeMap implements CodeMapProvider {
         }
       }
     };
-    walk(this.repoRoot);
+    await walk(this.repoRoot);
     return out;
   }
 
