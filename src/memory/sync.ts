@@ -425,7 +425,14 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
       const merged: SyncRow = { ...lp };
       merged.remote = pickField(lp.remote, rp.remote);
       merged.normalized_remote = pickField(lp.normalized_remote, rp.normalized_remote);
-      merged.last_indexed_commit = pickField(lp.last_indexed_commit, rp.last_indexed_commit);
+      // last_indexed_commit is machine-local git state: a foreign SHA need not
+      // be an ancestor of this replica's HEAD, and incremental refresh diffs
+      // against it. Keep it only when both replicas agree; on divergence (or a
+      // one-sided pointer) drop it so the next refresh re-indexes fully.
+      merged.last_indexed_commit =
+        lp.last_indexed_commit != null && lp.last_indexed_commit === rp.last_indexed_commit
+          ? lp.last_indexed_commit
+          : null;
       merged.created_at = Math.min(Number(lp.created_at), Number(rp.created_at));
       stats.tables.projects[canonical(lp) === canonical(rp) ? "bothIdentical" : "merged"] += 1;
       projects.push(merged);
@@ -486,25 +493,32 @@ export function mergeSnapshots(local: MemorySnapshot, remote: MemorySnapshot): S
   // Link pairs follow the surviving feature/entity ids; union both sides.
   const featureIds = new Set(features.rows.map((r) => String(r.id)));
   const entityIds = new Set(entities.rows.map((r) => String(r.id)));
-  const pairs = new Set<string>();
-  for (const row of [...local.tables.feature_entities, ...remote.tables.feature_entities]) {
+  const pairKeyOf = (row: SyncRow): string | null => {
     const featureId = features.idRemap.get(String(row.feature_id));
     const entityId = entities.idRemap.get(String(row.entity_id));
-    if (!featureId || !entityId) continue; // orphaned link — drop defensively
-    if (!featureIds.has(featureId) || !entityIds.has(entityId)) continue;
-    pairs.add(JSON.stringify([featureId, entityId]));
-  }
+    if (!featureId || !entityId) return null; // orphaned link — drop defensively
+    if (!featureIds.has(featureId) || !entityIds.has(entityId)) return null;
+    return JSON.stringify([featureId, entityId]);
+  };
+  const localKeys = new Set(
+    local.tables.feature_entities.map(pairKeyOf).filter((key): key is string => key !== null),
+  );
+  const remoteKeys = new Set(
+    remote.tables.feature_entities.map(pairKeyOf).filter((key): key is string => key !== null),
+  );
+  const pairs = new Set([...localKeys, ...remoteKeys]);
   const featureEntities = [...pairs]
     .map((p) => {
       const [featureId, entityId] = JSON.parse(p) as [string, string];
       return { feature_id: featureId, entity_id: entityId };
     })
     .sort((a, b) => (a.feature_id === b.feature_id ? (a.entity_id < b.entity_id ? -1 : 1) : a.feature_id < b.feature_id ? -1 : 1));
+  // Count real deltas (like every other table) so push/pull reporting stays honest.
   stats.tables.feature_entities = {
     ...tableSpec("feature_entities"),
-    localOnly: local.tables.feature_entities.length,
-    remoteOnly: remote.tables.feature_entities.length,
-    bothIdentical: featureEntities.length,
+    localOnly: [...localKeys].filter((key) => !remoteKeys.has(key)).length,
+    remoteOnly: [...remoteKeys].filter((key) => !localKeys.has(key)).length,
+    bothIdentical: [...localKeys].filter((key) => remoteKeys.has(key)).length,
   };
 
   stats.tables.project_memories = projectMemories.stats;
