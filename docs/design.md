@@ -497,7 +497,7 @@ resolution: explicit `dbPath` > `PIR_MEMORY_DB` > `PIR_STATE_IN_PROJECT=1` →
 XDG state dir per project.
 
 Append-only ordered migrations tracked in `_migrations`; current schema
-version 3. Tables:
+version 4. Tables:
 
 | Table | Layer / purpose |
 |---|---|
@@ -506,7 +506,7 @@ version 3. Tables:
 | `features`, `code_entities`, `feature_entities` | feature & entity layers (+ link table) |
 | `issue_memories` | decision layer (indexed by fingerprint + scope) |
 | `findings`, `finding_evidence`, `review_runs` | run artifacts |
-| `finding_resolutions` | fix memory |
+| `finding_resolutions` | fix memory (project-scoped; safe in a shared DB) |
 | `feedback_events` | append-only audit log |
 | `memory_versions` | per-record version log — write-time source for sync LWW |
 

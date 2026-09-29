@@ -29,6 +29,7 @@ export type ResolutionDraft = Omit<FindingResolution, "id" | "createdAt">;
 
 interface Row {
   id: string;
+  project_id: string | null;
   finding_id: string;
   fingerprint: string;
   feature_key: string | null;
@@ -81,9 +82,10 @@ export class ResolutionsRepo {
     const id = randomUUID();
     const createdAt = Date.now();
     this.store.run(
-      `INSERT INTO finding_resolutions (id, finding_id, fingerprint, feature_key, entity_key, category, original_claim, original_trigger, resolution, explanation, before_commit, after_commit, before_code_hash, after_code_hash, fix_commit, fix_diff_hash, verified, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO finding_resolutions (id, project_id, finding_id, fingerprint, feature_key, entity_key, category, original_claim, original_trigger, resolution, explanation, before_commit, after_commit, before_code_hash, after_code_hash, fix_commit, fix_diff_hash, verified, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
+      this.projectId,
       draft.findingId,
       draft.fingerprint,
       draft.featureKey,
@@ -107,13 +109,14 @@ export class ResolutionsRepo {
   }
 
   markVerified(id: string, afterCommit: string | null, fixCommit: string | null): void {
-    const current = this.store.get<Row>("SELECT * FROM finding_resolutions WHERE id = ?", id);
+    const current = this.store.get<Row>("SELECT * FROM finding_resolutions WHERE id = ? AND project_id = ?", id, this.projectId);
     if (!current) return;
     this.store.run(
-      "UPDATE finding_resolutions SET verified = 1, after_commit = COALESCE(?, after_commit), fix_commit = COALESCE(?, fix_commit) WHERE id = ?",
+      "UPDATE finding_resolutions SET verified = 1, after_commit = COALESCE(?, after_commit), fix_commit = COALESCE(?, fix_commit) WHERE id = ? AND project_id = ?",
       afterCommit,
       fixCommit,
       id,
+      this.projectId,
     );
     // Versioned so sync's last-write-wins sees verification, not just inserts.
     this.store.recordMemoryVersion(
@@ -126,20 +129,25 @@ export class ResolutionsRepo {
 
   byFingerprint(fingerprint: string): FindingResolution[] {
     return this.store
-      .all<Row>("SELECT * FROM finding_resolutions WHERE fingerprint = ?", fingerprint)
+      .all<Row>("SELECT * FROM finding_resolutions WHERE project_id = ? AND fingerprint = ?", this.projectId, fingerprint)
       .map(toDomain);
   }
 
   byFindingId(findingId: string): FindingResolution[] {
     return this.store
-      .all<Row>("SELECT * FROM finding_resolutions WHERE finding_id = ? ORDER BY created_at DESC", findingId)
+      .all<Row>(
+        "SELECT * FROM finding_resolutions WHERE project_id = ? AND finding_id = ? ORDER BY created_at DESC",
+        this.projectId,
+        findingId,
+      )
       .map(toDomain);
   }
 
   byEntityOrFeature(input: { featureKey?: string; entityKey?: string }, limit = 20): FindingResolution[] {
     if (input.entityKey) {
       const rows = this.store.all<Row>(
-        "SELECT * FROM finding_resolutions WHERE entity_key = ? ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM finding_resolutions WHERE project_id = ? AND entity_key = ? ORDER BY created_at DESC LIMIT ?",
+        this.projectId,
         input.entityKey,
         limit,
       );
@@ -148,7 +156,8 @@ export class ResolutionsRepo {
     if (input.featureKey) {
       return this.store
         .all<Row>(
-          "SELECT * FROM finding_resolutions WHERE feature_key = ? ORDER BY created_at DESC LIMIT ?",
+          "SELECT * FROM finding_resolutions WHERE project_id = ? AND feature_key = ? ORDER BY created_at DESC LIMIT ?",
+          this.projectId,
           input.featureKey,
           limit,
         )
@@ -161,7 +170,8 @@ export class ResolutionsRepo {
   verifiedFixes(limit = 50): FindingResolution[] {
     return this.store
       .all<Row>(
-        "SELECT * FROM finding_resolutions WHERE verified = 1 AND resolution = 'fixed' ORDER BY created_at DESC LIMIT ?",
+        "SELECT * FROM finding_resolutions WHERE project_id = ? AND verified = 1 AND resolution = 'fixed' ORDER BY created_at DESC LIMIT ?",
+        this.projectId,
         limit,
       )
       .map(toDomain);
@@ -169,7 +179,11 @@ export class ResolutionsRepo {
 
   recent(limit = 50): FindingResolution[] {
     return this.store
-      .all<Row>("SELECT * FROM finding_resolutions ORDER BY created_at DESC LIMIT ?", limit)
+      .all<Row>(
+        "SELECT * FROM finding_resolutions WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+        this.projectId,
+        limit,
+      )
       .map(toDomain);
   }
 }

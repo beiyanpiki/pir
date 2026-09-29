@@ -35,7 +35,7 @@ const COLUMNS = {
     "valid_until_commit", "stale",
   ],
   finding_resolutions: [
-    "id", "finding_id", "fingerprint", "feature_key", "entity_key", "category", "original_claim",
+    "id", "project_id", "finding_id", "fingerprint", "feature_key", "entity_key", "category", "original_claim",
     "original_trigger", "resolution", "explanation", "before_commit", "after_commit",
     "before_code_hash", "after_code_hash", "fix_commit", "fix_diff_hash", "verified", "created_at",
   ],
@@ -147,8 +147,7 @@ export function exportSnapshot(store: SqliteStore, projectId: string): MemorySna
         projectId,
       ),
       issue_memories: projectScoped("issue_memories"),
-      // No project_id column — a memory DB holds exactly one project.
-      finding_resolutions: store.all<SyncRow>(selectSql("finding_resolutions", "1 = 1")),
+      finding_resolutions: projectScoped("finding_resolutions"),
     },
     writeTimes,
   };
@@ -635,14 +634,14 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
     replaceByKey("features", "key");
     replaceByKey("code_entities", "symbol_key");
 
-    // Fingerprinted rows replace per group: a merge can swap which replica's
-    // history survives for a fingerprint, and a plain upsert would keep the
-    // losing twin rows alive beside the winners. Fingerprint-less rows have
-    // no natural key and keep the plain upsert-by-id.
+    // Fingerprinted rows replace per group, scoped to this project: a merge
+    // can swap which replica's history survives for a fingerprint, and a
+    // plain upsert would keep the losing twin rows alive beside the winners.
+    // Fingerprint-less rows have no natural key and keep the plain
+    // upsert-by-id.
     const replaceByFingerprint = (table: "issue_memories" | "finding_resolutions"): void => {
       const cols = COLUMNS[table];
       const { sql, values } = insertValues(table);
-      const scoped = table === "issue_memories"; // finding_resolutions has no project_id
       const groups = new Map<string, SyncRow[]>();
       const unkeyed: SyncRow[] = [];
       for (const row of snapshot.tables[table]) {
@@ -650,11 +649,9 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
         else groups.set(String(row.fingerprint), [...(groups.get(String(row.fingerprint)) ?? []), row]);
       }
       for (const [fp, groupRows] of groups) {
-        const where = scoped ? "project_id = ? AND fingerprint = ?" : "fingerprint = ?";
-        const args = scoped ? [projectId, fp] : [fp];
-        const existing = store.all<SyncRow>(selectSql(table, where), ...args);
+        const existing = store.all<SyncRow>(selectSql(table, "project_id = ? AND fingerprint = ?"), projectId, fp);
         if (existing.length === groupRows.length && canonicalGroup(existing) === canonicalGroup(groupRows)) continue;
-        store.run(`DELETE FROM ${table} WHERE ${where}`, ...args);
+        store.run(`DELETE FROM ${table} WHERE project_id = ? AND fingerprint = ?`, projectId, fp);
         for (const row of groupRows) {
           store.run(sql, ...values(row));
           store.recordMemoryVersion(TABLE_TO_MEMORY_TYPE[table]!, String(row.id), row, "sync");
@@ -675,20 +672,26 @@ export function applySnapshot(store: SqliteStore, projectId: string, snapshot: M
     replaceByFingerprint("issue_memories");
     replaceByFingerprint("finding_resolutions");
 
-    // Rewrite the link table wholesale: applying a merge can swap a
-    // feature/entity row's id (natural-key replace), which orphans the old
-    // pairs — a scoped delete would miss exactly those. A memory DB holds
-    // one project and links are fully derived state, so delete-all + insert
-    // is both correct and simple.
+    // Rewrite the link table in the project's scope: applying a merge can
+    // swap a feature/entity row's id (natural-key replace), which orphans
+    // the old pairs, so double-dangling orphans are cleaned too — a plain
+    // membership-scoped delete would miss exactly those. Other projects'
+    // pairs in a shared DB (PIR_MEMORY_DB / dbPath override) stay untouched;
+    // links are fully derived state, so scoped delete-all + insert is both
+    // correct and simple.
+    const pairScope =
+      "feature_id IN (SELECT id FROM features WHERE project_id = ?) " +
+      "OR entity_id IN (SELECT id FROM code_entities WHERE project_id = ?) " +
+      "OR (feature_id NOT IN (SELECT id FROM features) AND entity_id NOT IN (SELECT id FROM code_entities))";
     const currentPairs = store
-      .all<SyncRow>(selectSql("feature_entities", "1 = 1"))
+      .all<SyncRow>(selectSql("feature_entities", pairScope), projectId, projectId)
       .map((r) => JSON.stringify([r.feature_id, r.entity_id]))
       .sort();
     const mergedPairs = snapshot.tables.feature_entities
       .map((r) => JSON.stringify([r.feature_id, r.entity_id]))
       .sort();
     if (JSON.stringify(currentPairs) !== JSON.stringify(mergedPairs)) {
-      store.run("DELETE FROM feature_entities");
+      store.run(`DELETE FROM feature_entities WHERE ${pairScope}`, projectId, projectId);
       for (const pair of snapshot.tables.feature_entities) {
         store.run(
           "INSERT OR IGNORE INTO feature_entities (feature_id, entity_id) VALUES (?, ?)",
