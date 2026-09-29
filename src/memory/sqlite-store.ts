@@ -17,9 +17,12 @@ export class SqliteStore {
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const db = new DatabaseSync(dbPath);
+    // busy_timeout first: setting journal_mode takes a write lock, and two
+    // processes opening the same fresh DB must not fail with "database is
+    // locked" before the timeout is even in place.
+    db.exec("PRAGMA busy_timeout = 5000");
     db.exec("PRAGMA journal_mode = WAL");
     db.exec("PRAGMA foreign_keys = ON");
-    db.exec("PRAGMA busy_timeout = 5000");
     const store = new SqliteStore(db, dbPath);
     store.migrate();
     return store;
@@ -35,10 +38,15 @@ export class SqliteStore {
     for (const migration of MIGRATIONS) {
       if (migration.version <= current) continue;
       this.transaction(() => {
-        for (const statement of migration.statements) this.db.exec(statement);
-        this.db
-          .prepare("INSERT INTO _migrations (version, applied_at) VALUES (?, ?)")
+        // Claim the version first: with two connections racing to open the
+        // same fresh DB, the loser of the claim skips instead of failing on
+        // a UNIQUE _migrations violation. Statement and claim commit or
+        // roll back together.
+        const claim = this.db
+          .prepare("INSERT OR IGNORE INTO _migrations (version, applied_at) VALUES (?, ?)")
           .run(migration.version, Date.now());
+        if (claim.changes === 0) return;
+        for (const statement of migration.statements) this.db.exec(statement);
       });
     }
   }
