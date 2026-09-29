@@ -1,0 +1,5052 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-09-29T03:21:29.610Z",
+  "finishedAt": "2026-09-29T03:37:29.396Z",
+  "node": "v26.7.0",
+  "model": "zai-coding-cn/glm-5.3",
+  "config": {
+    "model": "zai-coding-cn/glm-5.3-flash",
+    "thinking": "low",
+    "hashes": {
+      "agent/settings.json": "03fef3c0973ae180b55256de33db8665a0af01ce97d25c0deb818f1adbc0cb6b",
+      "agent/models-store.json": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    }
+  },
+  "limits": {
+    "maxRounds": 2,
+    "maxTokens": 400000,
+    "maxFindings": 10,
+    "timeoutMs": 900000
+  },
+  "repeats": 1,
+  "variants": [
+    {
+      "name": "baseline",
+      "cli": "/home/miku/review-agents-baseline/dist/cli/cli.js",
+      "sha256": "4f089dfabd244cea1f593ccfdc20cece44d97082bc0d149ed71bdb56bc281d36"
+    },
+    {
+      "name": "candidate",
+      "cli": "/home/miku/review-agents-review-loop/dist/cli/cli.js",
+      "sha256": "4f089dfabd244cea1f593ccfdc20cece44d97082bc0d149ed71bdb56bc281d36"
+    }
+  ],
+  "seedCli": "/home/miku/review-agents-baseline/dist/cli/cli.js",
+  "fixtures": [
+    {
+      "scenario": "real-bug",
+      "description": "A changed counter violates its established contract.",
+      "expectations": [
+        {
+          "id": "counter-double-increment",
+          "claimLike": "increment|off.by.one|two|twice|\\+\\s*2",
+          "locations": [
+            {
+              "path": "src/counter.ts",
+              "startLine": 2,
+              "endLine": 3
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "1583838e3bb0ccdb6de7b5c4927fe6c2bec054aa",
+      "head": "f58550c17d0fca07374a0781ad18a4a259b43987",
+      "tree": "38528f98318ac927fc6eb4155dd59c5d0f367e1e",
+      "diffSha256": "a02ac42a8017a8405d6427cabdee0af69eb6528d73fbce5870c6d635b2c2f2b0",
+      "seedDbSha256": "7dbc365eae67dd762976aa2012a82fd388d79df0c8f888882a2eab1f0973806e"
+    },
+    {
+      "scenario": "preexisting-bug-unchanged",
+      "description": "An old defect is outside the changed lines.",
+      "expectations": [
+        {
+          "id": "old-double-increment",
+          "claimLike": "increment|off.by.one|two|twice",
+          "locations": [
+            {
+              "path": "src/counter.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": false,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "36c8d57cdcc15776ce3d8a616cb3bf8fe81f4d1c",
+      "head": "c6371d593deecdb16807598e2288c505905482bb",
+      "tree": "5d28e27e744511def6bbe03ee6d6d71b8dd5be9d",
+      "diffSha256": "6b92a945a2760e6be0bcb324f65187b9831b478624e229cc301f58ec213fa62f",
+      "seedDbSha256": "eac176de6e0266e057b356f06bc61d78f49af2fa839e42607d2b61df326c85be"
+    },
+    {
+      "scenario": "guarded-negative",
+      "description": "A dominating empty-input guard makes a new division safe.",
+      "expectations": [
+        {
+          "id": "guarded-division",
+          "claimLike": "zero|empty|NaN|divis",
+          "locations": [
+            {
+              "path": "src/mean.ts",
+              "startLine": 1,
+              "endLine": 5
+            }
+          ],
+          "shouldReport": false,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "7fd5809ce3018283f93d0d0ba4363cd728891334",
+      "head": "f0acf27cb6a84cfa2f267839640a2e9e6495b8ce",
+      "tree": "6e3fa2a6a1c320b946fd020b03cc1e5e80b7b715",
+      "diffSha256": "996af73303911a3b1ecf4af67903051ffcd4d6030919247a3219e5a324dc1255",
+      "seedDbSha256": "fafbbf6e89e732684cb9d49995315f607b768420de4b07793d25419c1357349b"
+    },
+    {
+      "scenario": "clean-rename-refactor",
+      "description": "An internal rename updates every caller without changing behavior.",
+      "expectations": [],
+      "base": "ecb8d75575192d767d8b5dbe375e9144f829807c",
+      "head": "a4da5d2aca00c79a7ab52efac22ec926e73fb4aa",
+      "tree": "fdc6890c06a8dd893ae96fa3fde49cc39a29b93b",
+      "diffSha256": "165ab27fc8ebfc486e2631e2f8c37f6251ea0aac9dbdef66f8ca270516006439",
+      "seedDbSha256": "4864ae1563c00bb1eae94ac0df35274147426abf143dd2d930858736469475bb"
+    },
+    {
+      "scenario": "multi-file-contract",
+      "description": "A producer changes units while its consumer still expects milliseconds.",
+      "expectations": [
+        {
+          "id": "ttl-unit-contract",
+          "claimLike": "millisecond|second|unit|expir|1000|1,000",
+          "locations": [
+            {
+              "path": "src/config.ts",
+              "startLine": 1,
+              "endLine": 3
+            },
+            {
+              "path": "src/deadline.ts",
+              "startLine": 2,
+              "endLine": 5
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "422bba2c0613d6bdeb12e8bf3c98f109363933eb",
+      "head": "cd3221ffa2a83b28b86f890e2da39845c1448925",
+      "tree": "02b229f1cfb597b6447f640529bf52aef19ee5be",
+      "diffSha256": "67b64ae07f237a1a462613ba48ea6ce063fb9a9ec3c5dcd44598bbf5a0be5920",
+      "seedDbSha256": "8f87432186c23d091c3a6546c752bae2a020a1b7be23a73a03a8a00936f15487"
+    },
+    {
+      "scenario": "large-diff-start",
+      "description": "A start-located unit error competes with a large old/new replacement hunk.",
+      "expectations": [
+        {
+          "id": "large-start-cents",
+          "claimLike": "cent|100|hundred|unit|overcharg|multipl",
+          "locations": [
+            {
+              "path": "src/catalog.ts",
+              "startLine": 1,
+              "endLine": 3
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "76f38af3e76b7f91c54233145797977dd914550a",
+      "head": "f0426d40dbc0d749a9463a19ccbd752cb4bd5e8a",
+      "tree": "5ed4b9e41d7ced9d53ff85e793dc3e288e9dbc56",
+      "diffSha256": "b11f005e87064c91ac28f98331b29eadfa8dfd73e25b5b8cd9c8f1045eaca851",
+      "seedDbSha256": "29325dda93278256d0ac4a05cdadfd4e2005298149dfd953ac07c5c4c9c47474"
+    },
+    {
+      "scenario": "large-diff-end",
+      "description": "A end-located unit error competes with a large old/new replacement hunk.",
+      "expectations": [
+        {
+          "id": "large-end-cents",
+          "claimLike": "cent|100|hundred|unit|overcharg|multipl",
+          "locations": [
+            {
+              "path": "src/catalog.ts",
+              "startLine": 1703,
+              "endLine": 1705
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "c94da6818fbf4cded6e6d8d04d404a11a94fb529",
+      "head": "846b9dc6b2abf4cd10ffd07301b61fccddc9e2b2",
+      "tree": "14bcf7f546580a2584594a1878ec405a6a9c0896",
+      "diffSha256": "50a1bdde63e5fb12a8d6b4a33d6dcdf085e570d76220a8a78e006e05eb3ff339",
+      "seedDbSha256": "2a14921a5d9958dfa4bc1574a588b2e2aea5bea69b1f70f3ce983534f5712beb"
+    },
+    {
+      "scenario": "expected-behavior-suppressed",
+      "description": "A relevant prior decision still applies to the unchanged policy.",
+      "expectations": [
+        {
+          "id": "quota-expected-policy",
+          "claimLike": "quota|attempt",
+          "locations": [
+            {
+              "path": "src/quota.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": false,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "241b698fe217b4eb593c7dc40858f1eb9bf429ae",
+      "head": "1ef63fbcf6d8f44f4e5287fbecfcd9b85536b7e6",
+      "tree": "5b4b599f6c2036890b50bb93985dc98df5031261",
+      "diffSha256": "7aa5fc3f5a884c8825f4ed317fd32ab8924a32a14f3d12def8323f7e9e3ee9a8",
+      "seedDbSha256": "e8d38c957b03dd00f05366fb647048538c263a97b27d9b94a288ef7d127eb486"
+    },
+    {
+      "scenario": "fixed-regression",
+      "description": "A verified fix is removed in the reviewed change.",
+      "expectations": [
+        {
+          "id": "returned-idempotency-regression",
+          "claimLike": "idempoten|missing.{0,30}key|null.{0,30}key|validat.{0,30}key",
+          "locations": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression",
+            "error-handling",
+            "api-misuse"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "8d60e86ba96953c5ee25252c8b55a03b3891538a",
+      "tree": "a9b2ef54c609348270fa4009aca64e885e4adaff",
+      "diffSha256": "ff3823df03f4663bce6663afc2a99bac185c5b6fe7e03d5f3f193d0a641b3c76",
+      "seedDbSha256": "2474c866369fbf945b4421810d22ba51504ae59dc7bb1e82377f3040434c2a6b"
+    },
+    {
+      "scenario": "fixed-regression-still-fixed",
+      "description": "A refactor preserves the historical fix.",
+      "expectations": [
+        {
+          "id": "preserved-idempotency-fix",
+          "claimLike": "idempoten|missing.{0,30}key|null.{0,30}key|validat.{0,30}key",
+          "locations": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": false,
+          "categories": [
+            "correctness",
+            "regression",
+            "error-handling",
+            "api-misuse"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "5b43f88004f4c4f50b3487eaca9485acced4f4af",
+      "tree": "52f49b1acee9936a99ba39ab23313d6576c64407",
+      "diffSha256": "13be450d8bbeebbccff2812cca483a2675ea3b69c4236be60745d572dd273773",
+      "seedDbSha256": "fe281c3f59c2752e0d99cd5831cbed4ccbdde34c7820a58ff22e8960c430704f"
+    },
+    {
+      "scenario": "renamed-symbol-memory-survives",
+      "description": "Feature memory remains relevant after a symbol rename.",
+      "expectations": [
+        {
+          "id": "renamed-retry-validation",
+          "claimLike": "idempoten|key|validat",
+          "locations": [
+            {
+              "path": "src/retry.ts",
+              "startLine": 1,
+              "endLine": 3
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression",
+            "error-handling",
+            "api-misuse"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "a345fc6ac701e0e3439411a213bc689f6d02e001",
+      "head": "b8ce39a0533a730848a0d4b56bca40ce555a76eb",
+      "tree": "5b938ebc484def5f33b763fd2173dbcb88c13ec1",
+      "diffSha256": "a80e4818b7353dade54424c5f5e0e60ef0640dad52d69d611a02662dc11ae643",
+      "seedDbSha256": "e4f9c92799292efde231f8d39cb158ca5a9d19d95743fab24cd9b94816dd54e2"
+    },
+    {
+      "scenario": "outdated-decision-scope",
+      "description": "An internal-tool exception does not authorize a newly added customer call site.",
+      "expectations": [
+        {
+          "id": "customer-lockout-scope",
+          "claimLike": "threshold|lock|account|failur",
+          "locations": [
+            {
+              "path": "src/account.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression",
+            "security"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "ee6c83569f90d3fad8d86ba8eafee42d4e6bd377",
+      "head": "42f3bf87f4aadaa1800cd76a3dca03e51c87970f",
+      "tree": "7c1fcd51ebade589853f16939426174ef3527692",
+      "diffSha256": "b60424cffcbd8b548c979d3ec7816a9ff3bf7ceb5207f1f75aa77bee8f3747d2",
+      "seedDbSha256": "a5e1bb2e0f6d1dcb3acb86ec6f29fdc6034cd3513545e68e9895f04175343f9d"
+    },
+    {
+      "scenario": "two-independent-bugs",
+      "description": "Two independent reports are needed; one vague finding cannot satisfy both labels.",
+      "expectations": [
+        {
+          "id": "two-bugs-counter",
+          "claimLike": "increment|off.by.one|two|twice",
+          "locations": [
+            {
+              "path": "src/counter.ts",
+              "startLine": 2,
+              "endLine": 3
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        },
+        {
+          "id": "two-bugs-idempotency",
+          "claimLike": "idempoten|missing.{0,30}key|null.{0,30}key|validat.{0,30}key",
+          "locations": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "shouldReport": true,
+          "categories": [
+            "correctness",
+            "regression",
+            "error-handling",
+            "api-misuse"
+          ],
+          "minSeverity": "P2",
+          "maxSeverity": "P1"
+        }
+      ],
+      "base": "651cde2a3c3294bab858a506c00fccb8511f6945",
+      "head": "83e21917104bab221c4300800c92dc1b6e48fb90",
+      "tree": "6c2b87f2ee2088db2fa49749cf8e2fd772a5b6ce",
+      "diffSha256": "b987dd4ac7d0ec5d4fa3f3c5a2274a98796f26007cca246b0f15320df78e7c72",
+      "seedDbSha256": "2fd97fb242f135817f0ea247a1ed2bbe25ef6323f4b7674eae5109b73aa7a1df"
+    }
+  ],
+  "runs": [
+    {
+      "scenario": "real-bug",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "1583838e3bb0ccdb6de7b5c4927fe6c2bec054aa",
+      "head": "f58550c17d0fca07374a0781ad18a4a259b43987",
+      "seedDbSha256": "7dbc365eae67dd762976aa2012a82fd388d79df0c8f888882a2eab1f0973806e",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "counter-double-increment",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 33714.742443,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 159,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "e72aab6b-5d52-4074-906e-af5cc206bc5e",
+          "displayId": "F-1",
+          "title": "Counter increments by 2 instead of 1",
+          "claim": "next(c) now returns c+2 because it adds 1 to c and then adds 1 again before returning, doubling the increment.",
+          "trigger": "Any call to next(c) — the second '+ 1' makes the return value c+2.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 3,
+              "path": "src/counter.ts",
+              "startLine": 2
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/counter.ts",
+              "startLine": 2,
+              "endLine": 3,
+              "description": "diff replaces 'return c + 1;' with 'const corrected = c + 1; return corrected + 1;' — net effect c+2"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/counter.ts lines 2-3: `const corrected = c + 1; return corrected + 1;` — next(c) returns c+2, exactly as claimed. The double increment is visible in the traced path.",
+          "round": 1,
+          "createdAt": 1790652123434
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "05d857df-55d7-4ca1-aa16-941c610cf6c1",
+          "base": "1583838e3bb0ccdb6de7b5c4927fe6c2bec054aa",
+          "head": "f58550c17d0fca07374a0781ad18a4a259b43987",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the single-file change to src/counter.ts. The refactor changed 'return c + 1' into computing 'corrected = c + 1' then returning 'corrected + 1', so next() now returns c+2 — a clear regression (P1, recorded as F-101). No other findings; no further rounds needed."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 159,
+        "findings": [
+          {
+            "id": "e72aab6b-5d52-4074-906e-af5cc206bc5e",
+            "displayId": "F-1",
+            "title": "Counter increments by 2 instead of 1",
+            "claim": "next(c) now returns c+2 because it adds 1 to c and then adds 1 again before returning, doubling the increment.",
+            "trigger": "Any call to next(c) — the second '+ 1' makes the return value c+2.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 3,
+                "path": "src/counter.ts",
+                "startLine": 2
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/counter.ts",
+                "startLine": 2,
+                "endLine": 3,
+                "description": "diff replaces 'return c + 1;' with 'const corrected = c + 1; return corrected + 1;' — net effect c+2"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/counter.ts lines 2-3: `const corrected = c + 1; return corrected + 1;` — next(c) returns c+2, exactly as claimed. The double increment is visible in the traced path.",
+            "round": 1,
+            "createdAt": 1790652123434
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "real-bug",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "1583838e3bb0ccdb6de7b5c4927fe6c2bec054aa",
+      "head": "f58550c17d0fca07374a0781ad18a4a259b43987",
+      "seedDbSha256": "7dbc365eae67dd762976aa2012a82fd388d79df0c8f888882a2eab1f0973806e",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "counter-double-increment",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 6982,
+          "outputTokens": 704,
+          "cacheReadTokens": 23360,
+          "cacheWriteTokens": 0,
+          "totalTokens": 31046,
+          "cost": 0.018945999999999998,
+          "durationMs": 39771.741108999995,
+          "toolCalls": 10,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 41130.685037,
+        "durationMs": 39827,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 31046,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "a6bc6eec-11a4-45ec-be21-39585496b530",
+          "displayId": "F-1",
+          "title": "next() now increments by 2, breaking contract",
+          "claim": "The change makes next(c) return c+2 instead of c+1, violating the documented contract that next returns \"the integer immediately following c\".",
+          "trigger": "Any call to next(c) now yields c+2 rather than c+1.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/counter.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/counter.ts",
+              "startLine": 2,
+              "endLine": 4,
+              "excerpt": "const corrected = c + 1; return corrected + 1;",
+              "description": "Changed lines: corrected = c + 1 then return corrected + 1, i.e. double increment"
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "excerpt": "next returns the integer immediately following c.",
+              "description": "Documented contract: next returns the integer immediately following c"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned head snapshot of src/counter.ts shows next(c) computing c+1 then returning that value +1, i.e. c+2. The merge-base->head diff confirms this is newly introduced (old: return c + 1). API.md (head, line 3) documents next as returning \"the integer immediately following c\", i.e. c+1. Concrete current failure: next(1) returns 3, violating the contract, caused directly by this change. No counter-evidence found (no caller/guard offsetting, and the diff shows only this change).",
+          "round": 1,
+          "createdAt": 1790652164566
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "f5db4519-e447-4eb8-b208-66a8d88bb5ba",
+          "base": "1583838e3bb0ccdb6de7b5c4927fe6c2bec054aa",
+          "head": "f58550c17d0fca07374a0781ad18a4a259b43987",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "One defect found and recorded (F-101): next() now returns c+2, violating the documented contract in API.md (\"the integer immediately following c\"). No callers/tests exist in the repo, so impact is contract-level; nothing else changed."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 31046,
+        "usage": {
+          "inputTokens": 6982,
+          "outputTokens": 704,
+          "cacheReadTokens": 23360,
+          "cacheWriteTokens": 0,
+          "totalTokens": 31046,
+          "cost": 0.018945999999999998,
+          "durationMs": 39771.741108999995,
+          "toolCalls": 10,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 39827,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "a6bc6eec-11a4-45ec-be21-39585496b530",
+            "displayId": "F-1",
+            "title": "next() now increments by 2, breaking contract",
+            "claim": "The change makes next(c) return c+2 instead of c+1, violating the documented contract that next returns \"the integer immediately following c\".",
+            "trigger": "Any call to next(c) now yields c+2 rather than c+1.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/counter.ts",
+                "startLine": 1,
+                "endLine": 4
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/counter.ts",
+                "startLine": 2,
+                "endLine": 4,
+                "excerpt": "const corrected = c + 1; return corrected + 1;",
+                "description": "Changed lines: corrected = c + 1 then return corrected + 1, i.e. double increment"
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "excerpt": "next returns the integer immediately following c.",
+                "description": "Documented contract: next returns the integer immediately following c"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned head snapshot of src/counter.ts shows next(c) computing c+1 then returning that value +1, i.e. c+2. The merge-base->head diff confirms this is newly introduced (old: return c + 1). API.md (head, line 3) documents next as returning \"the integer immediately following c\", i.e. c+1. Concrete current failure: next(1) returns 3, violating the contract, caused directly by this change. No counter-evidence found (no caller/guard offsetting, and the diff shows only this change).",
+            "round": 1,
+            "createdAt": 1790652164566
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "preexisting-bug-unchanged",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "36c8d57cdcc15776ce3d8a616cb3bf8fe81f4d1c",
+      "head": "c6371d593deecdb16807598e2288c505905482bb",
+      "seedDbSha256": "eac176de6e0266e057b356f06bc61d78f49af2fa839e42607d2b61df326c85be",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 1384,
+          "outputTokens": 224,
+          "cacheReadTokens": 15680,
+          "cacheWriteTokens": 0,
+          "totalTokens": 17288,
+          "cost": 0.007000000000000001,
+          "durationMs": 19234.146407,
+          "toolCalls": 4,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 21433.351907999997,
+        "durationMs": 19599,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 17288,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "bd25c3df-e23c-4a98-9013-4a019b6dc5b6",
+          "base": "36c8d57cdcc15776ce3d8a616cb3bf8fe81f4d1c",
+          "head": "c6371d593deecdb16807598e2288c505905482bb",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "The change is a one-line string constant change with no other references to `caption` in the repository. No defect introduced or unmasked; no findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 17288,
+        "usage": {
+          "inputTokens": 1384,
+          "outputTokens": 224,
+          "cacheReadTokens": 15680,
+          "cacheWriteTokens": 0,
+          "totalTokens": 17288,
+          "cost": 0.007000000000000001,
+          "durationMs": 19234.146407,
+          "toolCalls": 4,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 19599,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "preexisting-bug-unchanged",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "36c8d57cdcc15776ce3d8a616cb3bf8fe81f4d1c",
+      "head": "c6371d593deecdb16807598e2288c505905482bb",
+      "seedDbSha256": "eac176de6e0266e057b356f06bc61d78f49af2fa839e42607d2b61df326c85be",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 18119.512338,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 160,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "f22e7f18-5d01-45fa-af44-dd837dde35da",
+          "base": "36c8d57cdcc15776ce3d8a616cb3bf8fe81f4d1c",
+          "head": "c6371d593deecdb16807598e2288c505905482bb",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the single-line change to src/counter.ts: caption constant renamed. It has no references elsewhere; no behavioral impact. The pre-existing double increment in next() is out of scope. Nothing to report."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 160,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "guarded-negative",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "7fd5809ce3018283f93d0d0ba4363cd728891334",
+      "head": "f0acf27cb6a84cfa2f267839640a2e9e6495b8ce",
+      "seedDbSha256": "fafbbf6e89e732684cb9d49995315f607b768420de4b07793d25419c1357349b",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 8432.07725599999,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 184,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "bf8c3c19-801d-4915-9906-803b1bacae79",
+          "base": "7fd5809ce3018283f93d0d0ba4363cd728891334",
+          "head": "f0acf27cb6a84cfa2f267839640a2e9e6495b8ce",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the only changed file, src/mean.ts. The change expands the mean() implementation into a multi-line equivalent (empty-array guard, reduce sum, division) with identical semantics to the previous expression. No behavioral differences, edge-case changes, or caller impact found. No findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/mean.ts",
+              "status": "modified",
+              "additions": 3,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 184,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "guarded-negative",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "7fd5809ce3018283f93d0d0ba4363cd728891334",
+      "head": "f0acf27cb6a84cfa2f267839640a2e9e6495b8ce",
+      "seedDbSha256": "fafbbf6e89e732684cb9d49995315f607b768420de4b07793d25419c1357349b",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 1349,
+          "outputTokens": 183,
+          "cacheReadTokens": 11392,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12924,
+          "cost": 0.0056557199999999995,
+          "durationMs": 13247.64337,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 14672.55206300001,
+        "durationMs": 13292,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 12924,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "d70af905-dd2b-414a-80af-32923a5ed7c1",
+          "base": "7fd5809ce3018283f93d0d0ba4363cd728891334",
+          "head": "f0acf27cb6a84cfa2f267839640a2e9e6495b8ce",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "The change only refactors mean(): extracting the empty-array guard and total into a local variable. Input/output behavior, types, and division semantics are identical to the merge-base version. No defect introduced or unmasked; no findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/mean.ts",
+              "status": "modified",
+              "additions": 3,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 12924,
+        "usage": {
+          "inputTokens": 1349,
+          "outputTokens": 183,
+          "cacheReadTokens": 11392,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12924,
+          "cost": 0.0056557199999999995,
+          "durationMs": 13247.64337,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 13292,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "clean-rename-refactor",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "ecb8d75575192d767d8b5dbe375e9144f829807c",
+      "head": "a4da5d2aca00c79a7ab52efac22ec926e73fb4aa",
+      "seedDbSha256": "4864ae1563c00bb1eae94ac0df35274147426abf143dd2d930858736469475bb",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 1250,
+          "outputTokens": 305,
+          "cacheReadTokens": 11392,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12947,
+          "cost": 0.00605392,
+          "durationMs": 19091.542733000002,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 20471.63642699999,
+        "durationMs": 19136,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 12947,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "9c7188ad-8b4b-4388-adf2-d921a91c69c9",
+          "base": "ecb8d75575192d767d8b5dbe375e9144f829807c",
+          "head": "a4da5d2aca00c79a7ab52efac22ec926e73fb4aa",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Pure-refactoring change with no behavioral difference. value+value and value*2 agree for all IEEE-754 doubles including -0, NaN, Infinity, and overflow. No callers or other files affected. No actionable defects; zero findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/price.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 2
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 12947,
+        "usage": {
+          "inputTokens": 1250,
+          "outputTokens": 305,
+          "cacheReadTokens": 11392,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12947,
+          "cost": 0.00605392,
+          "durationMs": 19091.542733000002,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 19136,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "clean-rename-refactor",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "ecb8d75575192d767d8b5dbe375e9144f829807c",
+      "head": "a4da5d2aca00c79a7ab52efac22ec926e73fb4aa",
+      "seedDbSha256": "4864ae1563c00bb1eae94ac0df35274147426abf143dd2d930858736469475bb",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 16391.74532700001,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 190,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "ab44830b-c554-4826-b094-64d71f422ce8",
+          "base": "ecb8d75575192d767d8b5dbe375e9144f829807c",
+          "head": "a4da5d2aca00c79a7ab52efac22ec926e73fb4aa",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed src/price.ts diff: equivalent rename of double→twice with n*2 replaced by value+value. Behavior is bit-identical for all doubles; export signature unchanged; no other references. No findings."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/price.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 2
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 190,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "multi-file-contract",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "422bba2c0613d6bdeb12e8bf3c98f109363933eb",
+      "head": "cd3221ffa2a83b28b86f890e2da39845c1448925",
+      "seedDbSha256": "8f87432186c23d091c3a6546c752bae2a020a1b7be23a73a03a8a00936f15487",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "ttl-unit-contract",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 37336.440982,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 182,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "631dae5c-6e17-42e1-83f8-8f63c153dfa6",
+          "displayId": "F-1",
+          "title": "ttlMs changed from 30000ms to 30ms (likely unit confusion)",
+          "claim": "ttlMs() now returns 30 instead of 30_000, changing the TTL from 30 seconds to 30 milliseconds while the documented contract (API.md) says it reports milliseconds.",
+          "trigger": "Any caller of ttlMs()/deadline() that computes expiry timestamps now gets a 30ms TTL instead of 30s, causing deadlines to expire ~immediately.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 3,
+              "path": "src/config.ts",
+              "startLine": 1
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/config.ts",
+              "description": "Change from return 30_000 to return 30"
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "excerpt": "ttlMs reports milliseconds. deadline returns an epoch-millisecond deadline."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/config.ts:1-3 shows ttlMs() returns 30. src/deadline.ts computes deadline = nowMs + 30, so deadlines expire 30ms after creation. API.md:3 documents ttlMs reports milliseconds, so 30 means 30ms, not 30s — likely intended 30_000. Claim confirmed.",
+          "round": 1,
+          "createdAt": 1790652301994
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "559c588d-2e52-4c36-afb7-9b4416fbe189",
+          "base": "422bba2c0613d6bdeb12e8bf3c98f109363933eb",
+          "head": "cd3221ffa2a83b28b86f890e2da39845c1448925",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the 2-file diff. src/config.ts changed ttlMs() from 30_000 to 30, breaking the documented millisecond contract (API.md) — TTL collapses from 30s to 30ms, making deadline() compute near-immediate expiry. src/deadline.ts change is a no-op refactor. Recorded one P1 finding (F-101)."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/config.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            },
+            {
+              "path": "src/deadline.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 182,
+        "findings": [
+          {
+            "id": "631dae5c-6e17-42e1-83f8-8f63c153dfa6",
+            "displayId": "F-1",
+            "title": "ttlMs changed from 30000ms to 30ms (likely unit confusion)",
+            "claim": "ttlMs() now returns 30 instead of 30_000, changing the TTL from 30 seconds to 30 milliseconds while the documented contract (API.md) says it reports milliseconds.",
+            "trigger": "Any caller of ttlMs()/deadline() that computes expiry timestamps now gets a 30ms TTL instead of 30s, causing deadlines to expire ~immediately.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 3,
+                "path": "src/config.ts",
+                "startLine": 1
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/config.ts",
+                "description": "Change from return 30_000 to return 30"
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "excerpt": "ttlMs reports milliseconds. deadline returns an epoch-millisecond deadline."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/config.ts:1-3 shows ttlMs() returns 30. src/deadline.ts computes deadline = nowMs + 30, so deadlines expire 30ms after creation. API.md:3 documents ttlMs reports milliseconds, so 30 means 30ms, not 30s — likely intended 30_000. Claim confirmed.",
+            "round": 1,
+            "createdAt": 1790652301994
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "multi-file-contract",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "422bba2c0613d6bdeb12e8bf3c98f109363933eb",
+      "head": "cd3221ffa2a83b28b86f890e2da39845c1448925",
+      "seedDbSha256": "8f87432186c23d091c3a6546c752bae2a020a1b7be23a73a03a8a00936f15487",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "ttl-unit-contract",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 4114,
+          "outputTokens": 1011,
+          "cacheReadTokens": 36608,
+          "cacheWriteTokens": 0,
+          "totalTokens": 41733,
+          "cost": 0.01972608,
+          "durationMs": 44825.654517999996,
+          "toolCalls": 14,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 46429.352874000004,
+        "durationMs": 44882,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 41733,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "7c73c043-fad4-401c-8b8c-a124c0710f41",
+          "displayId": "F-1",
+          "title": "ttlMs returns 30 ms instead of 30,000 ms",
+          "claim": "ttlMs() previously returned 30_000 (30 seconds in milliseconds). The change to return 30 makes it 30 milliseconds, violating the documented contract that ttlMs reports milliseconds and shrinking every computed deadline's effective TTL by 1000x.",
+          "trigger": "Any call to deadline(nowMs) / ttlMs() after this change.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": "ttl-deadline",
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/config.ts",
+              "startLine": 1,
+              "endLine": 2
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "excerpt": "ttlMs reports milliseconds. deadline returns an epoch-millisecond deadline.",
+              "description": "Documented contract: ttlMs reports milliseconds"
+            },
+            {
+              "kind": "diff",
+              "path": "src/config.ts",
+              "startLine": 2,
+              "excerpt": "-  return 30_000;\n+  return 30;",
+              "description": "Change from 30_000 to 30"
+            },
+            {
+              "kind": "code",
+              "path": "src/deadline.ts",
+              "startLine": 3,
+              "excerpt": "const ttl = ttlMs(); return nowMs + ttl;",
+              "description": "deadline adds ttlMs() to nowMs, so the 30ms TTL propagates to all deadlines"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned snapshots confirm: merge-base src/config.ts returns 30_000; head returns 30 (only diff hunk in that file). API.md (head) states \"ttlMs reports milliseconds,\" and src/deadline.ts at head computes deadline = nowMs + ttlMs(), so all deadlines now carry a 30 ms TTL instead of 30,000 ms. Contract violation introduced by this change, trigger path is minimal and direct (deadline(nowMs) → ttlMs()). No counter-evidence found (no unit conversion at call sites; deadline.ts is the only consumer).",
+          "round": 1,
+          "createdAt": 1790652348431
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "0b800847-692b-49ab-90c4-b9837b5b5af8",
+          "base": "422bba2c0613d6bdeb12e8bf3c98f109363933eb",
+          "head": "cd3221ffa2a83b28b86f890e2da39845c1448925",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Single substantive change: TTL value unit regression (30_000 -> 30) in src/config.ts, violating the API.md milliseconds contract and reducing deadline TTLs to 30 ms. One candidate recorded (F-101, P1). deadline.ts refactor is behavior-preserving."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/config.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            },
+            {
+              "path": "src/deadline.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 41733,
+        "usage": {
+          "inputTokens": 4114,
+          "outputTokens": 1011,
+          "cacheReadTokens": 36608,
+          "cacheWriteTokens": 0,
+          "totalTokens": 41733,
+          "cost": 0.01972608,
+          "durationMs": 44825.654517999996,
+          "toolCalls": 14,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 44882,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "7c73c043-fad4-401c-8b8c-a124c0710f41",
+            "displayId": "F-1",
+            "title": "ttlMs returns 30 ms instead of 30,000 ms",
+            "claim": "ttlMs() previously returned 30_000 (30 seconds in milliseconds). The change to return 30 makes it 30 milliseconds, violating the documented contract that ttlMs reports milliseconds and shrinking every computed deadline's effective TTL by 1000x.",
+            "trigger": "Any call to deadline(nowMs) / ttlMs() after this change.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": "ttl-deadline",
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/config.ts",
+                "startLine": 1,
+                "endLine": 2
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "excerpt": "ttlMs reports milliseconds. deadline returns an epoch-millisecond deadline.",
+                "description": "Documented contract: ttlMs reports milliseconds"
+              },
+              {
+                "kind": "diff",
+                "path": "src/config.ts",
+                "startLine": 2,
+                "excerpt": "-  return 30_000;\n+  return 30;",
+                "description": "Change from 30_000 to 30"
+              },
+              {
+                "kind": "code",
+                "path": "src/deadline.ts",
+                "startLine": 3,
+                "excerpt": "const ttl = ttlMs(); return nowMs + ttl;",
+                "description": "deadline adds ttlMs() to nowMs, so the 30ms TTL propagates to all deadlines"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned snapshots confirm: merge-base src/config.ts returns 30_000; head returns 30 (only diff hunk in that file). API.md (head) states \"ttlMs reports milliseconds,\" and src/deadline.ts at head computes deadline = nowMs + ttlMs(), so all deadlines now carry a 30 ms TTL instead of 30,000 ms. Contract violation introduced by this change, trigger path is minimal and direct (deadline(nowMs) → ttlMs()). No counter-evidence found (no unit conversion at call sites; deadline.ts is the only consumer).",
+            "round": 1,
+            "createdAt": 1790652348431
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "large-diff-start",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "76f38af3e76b7f91c54233145797977dd914550a",
+      "head": "f0426d40dbc0d749a9463a19ccbd752cb4bd5e8a",
+      "seedDbSha256": "29325dda93278256d0ac4a05cdadfd4e2005298149dfd953ac07c5c4c9c47474",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "large-start-cents",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 14054,
+          "outputTokens": 1008,
+          "cacheReadTokens": 70400,
+          "cacheWriteTokens": 0,
+          "totalTokens": 85462,
+          "cost": 0.0424148,
+          "durationMs": 60250.41587699999,
+          "toolCalls": 15,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 61689.62961000003,
+        "durationMs": 60310,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 85462,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "304cabe9-a488-434f-bd06-c80ab000f5b9",
+          "displayId": "F-1",
+          "title": "charge() now multiplies cents by 100, breaking API contract",
+          "claim": "The change alters charge from `return cents;` to `return cents * 100;`, violating the documented API contract (API.md: \"charge accepts cents and returns the same amount in cents\") and breaking any caller expecting the cents value unchanged.",
+          "trigger": "Any call to charge(cents) after this change returns 100x the input amount.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/catalog.ts",
+              "startLine": 1,
+              "endLine": 3
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/catalog.ts",
+              "startLine": 1,
+              "endLine": 3,
+              "description": "Changed charge now multiplies input by 100"
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "endLine": 3,
+              "description": "Contract says charge returns the same amount in cents"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned reads confirm: at merge-base (76f38af) src/catalog.ts charge() returned `cents` unchanged; at head (f0426d4) it returns `cents * 100`. API.md at head (unchanged, 3 lines) states \"charge accepts cents and returns the same amount in cents.\" The changed line violates the documented contract and returns 100x input for every call; behavior change is directly attributable to this diff. Confirmed.",
+          "round": 1,
+          "createdAt": 1790652410251
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "a96c6a47-b803-4695-8852-b2f7adeb03d5",
+          "base": "76f38af3e76b7f91c54233145797977dd914550a",
+          "head": "f0426d40dbc0d749a9463a19ccbd752cb4bd5e8a",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Single defect found: charge() semantics changed from identity to *100, contradicting the API contract; label string rewrite is contract-compliant and benign."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/catalog.ts",
+              "status": "modified",
+              "additions": 1701,
+              "deletions": 1701
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 85462,
+        "usage": {
+          "inputTokens": 14054,
+          "outputTokens": 1008,
+          "cacheReadTokens": 70400,
+          "cacheWriteTokens": 0,
+          "totalTokens": 85462,
+          "cost": 0.0424148,
+          "durationMs": 60250.41587699999,
+          "toolCalls": 15,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 60310,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "304cabe9-a488-434f-bd06-c80ab000f5b9",
+            "displayId": "F-1",
+            "title": "charge() now multiplies cents by 100, breaking API contract",
+            "claim": "The change alters charge from `return cents;` to `return cents * 100;`, violating the documented API contract (API.md: \"charge accepts cents and returns the same amount in cents\") and breaking any caller expecting the cents value unchanged.",
+            "trigger": "Any call to charge(cents) after this change returns 100x the input amount.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/catalog.ts",
+                "startLine": 1,
+                "endLine": 3
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/catalog.ts",
+                "startLine": 1,
+                "endLine": 3,
+                "description": "Changed charge now multiplies input by 100"
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "endLine": 3,
+                "description": "Contract says charge returns the same amount in cents"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned reads confirm: at merge-base (76f38af) src/catalog.ts charge() returned `cents` unchanged; at head (f0426d4) it returns `cents * 100`. API.md at head (unchanged, 3 lines) states \"charge accepts cents and returns the same amount in cents.\" The changed line violates the documented contract and returns 100x input for every call; behavior change is directly attributable to this diff. Confirmed.",
+            "round": 1,
+            "createdAt": 1790652410251
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "large-diff-start",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "76f38af3e76b7f91c54233145797977dd914550a",
+      "head": "f0426d40dbc0d749a9463a19ccbd752cb4bd5e8a",
+      "seedDbSha256": "29325dda93278256d0ac4a05cdadfd4e2005298149dfd953ac07c5c4c9c47474",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "large-start-cents",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 55511.99552,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 222,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "2d53c00e-b842-4ad3-8936-49e4ca22ceb4",
+          "displayId": "F-1",
+          "title": "charge() multiplies by 100, violating documented API contract",
+          "claim": "charge now returns cents * 100, breaking the documented contract that it returns the same amount in cents, so any caller passing cents will be charged 100× too much.",
+          "trigger": "Any call to charge() with a cents amount returns 100x the value.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 3,
+              "path": "src/catalog.ts",
+              "startLine": 1
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "code",
+              "path": "src/catalog.ts",
+              "startLine": 2,
+              "description": "charge now multiplies input by 100"
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "description": "API contract: charge accepts cents and returns the same amount in cents"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/catalog.ts:1-3: charge(cents) returns cents * 100, contradicting API.md:3 which states \"charge accepts cents and returns the same amount in cents.\" Any caller following the documented contract passing cents would receive 100x the value. No callers exist in the repo yet, so no live failure path, but the API contract violation is real at HEAD.",
+          "round": 1,
+          "createdAt": 1790652465773
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "78afff21-8368-4d75-bab2-b3992df3d172",
+          "base": "76f38af3e76b7f91c54233145797977dd914550a",
+          "head": "f0426d40dbc0d749a9463a19ccbd752cb4bd5e8a",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the change: charge() now returns cents * 100, violating the documented API contract (API.md line 3: \"charge accepts cents and returns the same amount in cents\") — recorded as P1 correctness finding F-101. The labels object only had opaque display strings changed (a-→b- prefixes), which the contract says are opaque, so no finding there."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/catalog.ts",
+              "status": "modified",
+              "additions": 1701,
+              "deletions": 1701
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 222,
+        "findings": [
+          {
+            "id": "2d53c00e-b842-4ad3-8936-49e4ca22ceb4",
+            "displayId": "F-1",
+            "title": "charge() multiplies by 100, violating documented API contract",
+            "claim": "charge now returns cents * 100, breaking the documented contract that it returns the same amount in cents, so any caller passing cents will be charged 100× too much.",
+            "trigger": "Any call to charge() with a cents amount returns 100x the value.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 3,
+                "path": "src/catalog.ts",
+                "startLine": 1
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "code",
+                "path": "src/catalog.ts",
+                "startLine": 2,
+                "description": "charge now multiplies input by 100"
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "description": "API contract: charge accepts cents and returns the same amount in cents"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/catalog.ts:1-3: charge(cents) returns cents * 100, contradicting API.md:3 which states \"charge accepts cents and returns the same amount in cents.\" Any caller following the documented contract passing cents would receive 100x the value. No callers exist in the repo yet, so no live failure path, but the API contract violation is real at HEAD.",
+            "round": 1,
+            "createdAt": 1790652465773
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "large-diff-end",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "c94da6818fbf4cded6e6d8d04d404a11a94fb529",
+      "head": "846b9dc6b2abf4cd10ffd07301b61fccddc9e2b2",
+      "seedDbSha256": "2a14921a5d9958dfa4bc1574a588b2e2aea5bea69b1f70f3ce983534f5712beb",
+      "pass": false,
+      "score": {
+        "pass": false,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 1,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": 0,
+          "f1": 0,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [
+          "large-end-cents"
+        ],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 25284.560196999984,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 192,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "f3487b15-2a5a-4a54-a116-291bd43a4a31",
+          "base": "c94da6818fbf4cded6e6d8d04d404a11a94fb529",
+          "head": "846b9dc6b2abf4cd10ffd07301b61fccddc9e2b2",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the full diff: only src/catalog.ts changed, a mechanical rename of label string prefixes from 'a-' to 'b-' across all 1701 entries. Keys, counts, and structure unchanged; no code depends on label values (API.md says they are opaque). No problems introduced; no findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/catalog.ts",
+              "status": "modified",
+              "additions": 1701,
+              "deletions": 1701
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 192,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "large-diff-end",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "c94da6818fbf4cded6e6d8d04d404a11a94fb529",
+      "head": "846b9dc6b2abf4cd10ffd07301b61fccddc9e2b2",
+      "seedDbSha256": "2a14921a5d9958dfa4bc1574a588b2e2aea5bea69b1f70f3ce983534f5712beb",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "large-end-cents",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 12661,
+          "outputTokens": 1290,
+          "cacheReadTokens": 88896,
+          "cacheWriteTokens": 0,
+          "totalTokens": 102847,
+          "cost": 0.046514360000000005,
+          "durationMs": 81103.267812,
+          "toolCalls": 17,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 82498.86333700002,
+        "durationMs": 81165,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 102847,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "4130a191-b8cd-48ba-bed2-73ad19d95206",
+          "displayId": "F-1",
+          "title": "charge() now returns cents × 100, violating API contract",
+          "claim": "The change modifies charge from returning its input unchanged to returning cents * 100, breaking the documented API contract that charge accepts cents and returns the same amount in cents. Every caller passing an amount in cents now gets a 100x-inflated value.",
+          "trigger": "Call charge(x); result is 100× the expected cent amount per API.md.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/catalog.ts",
+              "startLine": 1703,
+              "endLine": 1705
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "description": "API contract: charge accepts cents and returns the same amount in cents (unchanged in this diff)."
+            },
+            {
+              "kind": "code",
+              "path": "src/catalog.ts",
+              "startLine": 1704,
+              "excerpt": "return cents * 100;",
+              "description": "Head: charge returns cents * 100."
+            },
+            {
+              "kind": "diff",
+              "path": "src/catalog.ts",
+              "startLine": 1704,
+              "excerpt": "return cents;",
+              "description": "Merge-base: charge returned cents unchanged, matching the contract."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned reads confirm: at merge-base c94da68, src/catalog.ts line 1704 was `return cents;`; at head 846b9dc it is `return cents * 100;` (verified both in the snapshot reads and in the raw diff hunk, the only functional change besides label string churn). API.md (unchanged at head, line 3) documents the contract \"charge accepts cents and returns the same amount in cents.\" The change therefore breaks the documented contract: charge(500) now returns 50000 instead of 500. The function is exported, so any consumer passing a cent amount gets a 100x-inflated result; no guards or compensating changes exist in the repo. Note: search_text found no in-repo callers, so concrete in-repo downstream failure isn't demonstrable, but the exported function itself now violates its explicit documented contract as a direct result of this change.",
+          "round": 1,
+          "createdAt": 1790652573706
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "833c5dd4-be31-4b0a-9d94-8e0b5c09e316",
+          "base": "c94da6818fbf4cded6e6d8d04d404a11a94fb529",
+          "head": "846b9dc6b2abf4cd10ffd07301b61fccddc9e2b2",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Single-file change; the only functional difference is charge() multiplying by 100, contradicting the documented identity contract. One P1 finding recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/catalog.ts",
+              "status": "modified",
+              "additions": 1701,
+              "deletions": 1701
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 102847,
+        "usage": {
+          "inputTokens": 12661,
+          "outputTokens": 1290,
+          "cacheReadTokens": 88896,
+          "cacheWriteTokens": 0,
+          "totalTokens": 102847,
+          "cost": 0.046514360000000005,
+          "durationMs": 81103.267812,
+          "toolCalls": 17,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 81165,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "4130a191-b8cd-48ba-bed2-73ad19d95206",
+            "displayId": "F-1",
+            "title": "charge() now returns cents × 100, violating API contract",
+            "claim": "The change modifies charge from returning its input unchanged to returning cents * 100, breaking the documented API contract that charge accepts cents and returns the same amount in cents. Every caller passing an amount in cents now gets a 100x-inflated value.",
+            "trigger": "Call charge(x); result is 100× the expected cent amount per API.md.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/catalog.ts",
+                "startLine": 1703,
+                "endLine": 1705
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "description": "API contract: charge accepts cents and returns the same amount in cents (unchanged in this diff)."
+              },
+              {
+                "kind": "code",
+                "path": "src/catalog.ts",
+                "startLine": 1704,
+                "excerpt": "return cents * 100;",
+                "description": "Head: charge returns cents * 100."
+              },
+              {
+                "kind": "diff",
+                "path": "src/catalog.ts",
+                "startLine": 1704,
+                "excerpt": "return cents;",
+                "description": "Merge-base: charge returned cents unchanged, matching the contract."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned reads confirm: at merge-base c94da68, src/catalog.ts line 1704 was `return cents;`; at head 846b9dc it is `return cents * 100;` (verified both in the snapshot reads and in the raw diff hunk, the only functional change besides label string churn). API.md (unchanged at head, line 3) documents the contract \"charge accepts cents and returns the same amount in cents.\" The change therefore breaks the documented contract: charge(500) now returns 50000 instead of 500. The function is exported, so any consumer passing a cent amount gets a 100x-inflated result; no guards or compensating changes exist in the repo. Note: search_text found no in-repo callers, so concrete in-repo downstream failure isn't demonstrable, but the exported function itself now violates its explicit documented contract as a direct result of this change.",
+            "round": 1,
+            "createdAt": 1790652573706
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "expected-behavior-suppressed",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "241b698fe217b4eb593c7dc40858f1eb9bf429ae",
+      "head": "1ef63fbcf6d8f44f4e5287fbecfcd9b85536b7e6",
+      "seedDbSha256": "e8d38c957b03dd00f05366fb647048538c263a97b27d9b94a288ef7d127eb486",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 1272,
+          "outputTokens": 263,
+          "cacheReadTokens": 11456,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12991,
+          "cost": 0.0059165599999999995,
+          "durationMs": 11110.824484,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 12703.331397999951,
+        "durationMs": 11158,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 12991,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "6b650d56-1ace-4279-a8cd-a2ddbe32e3f1",
+          "base": "241b698fe217b4eb593c7dc40858f1eb9bf429ae",
+          "head": "1ef63fbcf6d8f44f4e5287fbecfcd9b85536b7e6",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "No actionable defects introduced by this change. It only extracts quota-1 into a local variable before returning it; behavior, types, and edge cases (NaN, negatives, non-integers) are unchanged. Zero findings recorded; review complete in one round."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/quota.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 12991,
+        "usage": {
+          "inputTokens": 1272,
+          "outputTokens": 263,
+          "cacheReadTokens": 11456,
+          "cacheWriteTokens": 0,
+          "totalTokens": 12991,
+          "cost": 0.0059165599999999995,
+          "durationMs": 11110.824484,
+          "toolCalls": 3,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 11158,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "expected-behavior-suppressed",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "241b698fe217b4eb593c7dc40858f1eb9bf429ae",
+      "head": "1ef63fbcf6d8f44f4e5287fbecfcd9b85536b7e6",
+      "seedDbSha256": "e8d38c957b03dd00f05366fb647048538c263a97b27d9b94a288ef7d127eb486",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 12299.88206100004,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 132,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "28425130-9708-44b0-8793-9d9288264ac9",
+          "base": "241b698fe217b4eb593c7dc40858f1eb9bf429ae",
+          "head": "1ef63fbcf6d8f44f4e5287fbecfcd9b85536b7e6",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the entire diff: a behavior-preserving refactor in src/quota.ts (extracting `remaining = quota - 1`). No bugs, edge cases, or callers affected. No findings."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/quota.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 132,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "fixed-regression",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "8d60e86ba96953c5ee25252c8b55a03b3891538a",
+      "seedDbSha256": "2474c866369fbf945b4421810d22ba51504ae59dc7bb1e82377f3040434c2a6b",
+      "pass": false,
+      "score": {
+        "pass": false,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 1,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": 0,
+          "f1": 0,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [
+          "returned-idempotency-regression"
+        ],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 23501.203146999993,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 225,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "0cde8c06-f1ab-48a2-9a1e-c22c9299670a",
+          "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+          "head": "8d60e86ba96953c5ee25252c8b55a03b3891538a",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the only change: removal of the null-key guard in src/idem.ts run(). Verified there are no callers, tests, or other files in the repo depending on the throw; the change is behaviorally inert within this codebase. No findings recorded."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 0,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 225,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "fixed-regression",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "8d60e86ba96953c5ee25252c8b55a03b3891538a",
+      "seedDbSha256": "2474c866369fbf945b4421810d22ba51504ae59dc7bb1e82377f3040434c2a6b",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "returned-idempotency-regression",
+            "findingIndex": 0,
+            "findingId": "F-2"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 4246,
+          "outputTokens": 899,
+          "cacheReadTokens": 41856,
+          "cacheWriteTokens": 0,
+          "totalTokens": 47001,
+          "cost": 0.02078256,
+          "durationMs": 53675.658621,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 55032.42229400005,
+        "durationMs": 53733,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 47001,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "f5ef9935-5402-41d5-a0cd-b6c5fac037cc",
+          "displayId": "F-2",
+          "title": "run() no longer rejects missing idempotency key",
+          "claim": "The change deletes the only validation in run: a null (or falsy) key now reaches the success path and run returns 1 instead of throwing, violating the documented API contract.",
+          "trigger": "Call run(null) or run('') — returns 1 instead of throwing 'missing idempotency key'.",
+          "category": "regression",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": "idempotency",
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 3
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/idem.ts",
+              "description": "Diff removes `if (!key) throw new Error('missing idempotency key');`, leaving no validation."
+            },
+            {
+              "kind": "code",
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "excerpt": "export function run(key: string | null): number {\n  return 1;\n}",
+              "description": "Head has no guard; run(null) returns 1."
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "excerpt": "run rejects null or empty idempotency keys before returning.",
+              "description": "Contract: 'run rejects null or empty idempotency keys before returning.'"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned reads confirm the diff. At merge-base (6302eff), src/idem.ts line 2 contained `if (!key) throw new Error('missing idempotency key');`. At head (8d60e86), the function is only `export function run(key: string | null): number { return 1; }` — the guard is deleted. API.md at head (line 3) still states \"run rejects null or empty idempotency keys before returning\", so the contract is unchanged while the behavior regressed: run(null) and run('') now return 1 instead of throwing. search_text at head finds no other callers or compensating validation (the only match for \"idem\" is API.md itself). Concrete failure and changed cause both established.",
+          "round": 1,
+          "createdAt": 1790652677540
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "95e466b3-f155-435b-b8f7-e9e1fbdc9c49",
+          "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+          "head": "8d60e86ba96953c5ee25252c8b55a03b3891538a",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "The only change removes the falsy-key guard from run(), so run(null)/run('') now silently succeeds with 1, breaking the documented contract that invalid keys are rejected (regression of the previously fixed validation). Recorded as F-101 (P1). No other changed files or callers exist."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 0,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 47001,
+        "usage": {
+          "inputTokens": 4246,
+          "outputTokens": 899,
+          "cacheReadTokens": 41856,
+          "cacheWriteTokens": 0,
+          "totalTokens": 47001,
+          "cost": 0.02078256,
+          "durationMs": 53675.658621,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 53733,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "f5ef9935-5402-41d5-a0cd-b6c5fac037cc",
+            "displayId": "F-2",
+            "title": "run() no longer rejects missing idempotency key",
+            "claim": "The change deletes the only validation in run: a null (or falsy) key now reaches the success path and run returns 1 instead of throwing, violating the documented API contract.",
+            "trigger": "Call run(null) or run('') — returns 1 instead of throwing 'missing idempotency key'.",
+            "category": "regression",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": "idempotency",
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/idem.ts",
+                "startLine": 1,
+                "endLine": 3
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/idem.ts",
+                "description": "Diff removes `if (!key) throw new Error('missing idempotency key');`, leaving no validation."
+              },
+              {
+                "kind": "code",
+                "path": "src/idem.ts",
+                "startLine": 1,
+                "excerpt": "export function run(key: string | null): number {\n  return 1;\n}",
+                "description": "Head has no guard; run(null) returns 1."
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "excerpt": "run rejects null or empty idempotency keys before returning.",
+                "description": "Contract: 'run rejects null or empty idempotency keys before returning.'"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned reads confirm the diff. At merge-base (6302eff), src/idem.ts line 2 contained `if (!key) throw new Error('missing idempotency key');`. At head (8d60e86), the function is only `export function run(key: string | null): number { return 1; }` — the guard is deleted. API.md at head (line 3) still states \"run rejects null or empty idempotency keys before returning\", so the contract is unchanged while the behavior regressed: run(null) and run('') now return 1 instead of throwing. search_text at head finds no other callers or compensating validation (the only match for \"idem\" is API.md itself). Concrete failure and changed cause both established.",
+            "round": 1,
+            "createdAt": 1790652677540
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "fixed-regression-still-fixed",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "5b43f88004f4c4f50b3487eaca9485acced4f4af",
+      "seedDbSha256": "fe281c3f59c2752e0d99cd5831cbed4ccbdde34c7820a58ff22e8960c430704f",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 1,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": null,
+          "f1": null,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 3941,
+          "outputTokens": 1267,
+          "cacheReadTokens": 37504,
+          "cacheWriteTokens": 0,
+          "totalTokens": 42712,
+          "cost": 0.02084324,
+          "durationMs": 47522.852909999994,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 48925.14662300004,
+        "durationMs": 47572,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 42712,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "e59a8e83-bb97-4967-9ebb-62eac8505128",
+          "displayId": "F-2",
+          "title": "undefined idempotency key no longer rejected",
+          "claim": "The guard was rewritten from the falsy check `!key` to `key === null || key.length === 0`, so an `undefined` key (not covered by the declared `string | null` type, but passable by JavaScript callers or unvalidated optional inputs) is no longer rejected; `run(undefined)` now returns 1 instead of throwing 'missing idempotency key'.",
+          "trigger": "A JavaScript caller (or a TS caller with unsound input, e.g. a value typed as string that is actually undefined) invokes run(undefined).",
+          "category": "regression",
+          "severity": "P2",
+          "status": "rejected",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 2,
+              "endLine": 3
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/idem.ts",
+              "description": "Head guard only rejects null and empty string; undefined passes through and reaches `return 1`. Previously `!key` also threw for undefined."
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "description": "API contract states run rejects null or empty idempotency keys; it says nothing about accepting undefined, and the prior behavior rejected it."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Change confirmed: guard rewritten from `!key` to `key === null || key.length === 0`. But the claimed impact is factually wrong: with key === undefined, `key === null` is false, and evaluating `undefined.length` throws a TypeError before `return 1` is reachable. So run(undefined) still throws (a TypeError instead of the previous 'missing idempotency key' Error); it never returns 1. The declared contract only covers string | null, and undefined input remains rejected-by-throw, so no silent-acceptance regression is established. The only difference is the error type/message for an out-of-contract input, which does not constitute the claimed defect.",
+          "round": 1,
+          "createdAt": 1790652726593
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "db4d29b0-b743-48e2-b958-056f48db23a2",
+          "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+          "head": "5b43f88004f4c4f50b3487eaca9485acced4f4af",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 0,
+              "rejected": 1,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Only change: idempotency-key guard in src/idem.ts changed from `!key` to `key === null || key.length === 0`. Recorded one regression: undefined keys are no longer rejected (previously thrown, now return 1), which silently accepts requests lacking an idempotency key from JS/unsound callers. No callers or tests exist in the repo to further constrain impact."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 42712,
+        "usage": {
+          "inputTokens": 3941,
+          "outputTokens": 1267,
+          "cacheReadTokens": 37504,
+          "cacheWriteTokens": 0,
+          "totalTokens": 42712,
+          "cost": 0.02084324,
+          "durationMs": 47522.852909999994,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 47572,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "e59a8e83-bb97-4967-9ebb-62eac8505128",
+            "displayId": "F-2",
+            "title": "undefined idempotency key no longer rejected",
+            "claim": "The guard was rewritten from the falsy check `!key` to `key === null || key.length === 0`, so an `undefined` key (not covered by the declared `string | null` type, but passable by JavaScript callers or unvalidated optional inputs) is no longer rejected; `run(undefined)` now returns 1 instead of throwing 'missing idempotency key'.",
+            "trigger": "A JavaScript caller (or a TS caller with unsound input, e.g. a value typed as string that is actually undefined) invokes run(undefined).",
+            "category": "regression",
+            "severity": "P2",
+            "status": "rejected",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/idem.ts",
+                "startLine": 2,
+                "endLine": 3
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/idem.ts",
+                "description": "Head guard only rejects null and empty string; undefined passes through and reaches `return 1`. Previously `!key` also threw for undefined."
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "description": "API contract states run rejects null or empty idempotency keys; it says nothing about accepting undefined, and the prior behavior rejected it."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Change confirmed: guard rewritten from `!key` to `key === null || key.length === 0`. But the claimed impact is factually wrong: with key === undefined, `key === null` is false, and evaluating `undefined.length` throws a TypeError before `return 1` is reachable. So run(undefined) still throws (a TypeError instead of the previous 'missing idempotency key' Error); it never returns 1. The declared contract only covers string | null, and undefined input remains rejected-by-throw, so no silent-acceptance regression is established. The only difference is the error type/message for an out-of-contract input, which does not constitute the claimed defect.",
+            "round": 1,
+            "createdAt": 1790652726593
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "fixed-regression-still-fixed",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+      "head": "5b43f88004f4c4f50b3487eaca9485acced4f4af",
+      "seedDbSha256": "fe281c3f59c2752e0d99cd5831cbed4ccbdde34c7820a58ff22e8960c430704f",
+      "pass": false,
+      "score": {
+        "pass": false,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 1,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 1,
+          "negativeLabelsReported": 1,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 0,
+          "recall": null,
+          "f1": 0,
+          "uncertaintyRate": 0
+        },
+        "matches": [],
+        "missedExpectations": [],
+        "falsePositiveReports": [
+          {
+            "findingIndex": 0,
+            "findingId": "F-2",
+            "classification": "negative-label",
+            "expectationIds": [
+              "preserved-idempotency-fix"
+            ],
+            "invalidSeverity": false
+          }
+        ],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 26459.235482000047,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 200,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "018952ca-d700-4416-b2b4-ffa21e2b02f8",
+          "displayId": "F-2",
+          "title": "run() no longer rejects undefined idempotency keys; crashes with TypeError",
+          "claim": "Passing undefined (or any value where key === null is false and .length is missing) now throws a TypeError instead of the intended 'missing idempotency key' error, a behavior regression from the previous falsy check.",
+          "trigger": "A caller passes undefined as the idempotency key (previously rejected with a clear error); the new guard accesses key.length on a non-string.",
+          "category": "regression",
+          "severity": "P2",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 2,
+              "path": "src/idem.ts",
+              "startLine": 2
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/idem.ts",
+              "description": "Old code: if (!key) throw new Error('missing idempotency key'); — rejected null, undefined, and '' uniformly. New code accesses key.length, which throws TypeError on undefined."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/idem.ts:2 checks `key === null || key.length === 0`. Passing undefined: first condition false, second evaluates undefined.length, throwing a TypeError instead of the intended 'missing idempotency key' Error. Confirmed regression versus a falsy check.",
+          "round": 1,
+          "createdAt": 1790652753067
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "f423d58f-31a5-46d9-b289-734aa26fc41d",
+          "base": "6302efff5ba27bf146992f02d7144aaf93ddddb9",
+          "head": "5b43f88004f4c4f50b3487eaca9485acced4f4af",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Single-line change in src/idem.ts replacing the falsy check with `key === null || key.length === 0`. Behavior for null and \"\" is unchanged; only finding is that undefined (previously rejected with a clear error) now reaches `key.length` and throws a TypeError. No callers exist in the repo to worsen severity, so recorded as P2 regression."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 200,
+        "findings": [
+          {
+            "id": "018952ca-d700-4416-b2b4-ffa21e2b02f8",
+            "displayId": "F-2",
+            "title": "run() no longer rejects undefined idempotency keys; crashes with TypeError",
+            "claim": "Passing undefined (or any value where key === null is false and .length is missing) now throws a TypeError instead of the intended 'missing idempotency key' error, a behavior regression from the previous falsy check.",
+            "trigger": "A caller passes undefined as the idempotency key (previously rejected with a clear error); the new guard accesses key.length on a non-string.",
+            "category": "regression",
+            "severity": "P2",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 2,
+                "path": "src/idem.ts",
+                "startLine": 2
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/idem.ts",
+                "description": "Old code: if (!key) throw new Error('missing idempotency key'); — rejected null, undefined, and '' uniformly. New code accesses key.length, which throws TypeError on undefined."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/idem.ts:2 checks `key === null || key.length === 0`. Passing undefined: first condition false, second evaluates undefined.length, throwing a TypeError instead of the intended 'missing idempotency key' Error. Confirmed regression versus a falsy check.",
+            "round": 1,
+            "createdAt": 1790652753067
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "renamed-symbol-memory-survives",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "a345fc6ac701e0e3439411a213bc689f6d02e001",
+      "head": "b8ce39a0533a730848a0d4b56bca40ce555a76eb",
+      "seedDbSha256": "e4f9c92799292efde231f8d39cb158ca5a9d19d95743fab24cd9b94816dd54e2",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "renamed-retry-validation",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 39779.79405399994,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 297,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "8f736dea-b2c8-49e9-a690-f118d11a361c",
+          "displayId": "F-1",
+          "title": "executeRetry drops null/empty idempotency-key guard",
+          "claim": "The renamed executeRetry no longer throws on a null (or empty) idempotency key, violating the retry-flow invariant that every retry rejects null or empty keys before execution.",
+          "trigger": "Any caller invoking executeRetry(null) or with an empty string key; it now silently returns 1 instead of throwing.",
+          "category": "regression",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 3,
+              "path": "src/retry.ts",
+              "startLine": 1
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/retry.ts",
+              "description": "Diff removed `if (!key) throw new Error('missing idempotency key');` while renaming oldRetry to executeRetry"
+            },
+            {
+              "kind": "code",
+              "path": "src/retry.ts",
+              "excerpt": "export function executeRetry(key: string | null): number {\n  return 1;\n}",
+              "description": "Current function body unconditionally returns 1 with no key validation"
+            },
+            {
+              "kind": "memory",
+              "description": "Feature invariant: every retry rejects null or empty idempotency keys before execution"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/retry.ts:1-3 defines executeRetry(key: string | null): number that unconditionally returns 1. There is no null/empty check, so executeRetry(null) or executeRetry(\"\") silently returns 1 instead of throwing, exactly as claimed. No other validation wraps the function (search_text shows no callers or other idempotency handling), so the guard is definitively absent. Note: the path is latent since no callers exist at HEAD, slightly tempering real-world impact, but the regression claim itself is true.",
+          "round": 1,
+          "createdAt": 1790652792972
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "58c198cf-5c4c-47c5-a9d1-d332a05e0e49",
+          "base": "a345fc6ac701e0e3439411a213bc689f6d02e001",
+          "head": "b8ce39a0533a730848a0d4b56bca40ce555a76eb",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the single-file diff in src/retry.ts. The change renames oldRetry to executeRetry and removes the null/empty idempotency-key guard, violating the documented retry-flow invariant. No callers exist elsewhere in the repo (search found none), so impact is via future/current callers of the renamed export. One P1 regression recorded (F-101)."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/retry.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 2
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 297,
+        "findings": [
+          {
+            "id": "8f736dea-b2c8-49e9-a690-f118d11a361c",
+            "displayId": "F-1",
+            "title": "executeRetry drops null/empty idempotency-key guard",
+            "claim": "The renamed executeRetry no longer throws on a null (or empty) idempotency key, violating the retry-flow invariant that every retry rejects null or empty keys before execution.",
+            "trigger": "Any caller invoking executeRetry(null) or with an empty string key; it now silently returns 1 instead of throwing.",
+            "category": "regression",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 3,
+                "path": "src/retry.ts",
+                "startLine": 1
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/retry.ts",
+                "description": "Diff removed `if (!key) throw new Error('missing idempotency key');` while renaming oldRetry to executeRetry"
+              },
+              {
+                "kind": "code",
+                "path": "src/retry.ts",
+                "excerpt": "export function executeRetry(key: string | null): number {\n  return 1;\n}",
+                "description": "Current function body unconditionally returns 1 with no key validation"
+              },
+              {
+                "kind": "memory",
+                "description": "Feature invariant: every retry rejects null or empty idempotency keys before execution"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/retry.ts:1-3 defines executeRetry(key: string | null): number that unconditionally returns 1. There is no null/empty check, so executeRetry(null) or executeRetry(\"\") silently returns 1 instead of throwing, exactly as claimed. No other validation wraps the function (search_text shows no callers or other idempotency handling), so the guard is definitively absent. Note: the path is latent since no callers exist at HEAD, slightly tempering real-world impact, but the regression claim itself is true.",
+            "round": 1,
+            "createdAt": 1790652792972
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "renamed-symbol-memory-survives",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "a345fc6ac701e0e3439411a213bc689f6d02e001",
+      "head": "b8ce39a0533a730848a0d4b56bca40ce555a76eb",
+      "seedDbSha256": "e4f9c92799292efde231f8d39cb158ca5a9d19d95743fab24cd9b94816dd54e2",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "renamed-retry-validation",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 3649,
+          "outputTokens": 958,
+          "cacheReadTokens": 35776,
+          "cacheWriteTokens": 0,
+          "totalTokens": 40383,
+          "cost": 0.01862556,
+          "durationMs": 46483.431990000005,
+          "toolCalls": 11,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 47854.70914199995,
+        "durationMs": 46542,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 40383,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "a3082943-855f-48cb-b61c-14849fada2f0",
+          "displayId": "F-1",
+          "title": "Null/empty idempotency key guard removed in executeRetry",
+          "claim": "The rename from oldRetry to executeRetry dropped the null-key validation, so the retry entry point no longer rejects null/empty idempotency keys, violating the feature invariant that every retry validates the key before execution.",
+          "trigger": "Call executeRetry(null) or executeRetry('') — no error is thrown and the retry executes, whereas oldRetry threw 'missing idempotency key'.",
+          "category": "regression",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": "retry-flow",
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/retry.ts",
+              "startLine": 1,
+              "endLine": 2
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/retry.ts",
+              "startLine": 1,
+              "endLine": 2,
+              "description": "Merge-base version threw on falsy key before executing; head version executes unconditionally."
+            },
+            {
+              "kind": "code",
+              "path": "src/retry.ts",
+              "startLine": 1,
+              "endLine": 2,
+              "excerpt": "export function executeRetry(key: string | null): number {\n  return 1;\n}"
+            },
+            {
+              "kind": "memory",
+              "description": "Feature memory invariant: every retry rejects null or empty idempotency keys before execution."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned diffs confirm the change: merge-base src/retry.ts oldRetry threw 'missing idempotency key' on falsy key before returning; head executeRetry (read at head commit) executes unconditionally with no null/empty guard. get_change shows the guard line was deleted in this exact commit, so the regression is directly attributable to the change. No other guards or callers exist that would validate the key before execution (no matches for executeRetry/oldRetry elsewhere; executeRetry is only defined, not called by other changed code). Trigger verified: executeRetry(null) now returns 1 instead of throwing.",
+          "round": 1,
+          "createdAt": 1790652840836
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "5796eb24-30ec-47d6-8d67-109cd6b39fab",
+          "base": "a345fc6ac701e0e3439411a213bc689f6d02e001",
+          "head": "b8ce39a0533a730848a0d4b56bca40ce555a76eb",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "One defect found and recorded: the rename oldRetry→executeRetry removed the guard throwing on missing idempotency keys, so executeRetry now accepts null/empty keys and executes, breaking the retry-flow invariant. Repository is a single file with no callers; no other changed behavior to review."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/retry.ts",
+              "status": "modified",
+              "additions": 1,
+              "deletions": 2
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 40383,
+        "usage": {
+          "inputTokens": 3649,
+          "outputTokens": 958,
+          "cacheReadTokens": 35776,
+          "cacheWriteTokens": 0,
+          "totalTokens": 40383,
+          "cost": 0.01862556,
+          "durationMs": 46483.431990000005,
+          "toolCalls": 11,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 46542,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "a3082943-855f-48cb-b61c-14849fada2f0",
+            "displayId": "F-1",
+            "title": "Null/empty idempotency key guard removed in executeRetry",
+            "claim": "The rename from oldRetry to executeRetry dropped the null-key validation, so the retry entry point no longer rejects null/empty idempotency keys, violating the feature invariant that every retry validates the key before execution.",
+            "trigger": "Call executeRetry(null) or executeRetry('') — no error is thrown and the retry executes, whereas oldRetry threw 'missing idempotency key'.",
+            "category": "regression",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": "retry-flow",
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/retry.ts",
+                "startLine": 1,
+                "endLine": 2
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/retry.ts",
+                "startLine": 1,
+                "endLine": 2,
+                "description": "Merge-base version threw on falsy key before executing; head version executes unconditionally."
+              },
+              {
+                "kind": "code",
+                "path": "src/retry.ts",
+                "startLine": 1,
+                "endLine": 2,
+                "excerpt": "export function executeRetry(key: string | null): number {\n  return 1;\n}"
+              },
+              {
+                "kind": "memory",
+                "description": "Feature memory invariant: every retry rejects null or empty idempotency keys before execution."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned diffs confirm the change: merge-base src/retry.ts oldRetry threw 'missing idempotency key' on falsy key before returning; head executeRetry (read at head commit) executes unconditionally with no null/empty guard. get_change shows the guard line was deleted in this exact commit, so the regression is directly attributable to the change. No other guards or callers exist that would validate the key before execution (no matches for executeRetry/oldRetry elsewhere; executeRetry is only defined, not called by other changed code). Trigger verified: executeRetry(null) now returns 1 instead of throwing.",
+            "round": 1,
+            "createdAt": 1790652840836
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "outdated-decision-scope",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 1,
+      "base": "ee6c83569f90d3fad8d86ba8eafee42d4e6bd377",
+      "head": "42f3bf87f4aadaa1800cd76a3dca03e51c87970f",
+      "seedDbSha256": "a5e1bb2e0f6d1dcb3acb86ec6f29fdc6034cd3513545e68e9895f04175343f9d",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 1,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 1,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "customer-lockout-scope",
+            "findingIndex": 0,
+            "findingId": "F-2"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 4512,
+          "outputTokens": 987,
+          "cacheReadTokens": 37760,
+          "cacheWriteTokens": 0,
+          "totalTokens": 43259,
+          "cost": 0.0204772,
+          "durationMs": 43018.49515,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 44508.39710099995,
+        "durationMs": 43083,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 43259,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "0c2a5e79-ae98-43e3-b365-edb224fd2e33",
+          "displayId": "F-2",
+          "title": "lockAccount locks customer accounts after 4 failures, not 10",
+          "claim": "The new customer-facing lockAccount() delegates directly to failed(), which returns true for n > 3, so customer accounts lock after only four failures. API.md requires diagnostics to lock after four failures and customer accounts only at ten or more failures.",
+          "trigger": "Call lockAccount(failures) with 4-9 failures; it returns true, locking a customer account contrary to the documented contract.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": "account-locking",
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/account.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/account.ts",
+              "startLine": 1,
+              "endLine": 4,
+              "description": "New wrapper delegates customer lock decision to failed(failures) with no threshold adjustment."
+            },
+            {
+              "kind": "code",
+              "path": "src/lock.ts",
+              "startLine": 1,
+              "endLine": 3,
+              "excerpt": "export function failed(n: number): boolean { return n > 3; }"
+            },
+            {
+              "kind": "doc",
+              "path": "API.md",
+              "startLine": 3,
+              "excerpt": "Internal diagnostics may lock after four failures. Customer accounts lock only at ten or more failures.",
+              "description": "Contract: diagnostics lock after four failures; customer accounts only at ten or more."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/account.ts is newly added in this change (merge-base ee6c835 -> head 42f3bf8) and lockAccount(failures) returns failed(failures) verbatim. src/lock.ts at head: failed(n) = n > 3, so lockAccount(4..9) returns true. API.md (head, line 3) states customer accounts lock only at ten or more failures; the four-failure threshold is for internal diagnostics. Concrete trigger: lockAccount(4) → true, locking a customer account contrary to the documented contract. The defect is both real and introduced by this change since the file is new; no guard or threshold adjustment exists anywhere in the call path.",
+          "round": 1,
+          "createdAt": 1790652885480
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "ea5645f7-a4a5-44ee-9fc6-aa388b5cd35d",
+          "base": "ee6c83569f90d3fad8d86ba8eafee42d4e6bd377",
+          "head": "42f3bf87f4aadaa1800cd76a3dca03e51c87970f",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 1,
+              "fresh": 1,
+              "confirmed": 1,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "Single defect found: new lockAccount() reuses the diagnostics threshold (>3) for customer accounts, violating the API.md contract requiring lock only at >=10 failures (F-101, P1). No other code changed; no callers or tests to contradict the reading."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/account.ts",
+              "status": "added",
+              "additions": 4,
+              "deletions": 0
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 43259,
+        "usage": {
+          "inputTokens": 4512,
+          "outputTokens": 987,
+          "cacheReadTokens": 37760,
+          "cacheWriteTokens": 0,
+          "totalTokens": 43259,
+          "cost": 0.0204772,
+          "durationMs": 43018.49515,
+          "toolCalls": 13,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 43083,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "0c2a5e79-ae98-43e3-b365-edb224fd2e33",
+            "displayId": "F-2",
+            "title": "lockAccount locks customer accounts after 4 failures, not 10",
+            "claim": "The new customer-facing lockAccount() delegates directly to failed(), which returns true for n > 3, so customer accounts lock after only four failures. API.md requires diagnostics to lock after four failures and customer accounts only at ten or more failures.",
+            "trigger": "Call lockAccount(failures) with 4-9 failures; it returns true, locking a customer account contrary to the documented contract.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": "account-locking",
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/account.ts",
+                "startLine": 1,
+                "endLine": 4
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/account.ts",
+                "startLine": 1,
+                "endLine": 4,
+                "description": "New wrapper delegates customer lock decision to failed(failures) with no threshold adjustment."
+              },
+              {
+                "kind": "code",
+                "path": "src/lock.ts",
+                "startLine": 1,
+                "endLine": 3,
+                "excerpt": "export function failed(n: number): boolean { return n > 3; }"
+              },
+              {
+                "kind": "doc",
+                "path": "API.md",
+                "startLine": 3,
+                "excerpt": "Internal diagnostics may lock after four failures. Customer accounts lock only at ten or more failures.",
+                "description": "Contract: diagnostics lock after four failures; customer accounts only at ten or more."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/account.ts is newly added in this change (merge-base ee6c835 -> head 42f3bf8) and lockAccount(failures) returns failed(failures) verbatim. src/lock.ts at head: failed(n) = n > 3, so lockAccount(4..9) returns true. API.md (head, line 3) states customer accounts lock only at ten or more failures; the four-failure threshold is for internal diagnostics. Concrete trigger: lockAccount(4) → true, locking a customer account contrary to the documented contract. The defect is both real and introduced by this change since the file is new; no guard or threshold adjustment exists anywhere in the call path.",
+            "round": 1,
+            "createdAt": 1790652885480
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "outdated-decision-scope",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 2,
+      "base": "ee6c83569f90d3fad8d86ba8eafee42d4e6bd377",
+      "head": "42f3bf87f4aadaa1800cd76a3dca03e51c87970f",
+      "seedDbSha256": "a5e1bb2e0f6d1dcb3acb86ec6f29fdc6034cd3513545e68e9895f04175343f9d",
+      "pass": false,
+      "score": {
+        "pass": false,
+        "counts": {
+          "truePositives": 0,
+          "falsePositives": 0,
+          "falseNegatives": 1,
+          "confirmed": 0,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": null,
+          "recall": 0,
+          "f1": 0,
+          "uncertaintyRate": null
+        },
+        "matches": [],
+        "missedExpectations": [
+          "customer-lockout-scope"
+        ],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 9386.55819000001,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 133,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "cefe6de1-1647-4f8e-bb3a-6212384978a1",
+          "base": "ee6c83569f90d3fad8d86ba8eafee42d4e6bd377",
+          "head": "42f3bf87f4aadaa1800cd76a3dca03e51c87970f",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 0,
+              "fresh": 0,
+              "confirmed": 0,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed src/account.ts (new 4-line wrapper) against src/lock.ts:failed (n > 3). Semantics match exactly; no callers exist yet in the repo. No problems found."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/account.ts",
+              "status": "added",
+              "additions": 4,
+              "deletions": 0
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 133,
+        "findings": []
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "two-independent-bugs",
+      "repeat": 1,
+      "variant": "baseline",
+      "order": 1,
+      "base": "651cde2a3c3294bab858a506c00fccb8511f6945",
+      "head": "83e21917104bab221c4300800c92dc1b6e48fb90",
+      "seedDbSha256": "2fd97fb242f135817f0ea247a1ed2bbe25ef6323f4b7674eae5109b73aa7a1df",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 2,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 2,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "two-bugs-counter",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          },
+          {
+            "expectationId": "two-bugs-idempotency",
+            "findingIndex": 1,
+            "findingId": "F-2"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": null,
+        "usageComplete": null,
+        "wallTimeMs": 80008.34759000002,
+        "durationMs": null,
+        "incomplete": null,
+        "pendingCandidates": null,
+        "verificationErrors": null,
+        "estimatedTokens": 222,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "40cd8c1c-0a87-41f7-ada0-58b5d62cef6d",
+          "displayId": "F-1",
+          "title": "counter.next increments by 2",
+          "claim": "next(c) now returns c+2 instead of c+1, double-incrementing the counter.",
+          "trigger": "Every call to next()",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 4,
+              "path": "src/counter.ts",
+              "startLine": 1
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/counter.ts",
+              "excerpt": "const corrected = c + 1; return corrected + 1;"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/counter.ts lines 1-4: corrected = c + 1; return corrected + 1 → returns c+2, double-incrementing. Failure path traced directly at HEAD.",
+          "round": 1,
+          "createdAt": 1790652975014
+        },
+        {
+          "id": "7c3ee255-4c29-4284-80ff-f18c9fd8fb4f",
+          "displayId": "F-2",
+          "title": "idem.run no longer enforces idempotency key",
+          "claim": "run() no longer rejects a null/missing idempotency key, silently accepting requests without idempotency validation.",
+          "trigger": "Calling run(null) or run('') previously threw; now returns 1",
+          "category": "error-handling",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "endLine": 3,
+              "path": "src/idem.ts",
+              "startLine": 1
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "diff",
+              "path": "src/idem.ts",
+              "excerpt": "-  if (!key) throw new Error('missing idempotency key');"
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "src/idem.ts at HEAD is a 3-line stub: run(key: string | null): number { return 1; }. It performs no check for null/empty idempotency key and its signature explicitly allows null, so run(null)/run('') silently returns 1 with no idempotency validation. No tests, callers, or docs indicate this is intended.",
+          "round": 1,
+          "createdAt": 1790652975020
+        }
+      ],
+      "pendingFindings": null,
+      "uncertaintyReasons": null,
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "91325f6a-8511-4c3d-ac3b-e185e2176bb0",
+          "base": "651cde2a3c3294bab858a506c00fccb8511f6945",
+          "head": "83e21917104bab221c4300800c92dc1b6e48fb90",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 2,
+              "fresh": 2,
+              "confirmed": 2,
+              "rejected": 0,
+              "uncertain": 0,
+              "summary": "Reviewed the 2-file diff. Found two regressions: src/counter.ts next() now increments by 2 (c+1 then +1 again), and src/idem.ts run() dropped the guard that throws on a missing idempotency key. No other usages exist in the repo. Both recorded as P1."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            },
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 0,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 222,
+        "findings": [
+          {
+            "id": "40cd8c1c-0a87-41f7-ada0-58b5d62cef6d",
+            "displayId": "F-1",
+            "title": "counter.next increments by 2",
+            "claim": "next(c) now returns c+2 instead of c+1, double-incrementing the counter.",
+            "trigger": "Every call to next()",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 4,
+                "path": "src/counter.ts",
+                "startLine": 1
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/counter.ts",
+                "excerpt": "const corrected = c + 1; return corrected + 1;"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/counter.ts lines 1-4: corrected = c + 1; return corrected + 1 → returns c+2, double-incrementing. Failure path traced directly at HEAD.",
+            "round": 1,
+            "createdAt": 1790652975014
+          },
+          {
+            "id": "7c3ee255-4c29-4284-80ff-f18c9fd8fb4f",
+            "displayId": "F-2",
+            "title": "idem.run no longer enforces idempotency key",
+            "claim": "run() no longer rejects a null/missing idempotency key, silently accepting requests without idempotency validation.",
+            "trigger": "Calling run(null) or run('') previously threw; now returns 1",
+            "category": "error-handling",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "endLine": 3,
+                "path": "src/idem.ts",
+                "startLine": 1
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "diff",
+                "path": "src/idem.ts",
+                "excerpt": "-  if (!key) throw new Error('missing idempotency key');"
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "src/idem.ts at HEAD is a 3-line stub: run(key: string | null): number { return 1; }. It performs no check for null/empty idempotency key and its signature explicitly allows null, so run(null)/run('') silently returns 1 with no idempotency validation. No tests, callers, or docs indicate this is intended.",
+            "round": 1,
+            "createdAt": 1790652975020
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    },
+    {
+      "scenario": "two-independent-bugs",
+      "repeat": 1,
+      "variant": "candidate",
+      "order": 2,
+      "base": "651cde2a3c3294bab858a506c00fccb8511f6945",
+      "head": "83e21917104bab221c4300800c92dc1b6e48fb90",
+      "seedDbSha256": "2fd97fb242f135817f0ea247a1ed2bbe25ef6323f4b7674eae5109b73aa7a1df",
+      "pass": true,
+      "score": {
+        "pass": true,
+        "counts": {
+          "truePositives": 2,
+          "falsePositives": 0,
+          "falseNegatives": 0,
+          "confirmed": 2,
+          "uncertain": 0,
+          "uncertainMatched": 0,
+          "uncertainUnmatched": 0,
+          "ignored": 0,
+          "negativeLabels": 0,
+          "negativeLabelsReported": 0,
+          "negativeLabelsUncertain": 0,
+          "invalidSeverities": 0
+        },
+        "metrics": {
+          "precision": 1,
+          "recall": 1,
+          "f1": 1,
+          "uncertaintyRate": 0
+        },
+        "matches": [
+          {
+            "expectationId": "two-bugs-counter",
+            "findingIndex": 0,
+            "findingId": "F-1"
+          },
+          {
+            "expectationId": "two-bugs-idempotency",
+            "findingIndex": 1,
+            "findingId": "F-2"
+          }
+        ],
+        "missedExpectations": [],
+        "falsePositiveReports": [],
+        "uncertainReports": []
+      },
+      "measurements": {
+        "usage": {
+          "inputTokens": 6510,
+          "outputTokens": 2037,
+          "cacheReadTokens": 48960,
+          "cacheWriteTokens": 0,
+          "totalTokens": 57507,
+          "cost": 0.0308064,
+          "durationMs": 72690.52905799999,
+          "toolCalls": 19,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "wallTimeMs": 74289.28240400006,
+        "durationMs": 72747,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "verificationErrors": 0,
+        "estimatedTokens": 57507,
+        "memoryPackTokens": null,
+        "rounds": 1
+      },
+      "findings": [
+        {
+          "id": "0cbc0862-ff35-434b-b03b-8da858dde8a7",
+          "displayId": "F-1",
+          "title": "next() increments by 2 (off-by-one regression)",
+          "claim": "next() now returns c+2 instead of c+1: the value is incremented once into `corrected`, then incremented again before returning, so every caller relying on next() returning the successor gets off-by-one values.",
+          "trigger": "Any call to next(c), e.g. next(1) now returns 3 instead of 2.",
+          "category": "correctness",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/counter.ts",
+              "startLine": 1,
+              "endLine": 4
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "code",
+              "path": "src/counter.ts",
+              "startLine": 1,
+              "endLine": 4,
+              "excerpt": "const corrected = c + 1; return corrected + 1;",
+              "description": "Head code shows the changed body: corrected = c + 1 then return corrected + 1, i.e. c + 2, versus merge-base `return c + 1`."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned diff shows src/counter.ts changed from `return c + 1;` (merge-base) to `const corrected = c + 1; return corrected + 1;` (head), so next(c) now returns c+2. No callers exist in the repo (search_text at head finds only the definition), so no guard or compensating caller change exists. next(1) returns 3 instead of 2 — concrete failure of the successor contract, introduced directly by this change.",
+          "round": 1,
+          "createdAt": 1790653049312
+        },
+        {
+          "id": "c4c96dd5-0e5c-4f96-8e0f-ad504b5faf4b",
+          "displayId": "F-2",
+          "title": "run() no longer rejects missing idempotency key",
+          "claim": "run() previously threw 'missing idempotency key' for a null/empty key; the change removed that guard, so invalid input is now processed silently instead of being rejected.",
+          "trigger": "Call run(null) or run('') — previously threw an error, now returns 1.",
+          "category": "error-handling",
+          "severity": "P1",
+          "status": "confirmed",
+          "featureKey": null,
+          "entityKey": null,
+          "anchors": [
+            {
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 2
+            }
+          ],
+          "evidence": [
+            {
+              "kind": "code",
+              "path": "src/idem.ts",
+              "startLine": 1,
+              "endLine": 2,
+              "excerpt": "export function run(key: string | null): number { return 1; }",
+              "description": "Head body of run() is only `return 1;` — the merge-base line `if (!key) throw new Error('missing idempotency key');` was deleted by this change, so run(null) no longer throws."
+            }
+          ],
+          "memoryMatches": [],
+          "verifierRationale": "Pinned reads confirm: at merge-base (651cde2) src/idem.ts line 2 threw `new Error('missing idempotency key')` when key was null/empty; the get_change diff shows this exact line deleted by this change (head 83e219), leaving only `return 1;`. Thus run(null) or run('') previously threw and now silently returns 1 — a concrete current failure (missing input validation) with a changed cause directly attributable to this diff. No other files reintroduce the guard for this function.",
+          "round": 1,
+          "createdAt": 1790653049318
+        }
+      ],
+      "pendingFindings": [],
+      "uncertaintyReasons": {},
+      "stoppedBecause": "reviewer signaled completion",
+      "outcome": {
+        "run": {
+          "id": "fedf0a8a-8e00-486a-afc3-e070714a43d2",
+          "base": "651cde2a3c3294bab858a506c00fccb8511f6945",
+          "head": "83e21917104bab221c4300800c92dc1b6e48fb90",
+          "rounds": [
+            {
+              "round": 1,
+              "candidates": 2,
+              "fresh": 2,
+              "confirmed": 2,
+              "rejected": 0,
+              "uncertain": 0,
+              "suppressed": 0,
+              "pending": 0,
+              "reviewerRan": true,
+              "summary": "The change is tiny (2 files, 4 lines) and both introduced defects are fully grounded: (1) next() computes corrected = c + 1 then returns corrected + 1, so every caller gets c+2 instead of c+1; (2) idem.run() lost its `if (!key) throw` guard, so a missing idempotency key is processed instead of rejected. No other changed behavior exists to review."
+            }
+          ],
+          "maxFindings": 10,
+          "transcriptDir": null,
+          "files": [
+            {
+              "path": "src/counter.ts",
+              "status": "modified",
+              "additions": 2,
+              "deletions": 1
+            },
+            {
+              "path": "src/idem.ts",
+              "status": "modified",
+              "additions": 0,
+              "deletions": 1
+            }
+          ]
+        },
+        "degraded": true,
+        "stoppedBecause": "reviewer signaled completion",
+        "estimatedTokens": 57507,
+        "usage": {
+          "inputTokens": 6510,
+          "outputTokens": 2037,
+          "cacheReadTokens": 48960,
+          "cacheWriteTokens": 0,
+          "totalTokens": 57507,
+          "cost": 0.0308064,
+          "durationMs": 72690.52905799999,
+          "toolCalls": 19,
+          "repeatedToolCalls": 0
+        },
+        "usageComplete": true,
+        "durationMs": 72747,
+        "incomplete": false,
+        "pendingCandidates": 0,
+        "pendingFindings": [],
+        "verificationErrors": 0,
+        "uncertaintyReasons": {},
+        "findings": [
+          {
+            "id": "0cbc0862-ff35-434b-b03b-8da858dde8a7",
+            "displayId": "F-1",
+            "title": "next() increments by 2 (off-by-one regression)",
+            "claim": "next() now returns c+2 instead of c+1: the value is incremented once into `corrected`, then incremented again before returning, so every caller relying on next() returning the successor gets off-by-one values.",
+            "trigger": "Any call to next(c), e.g. next(1) now returns 3 instead of 2.",
+            "category": "correctness",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/counter.ts",
+                "startLine": 1,
+                "endLine": 4
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "code",
+                "path": "src/counter.ts",
+                "startLine": 1,
+                "endLine": 4,
+                "excerpt": "const corrected = c + 1; return corrected + 1;",
+                "description": "Head code shows the changed body: corrected = c + 1 then return corrected + 1, i.e. c + 2, versus merge-base `return c + 1`."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned diff shows src/counter.ts changed from `return c + 1;` (merge-base) to `const corrected = c + 1; return corrected + 1;` (head), so next(c) now returns c+2. No callers exist in the repo (search_text at head finds only the definition), so no guard or compensating caller change exists. next(1) returns 3 instead of 2 — concrete failure of the successor contract, introduced directly by this change.",
+            "round": 1,
+            "createdAt": 1790653049312
+          },
+          {
+            "id": "c4c96dd5-0e5c-4f96-8e0f-ad504b5faf4b",
+            "displayId": "F-2",
+            "title": "run() no longer rejects missing idempotency key",
+            "claim": "run() previously threw 'missing idempotency key' for a null/empty key; the change removed that guard, so invalid input is now processed silently instead of being rejected.",
+            "trigger": "Call run(null) or run('') — previously threw an error, now returns 1.",
+            "category": "error-handling",
+            "severity": "P1",
+            "status": "confirmed",
+            "featureKey": null,
+            "entityKey": null,
+            "anchors": [
+              {
+                "path": "src/idem.ts",
+                "startLine": 1,
+                "endLine": 2
+              }
+            ],
+            "evidence": [
+              {
+                "kind": "code",
+                "path": "src/idem.ts",
+                "startLine": 1,
+                "endLine": 2,
+                "excerpt": "export function run(key: string | null): number { return 1; }",
+                "description": "Head body of run() is only `return 1;` — the merge-base line `if (!key) throw new Error('missing idempotency key');` was deleted by this change, so run(null) no longer throws."
+              }
+            ],
+            "memoryMatches": [],
+            "verifierRationale": "Pinned reads confirm: at merge-base (651cde2) src/idem.ts line 2 threw `new Error('missing idempotency key')` when key was null/empty; the get_change diff shows this exact line deleted by this change (head 83e219), leaving only `return 1;`. Thus run(null) or run('') previously threw and now silently returns 1 — a concrete current failure (missing input validation) with a changed cause directly attributable to this diff. No other files reintroduce the guard for this function.",
+            "round": 1,
+            "createdAt": 1790653049318
+          }
+        ]
+      },
+      "exitCode": 0,
+      "stderr": ""
+    }
+  ],
+  "summaries": {
+    "baseline": {
+      "runs": 13,
+      "scoredRuns": 13,
+      "executionErrors": 0,
+      "passed": 9,
+      "counts": {
+        "truePositives": 6,
+        "falsePositives": 1,
+        "falseNegatives": 3,
+        "confirmed": 7,
+        "uncertain": 0,
+        "uncertainMatched": 0,
+        "uncertainUnmatched": 0,
+        "ignored": 0,
+        "negativeLabels": 4,
+        "negativeLabelsReported": 1,
+        "negativeLabelsUncertain": 0,
+        "invalidSeverities": 0
+      },
+      "metrics": {
+        "precision": 0.8571428571428571,
+        "recall": 0.6666666666666666,
+        "f1": 0.75,
+        "uncertaintyRate": 0,
+        "labelledNegativeReportRate": 0.25
+      },
+      "usage": {
+        "inputTokens": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "outputTokens": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "cacheReadTokens": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "cacheWriteTokens": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "totalTokens": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "cost": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "durationMs": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "toolCalls": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        },
+        "repeatedToolCalls": {
+          "measuredRuns": 0,
+          "total": null,
+          "mean": null,
+          "partialOrUnknownRuns": 0
+        }
+      },
+      "wallTimeMs": {
+        "measuredRuns": 13,
+        "total": 386226.094587,
+        "mean": 29709.699583615387
+      },
+      "durationMs": {
+        "measuredRuns": 0,
+        "total": null,
+        "mean": null
+      },
+      "pendingCandidates": {
+        "measuredRuns": 0,
+        "total": null,
+        "mean": null
+      },
+      "verificationErrors": {
+        "measuredRuns": 0,
+        "total": null,
+        "mean": null
+      }
+    },
+    "candidate": {
+      "runs": 13,
+      "scoredRuns": 13,
+      "executionErrors": 0,
+      "passed": 13,
+      "counts": {
+        "truePositives": 9,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "confirmed": 9,
+        "uncertain": 0,
+        "uncertainMatched": 0,
+        "uncertainUnmatched": 0,
+        "ignored": 1,
+        "negativeLabels": 4,
+        "negativeLabelsReported": 0,
+        "negativeLabelsUncertain": 0,
+        "invalidSeverities": 0
+      },
+      "metrics": {
+        "precision": 1,
+        "recall": 1,
+        "f1": 1,
+        "uncertaintyRate": 0,
+        "labelledNegativeReportRate": 0
+      },
+      "usage": {
+        "inputTokens": {
+          "measuredRuns": 13,
+          "total": 65924,
+          "mean": 5071.076923076923,
+          "partialOrUnknownRuns": 0
+        },
+        "outputTokens": {
+          "measuredRuns": 13,
+          "total": 11136,
+          "mean": 856.6153846153846,
+          "partialOrUnknownRuns": 0
+        },
+        "cacheReadTokens": {
+          "measuredRuns": 13,
+          "total": 471040,
+          "mean": 36233.846153846156,
+          "partialOrUnknownRuns": 0
+        },
+        "cacheWriteTokens": {
+          "measuredRuns": 13,
+          "total": 0,
+          "mean": 0,
+          "partialOrUnknownRuns": 0
+        },
+        "totalTokens": {
+          "measuredRuns": 13,
+          "total": 548100,
+          "mean": 42161.53846153846,
+          "partialOrUnknownRuns": 0
+        },
+        "cost": {
+          "measuredRuns": 13,
+          "total": 0.26376239999999995,
+          "mean": 0.02028941538461538,
+          "partialOrUnknownRuns": 0
+        },
+        "durationMs": {
+          "measuredRuns": 13,
+          "total": 552026.204039,
+          "mean": 42463.55415684615,
+          "partialOrUnknownRuns": 0
+        },
+        "toolCalls": {
+          "measuredRuns": 13,
+          "total": 138,
+          "mean": 10.615384615384615,
+          "partialOrUnknownRuns": 0
+        },
+        "repeatedToolCalls": {
+          "measuredRuns": 13,
+          "total": 0,
+          "mean": 0,
+          "partialOrUnknownRuns": 0
+        }
+      },
+      "wallTimeMs": {
+        "measuredRuns": 13,
+        "total": 571639.3602180001,
+        "mean": 43972.2584783077
+      },
+      "durationMs": {
+        "measuredRuns": 13,
+        "total": 553046,
+        "mean": 42542
+      },
+      "pendingCandidates": {
+        "measuredRuns": 13,
+        "total": 0,
+        "mean": 0
+      },
+      "verificationErrors": {
+        "measuredRuns": 13,
+        "total": 0,
+        "mean": 0
+      }
+    }
+  },
+  "pairs": [
+    {
+      "scenario": "real-bug",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 7415.942594,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "preexisting-bug-unchanged",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 3313.8395699999965,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "guarded-negative",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 6240.4748070000205,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "clean-rename-refactor",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 4079.891099999979,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "multi-file-contract",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 9092.911892000004,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "large-diff-start",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 6177.634090000036,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "large-diff-end",
+      "repeat": 1,
+      "baselinePass": false,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 1,
+        "falsePositives": 0,
+        "falseNegatives": -1,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 57214.30314000003,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "expected-behavior-suppressed",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 403.4493369999109,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "fixed-regression",
+      "repeat": 1,
+      "baselinePass": false,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 1,
+        "falsePositives": 0,
+        "falseNegatives": -1,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 31531.219147000054,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "fixed-regression-still-fixed",
+      "repeat": 1,
+      "baselinePass": false,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": -1,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 22465.91114099999,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "renamed-symbol-memory-survives",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 8074.915088000009,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "outdated-decision-scope",
+      "repeat": 1,
+      "baselinePass": false,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 1,
+        "falsePositives": 0,
+        "falseNegatives": -1,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": 35121.83891099994,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    },
+    {
+      "scenario": "two-independent-bugs",
+      "repeat": 1,
+      "baselinePass": true,
+      "candidatePass": true,
+      "countsDelta": {
+        "truePositives": 0,
+        "falsePositives": 0,
+        "falseNegatives": 0,
+        "uncertain": 0
+      },
+      "wallTimeMsDelta": -5719.065185999963,
+      "usageDelta": {
+        "inputTokens": null,
+        "outputTokens": null,
+        "cacheReadTokens": null,
+        "cacheWriteTokens": null,
+        "totalTokens": null,
+        "cost": null,
+        "durationMs": null,
+        "toolCalls": null,
+        "repeatedToolCalls": null
+      }
+    }
+  ]
+}
