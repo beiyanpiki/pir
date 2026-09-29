@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Memory } from "../../dist/memory/index.js";
 import { MEMORY_SCHEMA_VERSION, applySnapshot, exportSnapshot, mergeSnapshots } from "../../dist/memory/sync.js";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, git } from "../fixtures/helpers.js";
 
 function tempDir(prefix) {
   return mkdtempSync(path.join(tmpdir(), prefix));
@@ -562,5 +562,119 @@ test("agent_fields travels with the projects/features/entities rows through sync
     local.close();
     remote.close();
     repo.cleanup();
+  }
+});
+
+function seedEntity(memory, overrides = {}) {
+  return memory.entities.upsert({
+    symbolKey: overrides.symbolKey ?? "Pay.retry",
+    qualifiedName: overrides.symbolKey ?? "Pay.retry",
+    kind: "function",
+    path: overrides.path ?? "pay.ts",
+    signature: null,
+    responsibilities: [],
+    invariants: [],
+    notes: [],
+    featureKeys: overrides.featureKeys ?? ["pay"],
+    source: "agent_summary",
+    signatureHash: null,
+    bodyHash: null,
+    lastSeenCommit: null,
+    stale: false,
+  });
+}
+
+function seedResolution(memory, overrides = {}) {
+  return memory.resolutions.insert({
+    findingId: overrides.findingId ?? "f-1",
+    fingerprint: overrides.fingerprint ?? "fp-a",
+    featureKey: overrides.featureKey ?? null,
+    entityKey: overrides.entityKey ?? null,
+    category: "correctness",
+    originalClaim: overrides.originalClaim ?? "claim",
+    originalTrigger: "trigger",
+    resolution: "fixed",
+    explanation: "",
+    beforeCommit: null,
+    afterCommit: null,
+    beforeCodeHash: null,
+    afterCodeHash: null,
+    fixCommit: null,
+    fixDiffHash: null,
+    verified: overrides.verified ?? true,
+  });
+}
+
+test("sync and resolution queries are project-scoped in a shared memory DB", async () => {
+  // Two different repos pointed at ONE dbPath — the PIR_MEMORY_DB / dbPath
+  // override. Regression: one project's sync used to export, replace, and
+  // delete the other project's resolutions and feature links unscoped.
+  const repoA = createTempGitRepo("pir-sync-scope-a-");
+  const repoB = createTempGitRepo("pir-sync-scope-b-");
+  // Distinct root commits (same-second empty commits would collide into one
+  // projectId): amend B's init so the two repos are genuinely different
+  // projects sharing one memory DB.
+  git(repoB.dir, ["commit", "--amend", "--allow-empty", "-q", "-m", "init-b"]);
+  const shared = path.join(tempDir("pir-sync-shared-"), "memory.sqlite");
+  const a = await Memory.open(repoA.dir, { dbPath: shared });
+  const b = await Memory.open(repoB.dir, { dbPath: shared });
+  const remoteA = await Memory.open(repoA.dir, { dbPath: path.join(tempDir("pir-sync-scope-ar-"), "memory.sqlite") });
+  try {
+    seedFeature(a, { key: "pay", name: "Pay" });
+    seedEntity(a, { featureKeys: ["pay"] });
+    seedResolution(a, { fingerprint: "fp-a", findingId: "fa-1" });
+    seedFeature(b, { key: "auth", name: "Auth" });
+    seedEntity(b, { symbolKey: "Auth.login", featureKeys: ["auth"], path: "auth.ts" });
+    seedResolution(b, { fingerprint: "fp-b", findingId: "fb-1" });
+    backdateWrites(b);
+
+    // Export ships only the exporting project's rows.
+    const snapA = exportSnapshot(a.store, a.identity.projectId);
+    assert.equal(snapA.tables.finding_resolutions.length, 1);
+    assert.equal(snapA.tables.finding_resolutions[0].fingerprint, "fp-a");
+    assert.equal(snapA.tables.features.length, 1);
+    assert.equal(snapA.tables.feature_entities.length, 1);
+
+    // A real pair change on a replica of A forces the link rewrite during
+    // apply — it must stay scoped and leave B's rows alone.
+    seedFeature(remoteA, { key: "pay", name: "Pay" });
+    seedEntity(remoteA, { featureKeys: ["pay"] });
+    seedFeature(remoteA, { key: "audit", name: "Audit" });
+    seedEntity(remoteA, { symbolKey: "Audit.check", featureKeys: ["audit"], path: "audit.ts" });
+    seedResolution(remoteA, { fingerprint: "fp-a", findingId: "fa-1" });
+    const { merged } = mergeSnapshots(snapA, exportSnapshot(remoteA.store, remoteA.identity.projectId));
+    applySnapshot(a.store, a.identity.projectId, merged);
+
+    const afterA = exportSnapshot(a.store, a.identity.projectId);
+    const afterB = exportSnapshot(b.store, b.identity.projectId);
+    assert.equal(afterA.tables.feature_entities.length, 2, "A gained the audit link");
+    assert.equal(afterB.tables.finding_resolutions.length, 1, "B's resolution survives A's sync");
+    assert.equal(afterB.tables.finding_resolutions[0].fingerprint, "fp-b");
+    assert.equal(afterB.tables.features.length, 1);
+    assert.equal(afterB.tables.feature_entities.length, 1, "B's feature link survives A's sync");
+
+    // Repo queries and stats never leak across projects in the shared DB.
+    assert.deepEqual(a.resolutions.verifiedFixes().map((r) => r.fingerprint), ["fp-a"]);
+    assert.deepEqual(b.resolutions.verifiedFixes().map((r) => r.fingerprint), ["fp-b"]);
+    assert.equal(a.stats().resolutions, 1);
+    assert.equal(b.stats().resolutions, 1);
+
+    // A fingerprint group contested in A must not delete B's same-fingerprint
+    // group during replacement.
+    seedResolution(a, { fingerprint: "fp-b", findingId: "fa-2", originalClaim: "contested twin" });
+    const { merged: merged2 } = mergeSnapshots(
+      exportSnapshot(a.store, a.identity.projectId),
+      exportSnapshot(remoteA.store, remoteA.identity.projectId),
+    );
+    applySnapshot(a.store, a.identity.projectId, merged2);
+    const afterB2 = exportSnapshot(b.store, b.identity.projectId);
+    assert.equal(afterB2.tables.finding_resolutions.length, 1, "same fingerprint in A must not wipe B's group");
+    assert.equal(afterB2.tables.finding_resolutions[0].fingerprint, "fp-b");
+  } finally {
+    a.close();
+    b.close();
+    remoteA.close();
+    repoA.cleanup();
+    repoB.cleanup();
   }
 });

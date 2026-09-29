@@ -211,4 +211,19 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE code_entities ADD COLUMN agent_fields TEXT`,
     ],
   },
+  {
+    version: 4,
+    statements: [
+      // finding_resolutions gains project scoping: PIR_MEMORY_DB / dbPath can
+      // legitimately host several projects in one DB, and export, fingerprint
+      // replacement, and queries must not touch another project's fix history.
+      // Legacy rows are attributed when the DB holds exactly one project (the
+      // common case); rows in a multi-project DB cannot be attributed and stay
+      // NULL — invisible to scoped queries rather than mis-attributed.
+      `ALTER TABLE finding_resolutions ADD COLUMN project_id TEXT`,
+      `UPDATE finding_resolutions SET project_id = (SELECT id FROM projects LIMIT 1)
+        WHERE (SELECT COUNT(*) FROM projects) = 1`,
+      `CREATE INDEX IF NOT EXISTS idx_resolutions_project_fp ON finding_resolutions (project_id, fingerprint)`,
+    ],
+  },
 ];

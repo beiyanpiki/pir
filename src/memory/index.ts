@@ -110,7 +110,7 @@ export class Memory {
       features: count("features"),
       entities: count("code_entities"),
       issueMemories: count("issue_memories"),
-      resolutions: this.store.get<{ n: number }>("SELECT COUNT(*) AS n FROM finding_resolutions")?.n ?? 0,
+      resolutions: count("finding_resolutions"),
       findings: count("findings"),
       staleEntities: count("code_entities", "AND stale = 1"),
       lastIndexedCommit: this.getLastIndexedCommit(),
