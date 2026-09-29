@@ -69,9 +69,10 @@ Find options:
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
   --plugins <list>    language packs injecting language-specific review
-                      directions (golang ships today; more packs follow):
-                      comma-separated names, "none" to disable, or "auto" to
-                      detect from marker files at head (default)
+                      directions (golang and typescript ship today; more
+                      packs follow): comma-separated names, "none" to
+                      disable, or "auto" to detect from marker files at
+                      head (default)
   --no-sync-index     skip codegraph index sync
 
 Models options:

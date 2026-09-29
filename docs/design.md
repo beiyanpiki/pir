@@ -762,7 +762,8 @@ src/
 ├── codemap/            provider interface · codegraph CLI adapter · degraded
 └── plugins/            built-in language packs: loader · marker detection ·
                         guidance rendering (budgeted)
-plugins/                shipped pack data: golang/{plugin.json, guidance/*.md}
+plugins/                shipped pack data: golang/, typescript/{plugin.json,
+                        guidance/*.md}
 tests/
 ├── unit/               model-free unit tests (dedup, identity, memory,
 │                       prompts, session factory, tools, …)
