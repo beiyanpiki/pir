@@ -42,6 +42,9 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
+            # docker-compose.yml pins ghcr.io/beiyanpiki/pir:main — publish it
+            # on every dev build so `docker compose pull` tracks the release line.
+            type=raw,value=main,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,format=short
