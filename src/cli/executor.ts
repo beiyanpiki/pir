@@ -26,7 +26,7 @@ import {
   showFinding,
   verifyFix,
 } from "../app/services.js";
-import { envelope, isReported, renderFindResultText, severityAtLeast } from "../app/output.js";
+import { envelope, findExitCode, renderFindResultText } from "../app/output.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 
 export { UsageError } from "./config.js";
@@ -51,8 +51,8 @@ Usage:
 Find options:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
-  --max-rounds <n>    reviewer loop rounds (default 2)
-  --max-tokens <n>    token budget estimate (default 400000)
+  --max-rounds <n>    discovery/verification loop rounds (default 2)
+  --max-tokens <n>    session-boundary token budget (default 400000)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
                       out — nothing is padded to reach it
@@ -508,18 +508,22 @@ async function cmdFind(
 ): Promise<number> {
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  let maxFindings: number | undefined;
-  if (flags.get("--max-findings") !== undefined) {
-    maxFindings = Number(flags.get("--max-findings"));
-    if (!Number.isInteger(maxFindings) || maxFindings < 1) {
-      throw new UsageError(`invalid --max-findings: ${flags.get("--max-findings")} (positive integer required)`);
+  const positiveOption = (name: string): number | undefined => {
+    if (flags.get(name) === undefined) return undefined;
+    const value = Number(flags.get(name));
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new UsageError(`invalid ${name}: ${flags.get(name)} (positive integer required)`);
     }
-  }
+    return value;
+  };
+  const maxFindings = positiveOption("--max-findings");
+  const maxRounds = positiveOption("--max-rounds");
+  const maxTokens = positiveOption("--max-tokens");
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
-    maxRounds: flags.get("--max-rounds") !== undefined ? Number(flags.get("--max-rounds")) : undefined,
-    maxTokens: flags.get("--max-tokens") !== undefined ? Number(flags.get("--max-tokens")) : undefined,
+    maxRounds,
+    maxTokens,
     maxFindings,
     model: flags.get("--model") as string | undefined,
     onProgress: (event) => log(`• ${event.message}`),
@@ -548,6 +552,14 @@ async function cmdFind(
           degraded: result.degraded,
           stoppedBecause: result.stoppedBecause,
           estimatedTokens: result.estimatedTokens,
+          usage: result.usage ?? null,
+          usageComplete: result.usageComplete,
+          durationMs: result.durationMs,
+          incomplete: result.incomplete,
+          pendingCandidates: result.pendingCandidates,
+          pendingFindings: result.pendingFindings.map((row) => toFindingView(ctx, row)),
+          verificationErrors: result.verificationErrors,
+          uncertaintyReasons: result.uncertaintyReasons,
           findings,
         },
         { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
@@ -561,15 +573,14 @@ async function cmdFind(
         rounds: result.rounds,
         findings,
         stoppedBecause: result.stoppedBecause,
+        incomplete: result.incomplete,
+        pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
       })}\n`,
     );
   }
 
-  if (failOn !== "none" && findings.some((f) => isReported(f) && severityAtLeast(f.severity, failOn))) {
-    return 1;
-  }
-  return 0;
+  return findExitCode(findings, failOn, result.incomplete);
 }
 
 async function cmdMemory(

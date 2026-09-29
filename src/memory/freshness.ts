@@ -32,8 +32,8 @@ export async function hashFilesAtCommit(
 
 /**
  * Classify a memory record against the current code state.
- * - fresh: hash matches (or no hash tracked yet)
- * - stale: file changed since the memory was validated
+ * - fresh: both hashes are known and match
+ * - stale: file changed, or there is insufficient evidence to validate it
  * - invalid: file no longer exists
  */
 export function classifyFreshness(input: {
@@ -42,6 +42,25 @@ export function classifyFreshness(input: {
   fileExists: boolean;
 }): FreshnessState {
   if (!input.fileExists) return "invalid";
-  if (!input.storedHash || !input.currentHash) return "fresh";
+  if (!input.storedHash || !input.currentHash) return "stale";
   return input.storedHash === input.currentHash ? "fresh" : "stale";
+}
+
+/** No stale flag is not proof of freshness; tie provenance to the reviewed head. */
+export function memoryFreshnessAnnotation(input: {
+  headCommit: string;
+  storedCommit: string | null;
+  stale: boolean;
+  changed?: boolean;
+  seenOnly?: boolean;
+}): string {
+  const stored = input.storedCommit ? input.storedCommit.slice(0, 12) : "unknown";
+  if (input.stale) return `(possibly stale; stored ${stored} — revalidate at reviewed head)`;
+  if (input.headCommit && input.storedCommit === input.headCommit) {
+    return input.seenOnly
+      ? `(seen at reviewed head ${stored}; contracts still require validation)`
+      : `(validated at reviewed head ${stored}; verify against code)`;
+  }
+  if (input.changed) return `(possibly stale: changed path; stored ${stored} — revalidate at reviewed head)`;
+  return `(freshness unknown at reviewed head; stored ${stored} — revalidate)`;
 }

@@ -7,6 +7,9 @@ export interface RoundInfo {
   confirmed: number;
   rejected: number;
   uncertain: number;
+  suppressed?: number;
+  pending?: number;
+  reviewerRan?: boolean;
   summary: string;
 }
 
@@ -17,6 +20,8 @@ export interface ReviewState {
   maxRounds: number;
   /** All candidates accumulated across rounds (dedup baseline). */
   known: CandidateFinding[];
+  pending: CandidateFinding[];
+  investigationFeedback: string[];
   verified: VerifiedFinding[];
   rounds: RoundInfo[];
   focus: string[];
@@ -33,6 +38,8 @@ export function createReviewState(base: string, head: string, maxRounds: number)
     round: 0,
     maxRounds,
     known: [],
+    pending: [],
+    investigationFeedback: [],
     verified: [],
     rounds: [],
     focus: [],
@@ -68,11 +75,15 @@ export function applyVerdict(
       status = "uncertain";
   }
 
-  const annotated = memoryMatches.map((m) => ({
-    ...m,
-    checkedByVerifier: true,
-    stillApplies: verdict.priorDecisionStillApplies ?? undefined,
-  }));
+  const assessments = new Map((verdict.decisionAssessments ?? []).map((a) => [a.memoryId, a]));
+  const annotated = memoryMatches.map((m) => {
+    const assessment = assessments.get(m.memoryId);
+    const stillApplies = assessment?.stillApplies ??
+      (memoryMatches.length === 1 && verdict.decisionAssessments === undefined
+        ? verdict.priorDecisionStillApplies
+        : undefined);
+    return { ...m, checkedByVerifier: stillApplies !== undefined, stillApplies };
+  });
 
   // Suppression contract: a trusted prior decision that the verifier
   // explicitly endorses (stillApplies === true) turns the finding into the

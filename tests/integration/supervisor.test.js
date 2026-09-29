@@ -438,7 +438,7 @@ test("findIssues: rejected findings do not consume the maxFindings budget", asyn
         category: "correctness",
         severity: "P1",
         anchors: [{ path: "src/pay.ts", startLine: 1 }],
-        evidence: [],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
       });
       await tool("finish_round").execute({ summary: "one more to check", nextFocus: [], needsMoreRounds: true });
     },

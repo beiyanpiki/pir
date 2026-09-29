@@ -1,4 +1,4 @@
-import type { AgentSessionFactory } from "./types.js";
+import type { AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
 import { reviewerPrompt } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
@@ -27,6 +27,23 @@ export interface ReviewerRoundResult {
   needsMoreRounds: boolean;
   assistantText: string;
   submitted: boolean;
+  coverage?: string[];
+  unresolvedQuestions?: string[];
+  blockers?: string[];
+  usage?: SessionUsage;
+}
+
+/** Incomplete rounds remain failures, but retain evidence for error persistence. */
+export class ReviewerRoundError extends Error {
+  readonly candidates: CandidateFinding[];
+  readonly usage?: SessionUsage;
+
+  constructor(cause: unknown, candidates: CandidateFinding[], usage?: SessionUsage) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+    this.name = "ReviewerRoundError";
+    this.candidates = [...candidates];
+    this.usage = usage ? { ...usage } : undefined;
+  }
 }
 
 export interface ReviewerDeps {
@@ -40,6 +57,9 @@ export interface ReviewerDeps {
   findingsRemaining: number;
   focus: string[];
   priorSummary?: string;
+  investigationFeedback?: string[];
+  mergeBase?: string;
+  verificationCapacity?: number;
   model?: string;
   /** Opt-in transcript dump location for this round's session. */
   transcriptFile?: string;
@@ -76,38 +96,56 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
   });
 
   let assistantText = "";
-  let providerError: string | undefined;
+  let usage: SessionUsage | undefined;
+  let failure: { cause: unknown } | undefined;
   try {
-    const prompt = reviewerPrompt({
-      base: deps.ctx.changeSet.base,
-      head: deps.ctx.changeSet.head,
+    await session.prompt(reviewerPrompt({
+      base: deps.ctx.changeSet.baseCommit ?? deps.ctx.changeSet.base,
+      head: deps.ctx.changeSet.headCommit ?? deps.ctx.headCommit,
+      mergeBase: deps.mergeBase ?? deps.ctx.changeSet.mergeBase,
       round: deps.round,
       maxRounds: deps.maxRounds,
       maxFindings: deps.maxFindings,
       findingsRemaining: deps.findingsRemaining,
+      verificationCapacity: deps.verificationCapacity,
       focus: deps.focus,
       priorSummary: deps.priorSummary,
+      investigationFeedback: deps.investigationFeedback,
       memoryPack: deps.memoryPack,
       structuralQueries: deps.ctx.codeMap.structuralQueries,
-    });
-    await session.prompt(prompt);
+    }));
     assistantText = session.getLastAssistantText() ?? "";
-    // pi resolves a failed provider turn instead of rejecting; surface it so
-    // a dead endpoint cannot masquerade as "no findings".
-    providerError = session.getLastAssistantError();
-    if (providerError) {
-      throw new Error(`reviewer session failed: ${providerError}`);
-    }
+    // Some providers resolve an errored turn rather than rejecting it.
+    const providerError = session.getLastAssistantError();
+    if (providerError) throw new Error(`reviewer session failed: ${providerError}`);
+    if (!outcome.submitted) throw new Error("reviewer did not call finish_round; round incomplete");
+  } catch (cause) {
+    failure = { cause };
   } finally {
-    session.dispose();
+    try {
+      const measured = session.getUsage?.();
+      if (measured) usage = { ...measured };
+    } catch (cause) {
+      failure ??= { cause };
+    }
+    try {
+      session.dispose();
+    } catch (cause) {
+      failure ??= { cause };
+    }
   }
+  if (failure) throw new ReviewerRoundError(failure.cause, collector.candidates, usage);
 
   return {
     candidates: collector.candidates,
-    summary: outcome.summary || assistantText.slice(0, 500),
+    summary: outcome.summary,
     nextFocus: outcome.nextFocus,
     needsMoreRounds: outcome.needsMoreRounds,
     assistantText,
     submitted: outcome.submitted,
+    coverage: outcome.coverage ?? [],
+    unresolvedQuestions: outcome.unresolvedQuestions ?? [],
+    blockers: outcome.blockers ?? [],
+    usage,
   };
 }

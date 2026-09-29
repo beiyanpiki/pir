@@ -21,6 +21,12 @@ export function isReported(finding: FindingView): boolean {
   return REPORTED_STATUSES.has(finding.status);
 }
 
+export function findExitCode(findings: FindingView[], failOn: string, incomplete = false): number {
+  if (failOn === "none") return 0;
+  if (findings.some((finding) => isReported(finding) && severityAtLeast(finding.severity, failOn))) return 1;
+  return incomplete ? 3 : 0;
+}
+
 // ---------------------------------------------------------------------------
 // human-facing text rendering
 // ---------------------------------------------------------------------------
@@ -55,6 +61,8 @@ export function renderFindResultText(input: {
   rounds: Array<{ round: number; fresh: number; confirmed: number; rejected: number; uncertain: number }>;
   findings: FindingView[];
   stoppedBecause: string;
+  pendingCandidates?: number;
+  incomplete?: boolean;
   transcriptDir?: string;
 }): string {
   const lines: string[] = [];
@@ -67,6 +75,10 @@ export function renderFindResultText(input: {
     );
   }
   lines.push(`stopped: ${input.stoppedBecause}`);
+  if (input.incomplete) lines.push("review incomplete: remaining work or verification errors; this is not a clean review");
+  if (input.pendingCandidates) {
+    lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
+  }
   if (input.transcriptDir) {
     lines.push(`transcripts: ${input.transcriptDir}`);
   }

@@ -332,16 +332,17 @@ export async function refreshMemory(deps: {
   }
 
   const changes = await getNameStatus(deps.repoRoot, lastIndexed, head);
-  const changedFiles = changes.map((c) => c.path);
+  const changedFiles = [...new Set(changes.flatMap((change) => change.oldPath ? [change.oldPath, change.path] : [change.path]))];
   if (changedFiles.length === 0) {
     deps.memory.setLastIndexedCommit(head);
     return { lastIndexedCommit: lastIndexed, changedFiles, staleMarked: 0, entitiesRefreshed: 0, headCommit: head };
   }
 
   const headHashes = await hashFilesAtCommit(deps.repoRoot, head, changedFiles);
-  const staleMarked = deps.memory.entities.markStaleWhereHashMismatch(head, headHashes);
+  const staleMarked = deps.memory.entities.markStaleWhereHashMismatch(head, headHashes, changedFiles);
 
-  const affected = deps.memory.entities.byPaths(changedFiles);
+  const existingPaths = changedFiles.filter((path) => headHashes.has(path));
+  const affected = deps.memory.entities.byPaths(existingPaths);
   const ctx: ToolContext = {
     repoRoot: deps.repoRoot,
     headCommit: head,
@@ -387,7 +388,7 @@ export async function refreshMemory(deps: {
       await session.prompt(
         [
           "Re-summarize these changed files for repository memory. Focus on responsibilities and invariants of the symbols they define.",
-          ...changedFiles.slice(0, 30).map((p) => `- ${p}`),
+          ...existingPaths.slice(0, 30).map((p) => `- ${p}`),
           "Call submit_module_summary exactly once.",
         ].join("\n"),
       );
@@ -396,7 +397,7 @@ export async function refreshMemory(deps: {
     }
     if (collector.summary) {
       for (const sym of collector.summary.symbols) {
-        if (!sym.path) continue;
+        if (!sym.path || !headHashes.has(sym.path)) continue;
         const existing = deps.memory.entities.byPaths([sym.path]).find((e) => e.qualifiedName === sym.name);
         deps.memory.entities.upsert({
           symbolKey: existing?.symbolKey ?? sym.name,

@@ -1,4 +1,5 @@
 import type { SourceAnchor } from "../core/types.js";
+import type { SessionUsage } from "../agents/types.js";
 
 export type Severity = "P0" | "P1" | "P2" | "P3";
 
@@ -81,18 +82,33 @@ export interface MemoryMatch {
   source: string;
   claim: string;
   rationale?: string;
+  trigger?: string;
+  stale?: boolean;
   stillApplies?: boolean;
   checkedByVerifier?: boolean;
 }
 
 export type VerifierVerdict = "confirmed" | "rejected" | "uncertain";
 
+export interface DecisionAssessment {
+  memoryId: string;
+  stillApplies: boolean;
+  rationale?: string;
+}
+
+export type UncertaintyReason = "missing-evidence" | "tool-limit" | "provider-error" | "missing-verdict";
+
 export interface VerifierResult {
   verdict: VerifierVerdict;
   rationale: string;
-  /** When a historical decision was matched: does it still apply to the current code? */
+  /** Legacy fallback, accepted only when exactly one historical decision matched. */
   priorDecisionStillApplies?: boolean;
+  decisionAssessments?: DecisionAssessment[];
+  /** Code-only follow-up, never historical decisions or their rationale. */
+  codeFeedback?: string;
+  uncertaintyReason?: UncertaintyReason;
   confidence: number;
+  usage?: SessionUsage;
 }
 
 export interface VerifiedFinding extends CandidateFinding {
