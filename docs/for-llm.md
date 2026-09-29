@@ -228,4 +228,4 @@ Use `--fail-on P1` + exit code `1` for gating decisions.
 | `.pir/` appears in repos | exec mode state | intended; gitignore it if unwanted |
 
 Full CLI reference and architecture: [README](../README.md) ·
-Original design spec: [docs/design.md](design.md).
+Architecture reference: [docs/design.md](design.md).

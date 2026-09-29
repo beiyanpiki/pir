@@ -177,7 +177,7 @@ The interactive equivalent ships as `docker/deploy.sh`.
 |---|---|
 | [docs/README.zh-CN.md](docs/README.zh-CN.md) | 完整中文说明(功能、架构、安装、协议) |
 | [docs/for-llm.md](docs/for-llm.md) | Agent-facing deployment & usage guide |
-| [docs/design.md](docs/design.md) | Original architecture spec |
+| [docs/design.md](docs/design.md) | Full architecture reference for developers |
 | [docs/review-loop.md](docs/review-loop.md) | Evidence snapshots, pending candidates, isolation, usage, and evaluation |
 
 ## Quick start
