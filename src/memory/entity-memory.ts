@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseJsonArray, type MemorySource } from "../core/types.js";
+import { parseGeneratedArrays, parseJsonArray, type GeneratedArrays, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
 export interface CodeEntityMemory {
@@ -19,6 +19,8 @@ export interface CodeEntityMemory {
   bodyHash: string | null;
   lastSeenCommit: string | null;
   stale: boolean;
+  /** Agent-generated array entries as of the last bootstrap/refresh; the rest are user-added. */
+  agentGenerated?: GeneratedArrays;
 }
 
 export type EntityDraft = Omit<CodeEntityMemory, "id">;
@@ -39,6 +41,7 @@ interface Row {
   body_hash: string | null;
   last_seen_commit: string | null;
   stale: number;
+  agent_fields: string | null;
 }
 
 function toDomain(row: Row): CodeEntityMemory {
@@ -58,6 +61,7 @@ function toDomain(row: Row): CodeEntityMemory {
     bodyHash: row.body_hash,
     lastSeenCommit: row.last_seen_commit,
     stale: row.stale === 1,
+    agentGenerated: parseGeneratedArrays(row.agent_fields),
   };
 }
 
@@ -111,8 +115,8 @@ export class EntitiesRepo {
     );
     const id = existing?.id ?? randomUUID();
     this.store.run(
-      `INSERT INTO code_entities (id, project_id, symbol_key, qualified_name, kind, path, signature, responsibilities, invariants, notes, feature_keys, source, signature_hash, body_hash, last_seen_commit, stale)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO code_entities (id, project_id, symbol_key, qualified_name, kind, path, signature, responsibilities, invariants, notes, feature_keys, source, signature_hash, body_hash, last_seen_commit, stale, agent_fields)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (project_id, symbol_key) DO UPDATE SET
          qualified_name = excluded.qualified_name,
          kind = excluded.kind,
@@ -126,7 +130,8 @@ export class EntitiesRepo {
          signature_hash = excluded.signature_hash,
          body_hash = excluded.body_hash,
          last_seen_commit = excluded.last_seen_commit,
-         stale = excluded.stale`,
+         stale = excluded.stale,
+         agent_fields = excluded.agent_fields`,
       id,
       this.projectId,
       draft.symbolKey,
@@ -143,6 +148,7 @@ export class EntitiesRepo {
       draft.bodyHash,
       draft.lastSeenCommit,
       draft.stale ? 1 : 0,
+      draft.agentGenerated && Object.keys(draft.agentGenerated).length > 0 ? JSON.stringify(draft.agentGenerated) : null,
     );
     this.store.recordMemoryVersion("code_entity", id, draft, "upsert");
     this.linkFeature(id, draft.featureKeys);

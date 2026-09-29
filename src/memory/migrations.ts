@@ -200,4 +200,15 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE issue_memories ADD COLUMN anchor_paths TEXT NOT NULL DEFAULT '[]'`,
     ],
   },
+  {
+    version: 3,
+    statements: [
+      // Which array entries the agent generated last: a re-bootstrap replaces
+      // these wholesale while user-added entries (never listed here) survive.
+      // NULL = no generated set recorded; merging degrades to keep-everything.
+      `ALTER TABLE project_memories ADD COLUMN agent_fields TEXT`,
+      `ALTER TABLE features ADD COLUMN agent_fields TEXT`,
+      `ALTER TABLE code_entities ADD COLUMN agent_fields TEXT`,
+    ],
+  },
 ];
