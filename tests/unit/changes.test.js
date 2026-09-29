@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
 import { buildChangeSet } from "../../dist/changes/change-set.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 
@@ -50,6 +51,27 @@ test("pure rename with no content change still appears in the changeset", async 
     assert.equal(renamed.path, "src/b.ts");
     assert.equal(renamed.oldPath, "src/a.ts");
     assert.equal(renamed.status, "renamed");
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("createWorkingTreeSnapshot excludes the .pir state directory", async () => {
+  const repo = createTempGitRepo();
+  try {
+    repo.write("src/a.ts", "1\n");
+    repo.commit("init");
+    const { mkdirSync, writeFileSync } = await import("node:fs");
+    mkdirSync(path.join(repo.dir, ".pir"));
+    writeFileSync(path.join(repo.dir, ".pir", "memory.sqlite"), "fake db");
+    writeFileSync(path.join(repo.dir, ".pir", "memory.sqlite-wal"), "fake wal");
+    repo.write("src/a.ts", "2\n");
+    const { createWorkingTreeSnapshot, git } = await import("../../dist/changes/git.js");
+    const sha = await createWorkingTreeSnapshot(repo.dir);
+    const tree = await git(repo.dir, ["ls-tree", "-r", "--name-only", sha]);
+    const files = tree.split("\n").filter((f) => f.length > 0);
+    assert.ok(files.includes("src/a.ts"));
+    assert.equal(files.filter((f) => f.startsWith(".pir/")).length, 0);
   } finally {
     repo.cleanup();
   }

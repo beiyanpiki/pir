@@ -87,6 +87,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
   const run = deps.memory.findings.createRun(base, head);
   const state: ReviewState = createReviewState(base, head, maxRounds);
+  // Unique candidates discovered this run. state.known only tracks verified
+  // candidates now, and cap-delayed candidates legitimately re-appear as fresh
+  // in later rounds — this set keeps the run stat from counting them twice.
+  const discovered = new Set<string>();
 
   const transcriptDir = transcriptsEnabled()
     ? runTranscriptDir(deps.memory.store.dbPath, run.id)
@@ -140,13 +144,17 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     budget.chargeText(result.assistantText, result.summary);
 
     const dedup = deduplicateCandidates(result.candidates, state.known);
-    state.known.push(...dedup.fresh);
+    for (const candidate of dedup.fresh) discovered.add(candidate.identity.fingerprint);
 
     const verificationSlots = Math.min(
       options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS,
       Math.max(0, maxFindings - reportedCount(state)),
     );
     const toVerify = dedup.fresh.slice(0, verificationSlots);
+    // Only verified candidates join the dedup baseline: candidates left out by
+    // the verification cap must stay eligible for later rounds instead of
+    // being silently discarded as "known".
+    state.known.push(...toVerify);
     let confirmed = 0;
     let rejected = 0;
     let uncertain = 0;
@@ -214,7 +222,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const persisted = state.verified.map((f) => deps.memory.findings.insert(f, run.id));
   deps.memory.findings.finishRun(run.id, {
     rounds: state.round,
-    candidates: state.known.length,
+    // Unique candidates discovered this run (verified or not).
+    candidates: discovered.size,
     confirmed: state.verified.filter((f) => f.status === "confirmed").length,
     rejected: state.verified.filter((f) => f.status === "rejected").length,
     uncertain: state.verified.filter((f) => f.status === "uncertain").length,

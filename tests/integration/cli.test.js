@@ -175,3 +175,16 @@ test("pir models without --all only lists authenticated models (or guidance)", a
     assert.match(table.stdout, /^provider\s+model/);
   }
 });
+
+test("pir find rejects non-positive --max-rounds/--max-tokens like --max-findings", async () => {
+  const repo = createTempGitRepo();
+  try {
+    for (const flag of ["--max-rounds", "--max-tokens", "--max-findings"]) {
+      const res = await pirExpectFail(["find", flag, "0"], { cwd: repo.dir });
+      assert.equal(res.code, 2, `${flag} 0 must be a usage error`);
+      assert.match(res.stderr + res.stdout, new RegExp(`invalid ${flag}`));
+    }
+  } finally {
+    repo.cleanup();
+  }
+});

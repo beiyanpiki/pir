@@ -402,3 +402,57 @@ test("freshness: hash mismatch marks entity stale, deletion invalidates", async 
     repo.cleanup();
   }
 });
+
+test("matchingScope: same-category key matches only; keyless project decisions never scope-match", async () => {
+  const repo = createTempGitRepo();
+  const memory = await openMemory(repo);
+  try {
+    repo.write("a.ts", "x");
+    const commit = repo.commit("init");
+    memory.issues.insert({
+      featureKey: "payment-retry",
+      entityKey: null,
+      fingerprint: "fp-feature",
+      category: "correctness",
+      claim: "quota consumed without attempt",
+      trigger: "t",
+      decision: "wont_fix",
+      priority: null,
+      rationale: "user said ok",
+      scope: "feature",
+      source: "user_explicit",
+      createdAtCommit: commit,
+      validUntilCommit: null,
+      stale: false,
+    });
+    memory.issues.insert({
+      featureKey: null,
+      entityKey: null,
+      fingerprint: "fp-project",
+      category: "correctness",
+      claim: "unrelated project-level decision",
+      trigger: "t",
+      decision: "accepted_risk",
+      priority: null,
+      rationale: "keyless",
+      scope: "project",
+      source: "user_explicit",
+      createdAtCommit: commit,
+      validUntilCommit: null,
+      stale: false,
+    });
+
+    const scoped = memory.issues.matchingScope({ featureKey: "payment-retry", category: "correctness" });
+    assert.equal(scoped.length, 1);
+    assert.equal(scoped[0].fingerprint, "fp-feature");
+
+    // Different category on the same feature key: no match.
+    assert.equal(memory.issues.matchingScope({ featureKey: "payment-retry", category: "security" }).length, 0);
+
+    // Keyless project decisions still match through the exact fingerprint tier.
+    assert.equal(memory.issues.byFingerprint("fp-project").length, 1);
+  } finally {
+    memory.close();
+    repo.cleanup();
+  }
+});

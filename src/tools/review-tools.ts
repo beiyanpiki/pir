@@ -30,11 +30,11 @@ export function createReadCodeTool(ctx: ToolContext): ReviewTool {
       const rel = String(params.path);
       const abs = safeResolve(ctx.repoRoot, rel);
       if (!abs) return { text: `ERROR: invalid path: ${rel}` };
-      let content: string | null = null;
-      if (existsSync(abs) && !statIsDir(abs)) {
+      // The review target is the head commit; the working tree may have moved
+      // on since. Fall back to it only for files git cannot provide.
+      let content = await readFileAtCommit(ctx.repoRoot, ctx.headCommit, rel);
+      if (content === null && existsSync(abs) && !statIsDir(abs)) {
         content = readFileSync(abs, "utf8");
-      } else {
-        content = await readFileAtCommit(ctx.repoRoot, ctx.headCommit, rel);
       }
       if (content === null) return { text: `ERROR: file not found: ${rel}` };
       const lines = content.split("\n");

@@ -1,4 +1,5 @@
 import type { CandidateFinding, MemoryMatch, VerifiedFinding, VerifierResult } from "../findings/types.js";
+import type { IssueDecision } from "../memory/issue-memory.js";
 
 export interface RoundInfo {
   round: number;
@@ -80,7 +81,11 @@ export function applyVerdict(
   // when code changes. This holds even when the verifier *confirms* the
   // problem is technically real: for accepted_risk / wont_fix that is the
   // premise of the decision, not a contradiction of it.
-  const trusted = annotated.find((m) => m.stillApplies === true && isTrustedSource(m.source));
+  // Non-suppressive decisions (confirmed) are excluded: endorsing a prior
+  // "confirmed" must not override the verifier's own verdict.
+  const trusted = annotated.find(
+    (m) => m.stillApplies === true && isTrustedSource(m.source) && isSuppressiveDecision(m.decision),
+  );
   if (trusted) {
     status = decisionToStatus(trusted.decision);
   }
@@ -97,6 +102,13 @@ export function applyVerdict(
 
 function isTrustedSource(source: string): boolean {
   return source === "user_explicit" || source === "verified_fix";
+}
+
+/** Decisions that suppress a finding; "confirmed" is not one of them. */
+const SUPPRESSIVE_DECISIONS: readonly IssueDecision[] = ["expected", "false_positive", "accepted_risk", "wont_fix"];
+
+function isSuppressiveDecision(decision: string): decision is IssueDecision {
+  return (SUPPRESSIVE_DECISIONS as readonly string[]).includes(decision);
 }
 
 function decisionToStatus(decision: string): VerifiedFinding["status"] {

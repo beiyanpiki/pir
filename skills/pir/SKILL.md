@@ -96,7 +96,7 @@ pir find --json --fail-on P1             # gate: exit 1 on P0/P1 findings
 
 # 3. Let the user decide on false positives — then teach, don't argue:
 pir feedback F-12 expected --note "retry_count intentionally counts attempts"
-pir feedback F-13 wont_fix
+pir feedback F-13 wont-fix
 pir feedback F-14 priority P1
 pir verify-fix F-13                      # confirm a fix removed the trigger
 
@@ -118,7 +118,7 @@ pir memory refresh            # after large refactors
 |---|---|
 | `pir find [--base B --head H --uncommitted --model M --fail-on SEV --max-findings N]` | review a range; `--model provider/model` overrides the default. `--max-findings` (default 10) caps reported findings — a ceiling, not a target |
 | `pir findings [list [--status s]]` / `pir findings show F-12` | stored findings |
-| `pir feedback <id> <decision> [--note …]` | decisions: `expected` `accepted_risk` `wont_fix` `false_positive` (+ `priority P0-P3`) |
+| `pir feedback <id> <decision> [--note …]` | decisions: `expected` `accepted-risk` `wont-fix` `false-positive` (+ `priority P0-P3`) |
 | `pir verify-fix <id>` | verifier checks a reported fix |
 | `pir memory status\|bootstrap\|refresh` | repository memory |
 | `pir remember project\|feature\|symbol <target> invariant\|note\|risk --text "…"` | store code knowledge |

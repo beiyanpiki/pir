@@ -683,3 +683,120 @@ test("runFind service layer returns a renderable outcome", async () => {
     repo.cleanup();
   }
 });
+
+test("findIssues: candidates beyond the verification cap stay eligible in later rounds", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const record = (tool, c) =>
+    tool("record_candidate").execute({
+      title: c.title,
+      claim: c.claim,
+      trigger: c.trigger,
+      category: c.category,
+      severity: c.severity,
+      featureKey: c.featureKey,
+      entityKey: c.entityKey,
+      anchors: [{ path: "src/pay.ts", startLine: 1 }],
+      evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+    });
+  const ALPHA = {
+    title: "alpha: retry quota consumed without remote attempt",
+    claim: "retry quota is consumed without an actual remote gateway attempt",
+    trigger: "gateway exception before charge",
+    category: "correctness",
+    severity: "P1",
+    entityKey: "PaymentService.retry",
+    featureKey: "payment-retry",
+  };
+  const BETA = {
+    title: "beta: refund issued before gateway confirmation",
+    claim: "refund path issues money before the gateway confirms the charge",
+    trigger: "refund before confirmation",
+    category: "correctness",
+    severity: "P2",
+    entityKey: "PaymentService.refund",
+    featureKey: "payment-refund",
+  };
+  const verifiedTitles = [];
+  let reviewerRound = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      reviewerRound += 1;
+      if (reviewerRound === 1) {
+        await record(tool, ALPHA);
+        await record(tool, BETA);
+        await tool("finish_round").execute({ summary: "two candidates", nextFocus: [], needsMoreRounds: true });
+        return;
+      }
+      // Re-report BETA: the cap left it unverified in round 1, so it must be
+      // fresh again here instead of discarded as a known duplicate.
+      await record(tool, BETA);
+      await tool("finish_round").execute({ summary: "re-checked", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool, text) => {
+      for (const c of [ALPHA, BETA]) {
+        if (text.includes(`title: ${c.title}`)) verifiedTitles.push(c.title);
+      }
+      await tool("submit_verdict").execute({
+        verdict: "confirmed",
+        rationale: "traced the path in the test double",
+        confidence: 0.9,
+      });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 2, maxVerificationsPerRound: 1 },
+    });
+    assert.equal(outcome.rounds.length, 2);
+    assert.equal(outcome.rounds[0].fresh, 2);
+    assert.equal(outcome.rounds[1].fresh, 1);
+    assert.equal(outcome.findings.length, 2);
+    assert.deepEqual(verifiedTitles, [ALPHA.title, BETA.title]);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("applyVerdict: endorsed confirmed decision keeps the verifier status; suppressive decisions still suppress", async () => {
+  const { applyVerdict, createReviewState } = await import("../../dist/core/review-state.js");
+  const state = createReviewState("b", "h", 1);
+  const candidate = (fingerprint) => ({
+    identity: { fingerprint },
+    title: "t",
+    claim: "c",
+    trigger: "tr",
+    category: "correctness",
+    severity: "P1",
+    anchors: [],
+  });
+  const match = (decision) => ({
+    memoryId: "m",
+    decision,
+    scope: "project",
+    source: "user_explicit",
+    claim: "c",
+    rationale: "r",
+  });
+
+  const confirmed = applyVerdict(
+    state,
+    candidate("fp-1"),
+    { verdict: "uncertain", rationale: "r", priorDecisionStillApplies: true },
+    [match("confirmed")],
+  );
+  assert.equal(confirmed.status, "uncertain");
+
+  const suppressed = applyVerdict(
+    state,
+    candidate("fp-2"),
+    { verdict: "confirmed", rationale: "r", priorDecisionStillApplies: true },
+    [match("accepted_risk")],
+  );
+  assert.equal(suppressed.status, "accepted_risk");
+});

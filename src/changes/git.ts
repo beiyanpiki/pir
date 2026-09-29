@@ -68,7 +68,7 @@ export async function createWorkingTreeSnapshot(repoRoot: string): Promise<strin
   const tmpIndexDir = mkdtempSync(path.join(tmpdir(), "pir-index-"));
   const indexFile = path.join(tmpIndexDir, "index");
   try {
-    await git(repoRoot, ["add", "-A"], { env: { GIT_INDEX_FILE: indexFile } });
+    await git(repoRoot, ["add", "-A", "--", ".", ":(exclude).pir"], { env: { GIT_INDEX_FILE: indexFile } });
     const tree = (await git(repoRoot, ["write-tree"], { env: { GIT_INDEX_FILE: indexFile } })).trim();
     const headTree = (await git(repoRoot, ["rev-parse", `HEAD^{tree}`])).trim();
     if (tree === headTree) return head;
@@ -145,13 +145,14 @@ export async function getMergeBase(repoRoot: string, base: string, head: string)
   return (await git(repoRoot, ["merge-base", base, head])).trim();
 }
 
-/** `git diff --name-status -z` between two refs: entries of [status, path, (origPath)]. */
+/** `git diff --name-status -z` from the merge base of the two refs (same range
+ *  semantics as getDiffPatch): entries of [status, path, (origPath)]. */
 export async function getNameStatus(
   repoRoot: string,
   base: string,
   head: string,
 ): Promise<Array<{ status: string; path: string; oldPath?: string }>> {
-  const out = await git(repoRoot, ["diff", "--name-status", "-z", "-M", base, head]);
+  const out = await git(repoRoot, ["diff", "--name-status", "-z", "-M", `${base}...${head}`]);
   const parts = out.split("\0").filter((p) => p.length > 0);
   const entries: Array<{ status: string; path: string; oldPath?: string }> = [];
   let i = 0;

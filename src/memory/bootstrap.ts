@@ -242,25 +242,33 @@ export async function bootstrapProjectMemory(deps: {
   let entitiesCreated = 0;
   const draft = aggCollector.draft;
   if (draft) {
+    // Merge with existing knowledge instead of replacing it: the upserts
+    // overwrite array fields wholesale, and user-supplied entries (pir
+    // remember, feedback) must survive an agent re-bootstrap.
+    const mergeUnique = (existing: readonly string[] | null | undefined, next: readonly string[]): string[] => [
+      ...new Set([...(existing ?? []), ...next]),
+    ];
+    const existingProject = deps.memory.projectMemory.get();
     deps.memory.projectMemory.upsert({
       architectureSummary: draft.architectureSummary,
-      responsibilities: draft.responsibilities,
-      invariants: draft.invariants,
-      conventions: draft.conventions,
-      riskAreas: draft.riskAreas,
-      featureKeys: draft.features.map((f) => f.key),
-      source: "agent_summary",
+      responsibilities: mergeUnique(existingProject?.responsibilities, draft.responsibilities),
+      invariants: mergeUnique(existingProject?.invariants, draft.invariants),
+      conventions: mergeUnique(existingProject?.conventions, draft.conventions),
+      riskAreas: mergeUnique(existingProject?.riskAreas, draft.riskAreas),
+      featureKeys: mergeUnique(existingProject?.featureKeys, draft.features.map((f) => f.key)),
+      source: existingProject?.source === "user_explicit" ? "user_explicit" : "agent_summary",
       createdAtCommit: head,
       validatedAtCommit: head,
       stale: false,
     });
     for (const feature of draft.features) {
+      const existingFeature = deps.memory.features.get(feature.key);
       deps.memory.features.upsert({
         key: feature.key,
         name: feature.name,
         summary: feature.summary,
-        responsibilities: [],
-        invariants: feature.invariants,
+        responsibilities: mergeUnique(existingFeature?.responsibilities, []),
+        invariants: mergeUnique(existingFeature?.invariants, feature.invariants),
         entryPoints: feature.entryPoints,
         dependencies: [],
         relatedFeatureKeys: [],
@@ -274,16 +282,20 @@ export async function bootstrapProjectMemory(deps: {
       for (const symbolName of feature.symbols) {
         const fromModule = summaries.flatMap((s) => s.symbols).find((sym) => sym.name === symbolName || sym.name.endsWith(`.${symbolName}`));
         if (!fromModule) continue;
+        const existingEntity = deps.memory.entities.get(fromModule.name);
         deps.memory.entities.upsert({
           symbolKey: fromModule.name,
           qualifiedName: fromModule.name,
           kind: fromModule.kind,
           path: fromModule.path,
           signature: null,
-          responsibilities: [fromModule.responsibility].filter(Boolean),
-          invariants: fromModule.invariants,
-          notes: [],
-          featureKeys: [feature.key],
+          responsibilities: mergeUnique(
+            existingEntity?.responsibilities,
+            [fromModule.responsibility].filter(Boolean),
+          ),
+          invariants: mergeUnique(existingEntity?.invariants, fromModule.invariants),
+          notes: mergeUnique(existingEntity?.notes, []),
+          featureKeys: mergeUnique(existingEntity?.featureKeys, [feature.key]),
           source: "agent_summary",
           signatureHash: null,
           bodyHash: headHashes.get(fromModule.path) ?? null,

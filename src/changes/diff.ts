@@ -70,8 +70,8 @@ export function parseUnifiedDiff(patch: string): ParsedDiff {
       current.path = stripQuotes(line.slice("copy to ".length));
       continue;
     }
-    if (line.startsWith("--- ") || line.startsWith("+++ ")) {
-      continue; // paths already known from the diff --git line
+    if (hunk === null && (line.startsWith("--- ") || line.startsWith("+++ "))) {
+      continue; // file header paths, already known from the diff --git line
     }
     if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) {
       hunk = null;

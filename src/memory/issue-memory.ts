@@ -110,21 +110,26 @@ export class IssueMemoriesRepo {
       .map(toDomain);
   }
 
-  /** Decisions that could apply to a candidate at symbol / feature / project scope. */
+  /**
+   * Decisions that could apply to a candidate at symbol / feature scope,
+   * same category only. Keyless project-scope decisions are deliberately
+   * excluded here — they match every otherwise-unrelated candidate; they
+   * still surface through the exact fingerprint and fuzzy tiers.
+   */
   matchingScope(input: { featureKey?: string; entityKey?: string; category: string }): IssueMemory[] {
     const rows = this.store.all<Row>(
       `SELECT * FROM issue_memories
        WHERE project_id = ? AND stale = 0
-         AND (entity_key IS NOT NULL OR feature_key IS NOT NULL OR scope = 'project')
+         AND (entity_key IS NOT NULL OR feature_key IS NOT NULL)
        ORDER BY created_at_commit DESC`,
       this.projectId,
     );
     return rows
       .map(toDomain)
       .filter((m) => {
+        if (m.category !== input.category) return false;
         if (m.entityKey && input.entityKey && m.entityKey === input.entityKey) return true;
         if (!m.entityKey && m.featureKey && input.featureKey && m.featureKey === input.featureKey) return true;
-        if (!m.entityKey && !m.featureKey && m.scope === "project") return true;
         return false;
       });
   }
@@ -168,7 +173,11 @@ export class IssueMemoriesRepo {
   }
 
   markStale(id: string, stale: boolean): void {
+    const current = this.store.get<Row>("SELECT * FROM issue_memories WHERE id = ?", id);
+    if (!current) return;
     this.store.run("UPDATE issue_memories SET stale = ? WHERE id = ?", stale ? 1 : 0, id);
+    // Versioned so sync's last-write-wins sees staleness flips, not just inserts.
+    this.store.recordMemoryVersion("issue_memory", id, { ...toDomain(current), stale }, stale ? "mark_stale" : "mark_fresh");
   }
 
   invalidateForFingerprint(fingerprint: string): number {
