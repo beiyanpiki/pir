@@ -105,3 +105,73 @@ export function renderFindResultText(input: {
   }
   return lines.join("\n");
 }
+
+export function renderAuditResultText(input: {
+  degraded: boolean;
+  dirtyWorktree: boolean;
+  plugins?: ActivePack[];
+  coverage: {
+    filesTotal: number;
+    filesInScope: number;
+    filesReviewed: number;
+    filesPartial: number;
+    filesUnreviewed: number;
+    filesBlocked: number;
+    filesFailed: number;
+    filesExcluded: number;
+    filesNotSelected: number;
+    batchesTotal: number;
+    batchesCompleted: number;
+  };
+  findings: FindingView[];
+  stoppedBecause: string;
+  incomplete: boolean;
+  incompleteReasons: string[];
+  pendingCandidates?: number;
+  transcriptDir?: string;
+}): string {
+  const lines: string[] = [];
+  if (input.degraded) {
+    lines.push("note: structural index unavailable (degraded mode) — run `codegraph init` for symbol-aware review");
+  }
+  if (input.dirtyWorktree) {
+    lines.push("note: working tree has uncommitted changes; the audit covers the committed HEAD snapshot only");
+  }
+  if (input.plugins?.length) {
+    lines.push(`language packs detected: ${input.plugins.map((p) => p.name).join(", ")} (guidance withheld in audit mode)`);
+  }
+  const c = input.coverage;
+  lines.push(
+    `coverage: ${c.filesReviewed}/${c.filesInScope} reviewed in scope (${c.filesTotal} files total: ` +
+    `${c.filesNotSelected} not selected, ${c.filesExcluded} excluded, ${c.filesPartial} partial, ${c.filesUnreviewed} unreviewed, ${c.filesBlocked} blocked, ${c.filesFailed} failed); ` +
+    `units ${c.batchesCompleted}/${c.batchesTotal} completed`,
+  );
+  lines.push(`stopped: ${input.stoppedBecause}`);
+  if (input.incomplete) {
+    lines.push(`audit incomplete: ${input.incompleteReasons.join("; ")}`);
+    lines.push('coverage is process accounting — "reviewed" means the allotted review sessions completed, not a guarantee every defect was found');
+  }
+  if (input.pendingCandidates) {
+    lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
+  }
+  if (input.transcriptDir) {
+    lines.push(`transcripts: ${input.transcriptDir}`);
+  }
+  const reported = input.findings.filter(isReported);
+  lines.push("");
+  if (reported.length > 0) {
+    lines.push(`Findings (${reported.length}):`);
+    lines.push(renderFindingsText(reported));
+  } else {
+    lines.push("No confirmed findings.");
+  }
+  const suppressed = input.findings.filter((f) => !isReported(f));
+  if (suppressed.length > 0) {
+    lines.push("");
+    lines.push(`Suppressed by prior decisions / rejected (${suppressed.length}):`);
+    for (const f of suppressed) {
+      lines.push(`  ${f.displayId} [${f.status}] ${f.title}`);
+    }
+  }
+  return lines.join("\n");
+}

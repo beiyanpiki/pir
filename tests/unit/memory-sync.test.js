@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Memory } from "../../dist/memory/index.js";
-import { MEMORY_SCHEMA_VERSION, applySnapshot, exportSnapshot, mergeSnapshots } from "../../dist/memory/sync.js";
+import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, exportSnapshot, mergeSnapshots } from "../../dist/memory/sync.js";
 import { createTempGitRepo, git } from "../fixtures/helpers.js";
 
 function tempDir(prefix) {
@@ -519,7 +519,7 @@ test("guards: project and schema mismatches are loud", async () => {
       /belongs to project/,
     );
     const newer = structuredClone(snap);
-    newer.schemaVersion = MEMORY_SCHEMA_VERSION + 1;
+    newer.schemaVersion = MEMORY_WIRE_SCHEMA_VERSION + 1;
     assert.throws(() => applySnapshot(remote.store, remote.identity.projectId, newer), /schema version/);
   } finally {
     local.close();
@@ -549,7 +549,7 @@ test("agent_fields travels with the projects/features/entities rows through sync
       stale: false,
     });
     const snapshot = exportSnapshot(local.store, local.identity.projectId);
-    assert.equal(snapshot.schemaVersion, MEMORY_SCHEMA_VERSION);
+    assert.equal(snapshot.schemaVersion, MEMORY_WIRE_SCHEMA_VERSION);
     assert.ok(snapshot.tables.features[0].agent_fields.includes("agent inv"), "snapshot carries the generated-set column");
     applySnapshot(remote.store, remote.identity.projectId, mergeSnapshots(
       exportSnapshot(remote.store, remote.identity.projectId),

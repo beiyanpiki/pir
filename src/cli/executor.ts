@@ -16,6 +16,7 @@ import {
 } from "./config.js";
 import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
+import { runAudit } from "../app/audit.js";
 import {
   feedback,
   feedbackPriority,
@@ -29,7 +30,7 @@ import {
   verifyFix,
   type MemorySyncResult,
 } from "../app/services.js";
-import { envelope, findExitCode, renderFindResultText } from "../app/output.js";
+import { envelope, findExitCode, renderAuditResultText, renderFindResultText } from "../app/output.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
@@ -39,6 +40,7 @@ export const USAGE = `pir — pi-based code review with repository memory
 
 Usage:
   pir find [options]                     run the finding loop over a change range
+  pir audit [options]                    full-repository audit of a pinned snapshot
   pir memory status|bootstrap|refresh    manage repository memory
   pir memory sync [--dry-run]            merge local memory with a pir server's
   pir feedback <id> <decision> [--note]  record user feedback on a finding
@@ -74,6 +76,19 @@ Find options:
                       disable, or "auto" to detect from marker files at
                       head (default)
   --no-sync-index     skip codegraph index sync
+
+Audit options (current-state review; no diff, no change attribution):
+  --path <p>...       literal file or directory prefix selecting scope;
+                      repeatable (union). Default: whole committed tree
+  --skip <glob>...    exclude paths from the selection; repeatable. Globs
+                      support * ** ?; a plain value acts as a file/dir prefix
+  --head <ref>        snapshot commit to audit (default: HEAD). The committed
+                      tree only: uncommitted changes are never audited
+  --max-tokens <n>    whole-run token budget across all units (default 400K)
+  --max-findings <n>  whole-run cap on reported findings (default 10)
+  --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
+  Coverage is process accounting: "reviewed" means the allotted sessions
+  completed. Budget stops leave files unreviewed and exit incomplete.
 
 Models options:
   [search]            case-insensitive substring over provider/id/name
@@ -143,6 +158,8 @@ export interface ExecOptions {
 interface ParsedArgs {
   positional: string[];
   flags: Map<string, string | boolean>;
+  /** Repeatable value flags (--path/--skip): every occurrence, in order. */
+  multi: Map<string, string[]>;
 }
 
 export const VALUE_FLAGS = new Set([
@@ -166,11 +183,24 @@ export const VALUE_FLAGS = new Set([
   "--server",
   "--token",
   "--plugins",
+  "--path",
+  "--skip",
 ]);
+
+/** Repeatable value flags: the single-slot map keeps the last value for
+ *  compatibility; the multi map keeps every occurrence in order. */
+const MULTI_VALUE_FLAGS = new Set(["--path", "--skip"]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const flags = new Map<string, string | boolean>();
+  const multi = new Map<string, string[]>();
+  const recordMulti = (name: string, value: string): void => {
+    if (!MULTI_VALUE_FLAGS.has(name)) return;
+    const list = multi.get(name) ?? [];
+    list.push(value);
+    multi.set(name, list);
+  };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
     if (token.startsWith("--")) {
@@ -178,10 +208,12 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const name = eq === -1 ? token : token.slice(0, eq);
       if (eq !== -1 && VALUE_FLAGS.has(name)) {
         flags.set(name, token.slice(eq + 1));
+        recordMulti(name, token.slice(eq + 1));
       } else if (VALUE_FLAGS.has(token)) {
         const value = argv[i + 1];
         if (value === undefined) throw new UsageError(`missing value for ${token}`);
         flags.set(token, value);
+        recordMulti(token, value);
         i += 1;
       } else {
         flags.set(token, true);
@@ -190,7 +222,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       positional.push(token);
     }
   }
-  return { positional, flags };
+  return { positional, flags, multi };
 }
 
 /**
@@ -259,7 +291,7 @@ export function readVersion(): string {
  * writing to the process streams.
  */
 export async function executePirCommand(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
-  const { positional, flags } = parseArgs(argv);
+  const { positional, flags, multi } = parseArgs(argv);
   const command = positional[0];
   const json = Boolean(flags.get("--json"));
   const out: string[] = [];
@@ -312,12 +344,20 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     log(`• working-tree snapshot ${snapshot.slice(0, 10)}`);
   }
 
+  // Audit has no comparison semantics; reject implying flags before any
+  // context, index or session is created.
+  if (command === "audit") {
+    if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
+    if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
+    if (flags.has("--branch")) throw new UsageError("audit selects a commit with --head; --branch is not supported");
+  }
+
   // Server-side registered repo: fetch the clone, review in a throwaway worktree.
   let materialized: import("../app/repos.js").MaterializedReview | null = null;
   if (typeof flags.get("--repo") === "string") {
     const repoSpec = flags.get("--repo") as string;
-    if (!["find", "memory", "findings", "verify-fix"].includes(command ?? "")) {
-      throw new UsageError(`--repo applies to find/memory/findings/verify-fix, not ${command}`);
+    if (!["find", "audit", "memory", "findings", "verify-fix"].includes(command ?? "")) {
+      throw new UsageError(`--repo applies to find/audit/memory/findings/verify-fix, not ${command}`);
     }
     const { resolveRepo, materializeRegistered, reviewDbPath } = await import("../app/repos.js");
     const resolvedRepo = resolveRepo(repoSpec);
@@ -329,7 +369,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = materialized.worktree;
     const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
     flags.set("--cwd", cwd);
-    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, json, out, emit, log, materialized);
+    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, materialized);
   }
 
   if (!command || command === "help" || flags.get("--help")) {
@@ -348,12 +388,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError("serve must run in the local CLI process, not through the executor");
   }
 
-  const knownCommands = new Set(["find", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill"]);
+  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill"]);
   if (!knownCommands.has(command)) {
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, json, out, emit, log, null);
+  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, multi, json, out, emit, log, null);
 }
 
 async function runInContext(
@@ -362,6 +402,7 @@ async function runInContext(
   command: string,
   positional: string[],
   flags: Map<string, string | boolean>,
+  multi: Map<string, string[]>,
   json: boolean,
   out: string[],
   emit: Emit,
@@ -378,6 +419,9 @@ async function runInContext(
     switch (command) {
       case "find":
         code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log);
+        break;
+      case "audit":
+        code = await cmdAudit(ctx, positional.slice(1), flags, multi, json, emit, log);
         break;
       case "memory":
         code = await cmdMemory(ctx, positional.slice(1), flags, json, emit, log);
@@ -673,6 +717,104 @@ async function cmdFind(
         findings,
         stoppedBecause: result.stoppedBecause,
         incomplete: result.incomplete,
+        pendingCandidates: result.pendingCandidates,
+        transcriptDir: result.transcriptDir,
+      })}\n`,
+    );
+  }
+
+  return findExitCode(findings, failOn, result.incomplete);
+}
+
+async function cmdAudit(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  multi: Map<string, string[]>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  // Audit has no comparison semantics: reject flags that would imply one.
+  if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
+  if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
+  if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
+  const failOn = (flags.get("--fail-on") as string) ?? "none";
+  if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
+  const maxFindings = positiveIntFlag(flags, "--max-findings");
+  const includePaths = multi.get("--path") ?? [];
+  const skipGlobs = multi.get("--skip") ?? [];
+  for (const value of [...includePaths, ...skipGlobs]) {
+    if (value.includes("\0") || value.includes("\\") || value === "") {
+      throw new UsageError(`invalid --path/--skip value: ${JSON.stringify(value)}`);
+    }
+  }
+  const { AuditScopeError } = await import("../core/supervisor.js");
+  const result = await runAudit(ctx, {
+    head: flags.get("--head") as string | undefined,
+    includePaths,
+    skipGlobs,
+    maxTokens: positiveIntFlag(flags, "--max-tokens"),
+    maxFindings,
+    model: flags.get("--model") as string | undefined,
+    ...(await parsePluginsFlag(flags)),
+    onProgress: (event) => log(`• ${event.message}`),
+  }).catch((error: unknown) => {
+    if (error instanceof AuditScopeError) throw new UsageError(error.message);
+    throw error;
+  });
+  const findings = result.findings.map((row) => toFindingView(ctx, row));
+
+  if (json) {
+    emit(
+      envelope(
+        "audit",
+        {
+          target: {
+            mode: "audit",
+            head: result.head,
+            snapshot: result.snapshot,
+            scope: result.snapshot.scope,
+            dirtyWorktree: result.dirtyWorktree,
+          },
+          run: {
+            id: result.runId,
+            head: result.head,
+            rounds: result.rounds,
+            maxFindings: result.maxFindings,
+            transcriptDir: result.transcriptDir ?? null,
+          },
+          coverage: { ...result.coverage, units: result.units },
+          degraded: result.degraded,
+          plugins: result.plugins,
+          stoppedBecause: result.stoppedBecause,
+          estimatedTokens: result.estimatedTokens,
+          usage: result.usage ?? null,
+          usageComplete: result.usageComplete,
+          durationMs: result.durationMs,
+          incomplete: result.incomplete,
+          incompleteReasons: result.incompleteReasons,
+          pendingCandidates: result.pendingCandidates,
+          pendingFindings: result.pendingFindings.map((row) => toFindingView(ctx, row)),
+          verificationErrors: result.verificationErrors,
+          uncertaintyReasons: result.uncertaintyReasons,
+          findings,
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
+      ),
+    );
+    emit("\n");
+  } else {
+    emit(
+      `${renderAuditResultText({
+        degraded: result.degraded,
+        dirtyWorktree: result.dirtyWorktree,
+        plugins: result.plugins,
+        coverage: result.coverage,
+        findings,
+        stoppedBecause: result.stoppedBecause,
+        incomplete: result.incomplete,
+        incompleteReasons: result.incompleteReasons,
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
       })}\n`,

@@ -120,6 +120,8 @@ Docker 下按 provider 注入凭证:`-e PI_API_KEY__deepseek=sk-...`(或整份
 pir find [--base <ref>] [--head <ref>] [--uncommitted] [--json]
          [--max-rounds N] [--max-tokens N] [--max-findings N]
          [--fail-on P0|P1|P2|P3|none] [--model <id>] [--no-sync-index]
+pir audit [--path <文件|目录前缀>]... [--skip <glob>]... [--head <ref>]
+          [--max-tokens N] [--max-findings N] [--fail-on …] [--model <id>] [--json]
 pir memory status|bootstrap|refresh|sync [--json] [--max-batches N] [--model <id>]
 pir feedback <id> <decision> [--note "..."]      # decision 见下
 pir feedback <id> priority P0|P1|P2|P3
@@ -135,6 +137,8 @@ pir version
 ```
 
 全局:`--json`、`--cwd <path>`、`--quiet`;远端模式 `--server <url> --token <t> [--insecure]`(`pir --server ... models` 列的是**服务端**可用的模型),`--local` 单次强制本地。模式解析优先级:`--server` > `--local` > `PIR_SERVER_URL` > `PIR_MODE` > `~/.pir/config.json`;`serve`/`config`/`skill`/`version` 始终本地执行。
+
+**全仓审计(`pir audit`)**:`find` 回答"这次改动引入了什么问题",`audit` 回答"当前代码里有什么问题"——现状语义、不做变更归因,长期存在的缺陷正因为存在于当下而被纳入范围。审计目标是一个不可变快照:`--head`(默认 `HEAD`)的已提交树;工作区未提交内容永远不会被审计(会显式提示)。没有 `--base`、没有 merge-base,也不支持 `--uncommitted`/`--branch`。范围用 `--path`(字面文件或目录前缀,可重复取并集)与 `--skip`(glob,可重复)圈定;vendor/构建产物/锁文件默认排除,选中的二进制/超大文件会如实标记为 `blocked` 而非静默跳过。快照被切成确定性的工作单元(按模块分组,超大文件按行区间分块),送进与 `find` **同一条** reviewer/verifier 循环,全局共享 token 预算、findings 上限与去重状态。覆盖率是一等公民:JSON 输出逐文件报告 `reviewed/partial/unreviewed/blocked/failed/excluded/notSelected` 与单元完成度;预算耗尽会诚实地留下 `unreviewed` 并标记 `incomplete`——"reviewed" 是流程记账,不等于"没有缺陷"。历史抑制依旧是有条件的:`accepted-risk`/`wont-fix` 只有在 verifier 对照当前代码逐条重新确认 `stillApplies` 后才生效,代码漂移会让问题重新打开。
 
 **记忆同步(`pir memory sync`)**:本地机器与 `pir serve` 服务端的记忆是两个独立 SQLite 库(同一 `projectId` 定位)。`pir memory sync` 通过 `POST /v1/memory/sync` 双向合并——两侧收敛到同一结果;描述同一逻辑记录的行(相同 feature key、symbol key 或 finding fingerprint)会收敛到胜者一侧的行。冲突规则:同一记录以**较新写入**为准(`memory_versions` 时间戳),但用户知识(`user_explicit`/`verified_fix`)永远压过 agent 摘要,不受时间影响。同步范围是五层记忆(项目/项目记忆/功能/代码实体/问题裁决/修复历史);findings、评审运行与审计日志属于会话产物,不参与同步。该命令**始终在本地执行**(即使处于 remote 模式——转发会在服务端的 workspace 上跑错对象),支持 `--dry-run`(只报告不落盘)与时钟偏差由用户优先规则兜底。
 

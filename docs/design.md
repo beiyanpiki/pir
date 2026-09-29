@@ -138,6 +138,10 @@ Command tree:
 pir find        [--base --head --max-rounds --max-tokens --max-findings
                  --fail-on P0..P3|none --model --uncommitted
                  --repo <spec> --branch --no-fetch --no-sync-index]
+pir audit       [--path <file|dir-prefix>]... [--skip <glob>]... [--head <ref>
+                 --max-tokens --max-findings --fail-on P0..P3|none --model
+                 --repo <spec> --no-fetch --no-sync-index]
+                 current-state snapshot review; no --base/--uncommitted/--branch
 pir memory      status | bootstrap [--model --max-batches] | refresh [--model]
                 | sync [--dry-run --server --token --insecure --local]
 pir feedback    <id> <decision> [--note]        decisions: confirmed expected
@@ -257,6 +261,32 @@ $PIR_STATE_ROOT/<projectId>/memory.sqlite   centralized per-project memory
 ---
 
 ## 6. Core review loop — `src/core/`
+
+### 6.0 Two review modes, one executor
+
+`ReviewTarget` (`core/review-target.ts`) is the discriminated union every
+review runs against:
+
+- **change** — attribution semantics: findings must be introduced or unmasked
+  by `base..head`; the verifier checks realness *and* attribution.
+- **audit** — current-state semantics: findings must exist at the pinned
+  `RepoSnapshot` (`changes/snapshot.ts`); there is no base, no merge-base, and
+  no attribution. A root commit is a valid audit target.
+
+Both modes share the same reviewer/verifier runners, the same
+`drainVerifications` orchestration, `ReviewState`, `Budget`, dedup and
+`applyVerdict`. `findIssues` is the change adapter; `auditIssues` schedules
+audit **work units** (`core/audit-planner.ts`: deterministic module groups,
+line-range chunks for oversized files) through the same machinery with one
+global budget, findings ceiling and dedup baseline — never a second loop and
+never `findIssues` per chunk. `core/coverage.ts` keeps the per-file coverage
+ledger (identity equation exact: `filesTotal = notSelected + excluded +
+reviewed + partial + unreviewed + blocked + failed`); a unit only counts as
+reviewed when its session finished **and** pinned-read every owned file,
+otherwise it is retried (2 attempts) and then blocked with the reason. The
+audit output reports coverage as first-class data; budget stops leave files
+honestly `unreviewed` and the run `incomplete`. Audit persistence checkpoints
+candidates as durable rows at collection time; verdicts update the same row.
 
 ### 6.1 Supervisor (`supervisor.ts`)
 
@@ -804,6 +834,10 @@ docs/                   README.zh-CN · for-llm · design (this file) · review-
 | Suppression requires `user_explicit`/`verified_fix` + verifier re-assessment | Memory is evidence, not truth. An agent must never be able to talk itself out of a finding. |
 | Fingerprint = semantic hash, not file:line | Line numbers drift; "same claim about the same symbol in the same feature" is the identity that matters. |
 | Evidence tools pinned to git revisions | The reviewed snapshot is immutable and reproducible; builtin fs tools are navigation only. Anchor validation at submission catches fabricated lines. |
+| One target-aware executor for change and audit modes | A second supervisor per review flavor would fork budgets, dedup and suppression semantics; `ReviewTarget` + shared drain keeps one loop with two adapters. |
+| Audits review a pinned snapshot, never an empty-tree diff | Current-state semantics are not "everything ever added"; no fabricated base also makes root commits valid audit targets. |
+| Audit coverage is process accounting, reported per file | A finished session with pinned reads of owned files is the honest definition of "reviewed"; budget stops surface as `unreviewed`/`incomplete`, never as a clean sweep. |
+| Memory sync wire version pinned independently of migrations | Run-local tables (modes, coverage) must not break snapshot exchange between pir versions. |
 | Bundles for remote review | The server needs no origin credentials, and unpushed/uncommitted code reviews fine — the client ships its actual state. |
 | One executor for CLI/extension/server/remote | Feature work lands once; every face inherits it, and the JSON/exit contract stays identical everywhere. |
 | Pending candidates persisted at limits | Budget exhaustion must never silently discard work; `candidate`-status rows keep it inspectable. |

@@ -89,6 +89,8 @@ pir find --json                          # HEAD^..HEAD
 pir find --uncommitted --json            # working tree, untracked included
 pir find --base origin/main --json       # branch diff
 pir find --json --fail-on P1             # gate: exit 1 on P0/P1 findings
+pir audit --json                        # full-repo audit of the committed HEAD snapshot
+pir audit --path src/auth --json         # audit one subtree (repeatable)
 
 # 2. Present findings from data.findings[]:
 #    displayId (F-12), severity P0–P3, status confirmed|uncertain,

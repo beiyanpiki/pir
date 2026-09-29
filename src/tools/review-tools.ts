@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import type { ReviewTool } from "../agents/types.js";
 import { readReviewFile, resolveReviewRevision, safeResolve, toolError, type ReviewRevision, type ToolContext } from "./context.js";
 import type { CodeSymbol } from "../codemap/types.js";
+import type { RepoSnapshot } from "../changes/snapshot.js";
 
 const MAX_WINDOW = 240;
 const MAX_SEARCH_MATCHES = 50;
@@ -240,6 +241,7 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
     }),
     async execute(params) {
       try {
+        if (!ctx.changeSet) throw new Error("get_change is unavailable in this review mode (no diff to inspect)");
         const filter = params.path;
         if (filter !== undefined && (typeof filter !== "string" || !safeResolve(ctx.repoRoot, filter))) {
           throw new Error("invalid repository-relative path");
@@ -319,6 +321,57 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
         return bounded(parts.join("\n"));
       } catch (err) {
         return bounded(toolError("get_change", err));
+      }
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// list_snapshot_files (audit mode)
+// ---------------------------------------------------------------------------
+
+/**
+ * Paginated inventory of the pinned audit snapshot: the coverage denominator.
+ * Entries carry their selection/classification so exclusions are visible, not
+ * silent. Navigation-grade only — file content still comes from read_code.
+ */
+export function createListSnapshotFilesTool(ctx: ToolContext, snapshot: RepoSnapshot): ReviewTool {
+  return {
+    name: "list_snapshot_files",
+    description: "List committed files of the pinned audit snapshot with selection/classification and provenance. Paginated; use read_code for content.",
+    promptSnippet: "list_snapshot_files: pinned inventory of auditable files (audit mode)",
+    parameters: Type.Object({
+      prefix: Type.Optional(Type.String({ description: "Optional repository-relative directory prefix filter" })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, description: "0-based page offset (default 0)" })),
+      limit: Type.Optional(Type.Integer({ minimum: 1, description: "Page size (default/cap 100)" })),
+    }),
+    async execute(params) {
+      try {
+        const prefix = params.prefix === undefined ? "" : String(params.prefix).replace(/^\.\//, "").replace(/\/+$/, "");
+        if (prefix && (prefix.startsWith("/") || prefix.split("/").includes("..") || prefix.includes("\0"))) {
+          throw new Error("invalid repository-relative prefix");
+        }
+        const offset = integer(params.offset, 0, "offset");
+        const limit = Math.min(integer(params.limit, 100, "limit", 1), 200);
+        const entries = snapshot.entries.filter((entry) => !prefix || entry.path.startsWith(`${prefix}/`) || entry.path === prefix);
+        if (offset > entries.length) throw new Error("offset is beyond the available entries");
+        const page = entries.slice(offset, offset + limit);
+        const lines = page.map((entry) => {
+          const note = entry.selection === "selected"
+            ? entry.classification === "text" ? "in scope" : `in scope, not reviewable (${entry.classification})`
+            : `${entry.selection}${entry.exclusionReason ? ` (${entry.exclusionReason})` : ""}`;
+          const size = entry.size === null ? "" : `, ${entry.size}B`;
+          return `${JSON.stringify(entry.path)} [${note}]${size}`;
+        });
+        const more = offset + limit < entries.length;
+        return bounded([
+          `snapshot: commit=${snapshot.commit} tree=${snapshot.treeId} (immutable audit inventory)`,
+          `entries: ${entries.length}; returned: ${page.length}; offset: ${offset}; truncated: ${more}`,
+          ...lines,
+          `continuation: ${JSON.stringify(more ? { offset: offset + limit, limit, ...(prefix ? { prefix } : {}) } : null)}`,
+        ].join("\n"));
+      } catch (err) {
+        return bounded(toolError("list_snapshot_files", err));
       }
     },
   };

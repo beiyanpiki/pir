@@ -8,6 +8,7 @@ import { EntitiesRepo } from "./entity-memory.js";
 import { IssueMemoriesRepo } from "./issue-memory.js";
 import { ResolutionsRepo } from "./resolution-memory.js";
 import { FindingStore } from "./finding-store.js";
+import { AuditStore } from "./audit-store.js";
 
 /**
  * Centralized state layout for server-side flows: PIR_STATE_ROOT/<projectId>/
@@ -42,6 +43,8 @@ export class Memory {
   readonly issues: IssueMemoriesRepo;
   readonly resolutions: ResolutionsRepo;
   readonly findings: FindingStore;
+  /** Run-local audit artifacts (work units, file coverage); never synced. */
+  readonly audit: AuditStore;
 
   private constructor(identity: ProjectIdentity, store: SqliteStore) {
     this.identity = identity;
@@ -52,6 +55,7 @@ export class Memory {
     this.issues = new IssueMemoriesRepo(store, identity.projectId);
     this.resolutions = new ResolutionsRepo(store, identity.projectId);
     this.findings = new FindingStore(store, identity.projectId);
+    this.audit = new AuditStore(store, identity.projectId);
   }
 
   static async open(repoRoot: string, options: OpenMemoryOptions = {}): Promise<Memory> {

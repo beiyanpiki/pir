@@ -219,11 +219,62 @@ export const MIGRATIONS: Migration[] = [
       // replacement, and queries must not touch another project's fix history.
       // Legacy rows are attributed when the DB holds exactly one project (the
       // common case); rows in a multi-project DB cannot be attributed and stay
-      // NULL — invisible to scoped queries rather than mis-attributed.
+      // NULL—invisible to scoped queries rather than mis-attributed.
       `ALTER TABLE finding_resolutions ADD COLUMN project_id TEXT`,
       `UPDATE finding_resolutions SET project_id = (SELECT id FROM projects LIMIT 1)
         WHERE (SELECT COUNT(*) FROM projects) = 1`,
       `CREATE INDEX IF NOT EXISTS idx_resolutions_project_fp ON finding_resolutions (project_id, fingerprint)`,
+    ],
+  },
+  {
+    version: 5,
+    statements: [
+      // Full-repository audits: review_runs gains a mode and a genuinely
+      // nullable base (audits have no comparison base — never a fake one), and
+      // run-local coverage ledgers get their own tables. These are run
+      // artifacts: they stay out of memory sync (see MEMORY_WIRE_SCHEMA_VERSION).
+      `CREATE TABLE review_runs_v5 (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'change',
+        base TEXT,
+        head TEXT NOT NULL,
+        target TEXT,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        status TEXT NOT NULL DEFAULT 'running',
+        rounds INTEGER NOT NULL DEFAULT 0,
+        candidates INTEGER NOT NULL DEFAULT 0,
+        confirmed INTEGER NOT NULL DEFAULT 0,
+        rejected INTEGER NOT NULL DEFAULT 0,
+        uncertain INTEGER NOT NULL DEFAULT 0,
+        notes TEXT
+      )`,
+      `INSERT INTO review_runs_v5 (id, project_id, mode, base, head, started_at, finished_at, status, rounds, candidates, confirmed, rejected, uncertain, notes)
+        SELECT id, project_id, 'change', base, head, started_at, finished_at, status, rounds, candidates, confirmed, rejected, uncertain, notes FROM review_runs`,
+      `DROP TABLE review_runs`,
+      `ALTER TABLE review_runs_v5 RENAME TO review_runs`,
+      `CREATE TABLE IF NOT EXISTS audit_work_units (
+        run_id TEXT NOT NULL,
+        unit_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        files INTEGER NOT NULL DEFAULT 0,
+        reason TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, unit_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS audit_file_coverage (
+        run_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        blob_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        reason TEXT,
+        ranges_total INTEGER NOT NULL DEFAULT 0,
+        ranges_reviewed INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, path)
+      )`,
     ],
   },
 ];

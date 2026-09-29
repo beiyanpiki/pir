@@ -84,7 +84,7 @@ async function seedMemory(repo, dbPath, scenario, seedCli) {
       const { buildIdentity } = await load("findings/identity.js");
       const trigger = "the documented input is supplied";
       const identity = buildIdentity({ entityKey: seed.entityKey, category: "correctness", claim: seed.claim, trigger });
-      const run = memory.findings.createRun(commit, commit);
+      const run = memory.findings.createRun({ base: commit, head: commit });
       const row = memory.findings.insert({ title: seed.claim, claim: seed.claim, trigger, category: "correctness",
         severity: "P2", entityKey: seed.entityKey, anchors: [{ path: seed.path, startLine: 1, endLine: 3 }],
         evidence: [], round: 1, identity, status: "confirmed", memoryMatches: [] }, run.id);

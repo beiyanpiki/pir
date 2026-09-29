@@ -4,13 +4,21 @@ import { readFileAtCommit, resolveCommit } from "../changes/git.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import type { Memory } from "../memory/index.js";
 
-/** Shared read-only context handed to every review tool. */
+/**
+ * Shared read-only context handed to every review tool. `changeSet` exists
+ * only for change-mode reviews; audit-mode contexts pin `headCommit` alone and
+ * every base/merge-base capability must fail explicitly instead of aliasing
+ * head.
+ */
 export interface ToolContext {
   repoRoot: string;
   headCommit: string;
-  changeSet: ChangeSet;
+  /** Present only when the review compares revisions (change mode). */
+  changeSet?: ChangeSet;
   codeMap: CodeMapProvider;
   memory: Memory | null;
+  /** Optional per-session observer for pinned reads (audit coverage evidence). */
+  readObserver?: (path: string, revision: ReviewRevision) => void;
 }
 
 export type ReviewRevision = "head" | "base" | "merge-base";
@@ -31,10 +39,13 @@ export async function resolveReviewRevision(ctx: ToolContext, revision: ReviewRe
   let commit = cached.get(revision);
   if (!commit) {
     const ref = revision === "head"
-      ? ctx.changeSet.headCommit ?? ctx.headCommit
+      ? ctx.changeSet?.headCommit ?? ctx.headCommit
       : revision === "base"
-        ? ctx.changeSet.baseCommit ?? ctx.changeSet.base
-        : ctx.changeSet.mergeBase;
+        ? ctx.changeSet?.baseCommit ?? ctx.changeSet?.base
+        : ctx.changeSet?.mergeBase;
+    if (ref === undefined) {
+      throw new Error(`revision "${revision}" is not available in this review mode (no comparison revisions)`);
+    }
     commit = /^[a-f0-9]{40}([a-f0-9]{24})?$/i.test(ref)
       ? Promise.resolve(ref)
       : resolveCommit(ctx.repoRoot, ref);
@@ -52,6 +63,7 @@ export async function readReviewFile(ctx: ToolContext, relPath: string, revision
   const normalized = path.relative(path.resolve(ctx.repoRoot), absolute).split(path.sep).join("/");
   const commit = await resolveReviewRevision(ctx, revision);
   const content = await readFileAtCommit(ctx.repoRoot, commit, normalized);
+  if (content !== null) ctx.readObserver?.(normalized, revision);
   return { path: normalized, revision, commit, content };
 }
 

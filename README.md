@@ -185,6 +185,8 @@ The interactive equivalent ships as `docker/deploy.sh`.
 ```bash
 pir find --json --fail-on P1          # review HEAD^..HEAD
 pir find --uncommitted --json         # review the working tree (untracked included)
+pir audit --json                      # full-repository audit of the committed HEAD snapshot
+pir audit --path src/auth --json      # audit one subtree (repeatable, unions)
 pir plugins list                      # language packs + what this repo activates
 pir find --plugins golang --json      # force a language pack (or --plugins none)
 pir feedback F-12 expected --note "intentional"   # teach repository memory
@@ -193,6 +195,32 @@ pir verify-fix F-13                   # confirm a fix removed the trigger
 pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
 pir memory sync --server https://pir.svc:8790 --token T --insecure   # merge local & server memory
 ```
+
+### Full-repository audits (`pir audit`)
+
+`find` answers *"what did this change break?"*; `audit` answers *"what is
+broken in the code right now?"* — current-state semantics, no change
+attribution, so long-standing defects are reportable precisely because they
+exist today. The audit target is one immutable snapshot: the committed tree at
+`--head` (default `HEAD`); uncommitted changes are never audited. There is no
+`--base`, no merge-base, and no `--uncommitted`.
+
+- Scope: `--path <file-or-dir-prefix>` (repeatable, union) and
+  `--skip <glob>` (repeatable; `*`, `**`, `?`, plain values act as dir
+  prefixes). Default excludes vendored/build output and lockfiles; selected
+  binary/oversized files are reported `blocked`, never silently skipped.
+- Scheduling: the snapshot is partitioned into deterministic work units
+  (module groups; oversized files split into line-range chunks) that feed the
+  **same** reviewer/verifier loop as `find`, with one global token budget,
+  findings ceiling and dedup state across units.
+- Coverage is first-class: the JSON envelope reports per-file states
+  (`reviewed / partial / unreviewed / blocked / failed / excluded /
+  not-selected`) and unit completion. A budget stop leaves files honestly
+  `unreviewed` and the run `incomplete` — "reviewed" is process accounting,
+  not a guarantee that every defect was found.
+- Suppression stays conditional: a prior `accepted-risk`/`wont-fix` decision
+  only suppresses when the verifier re-validates it against current code;
+  drift reopens the finding.
 
 CLI reference, the full memory-trust model, and Docker details are covered in
 [docs/README.zh-CN.md](docs/README.zh-CN.md) (中文); the JSON protocol and
