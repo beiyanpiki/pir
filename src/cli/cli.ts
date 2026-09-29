@@ -5,7 +5,7 @@ import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "help", "version"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in

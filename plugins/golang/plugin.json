@@ -1,0 +1,14 @@
+{
+  "name": "golang",
+  "title": "Go",
+  "version": "1.0.0",
+  "description": "Go-specific review directions: concurrency lifetimes, error chains, data-structure semantics, backend boundaries, version-gated language rules.",
+  "detect": {
+    "markerFiles": ["go.mod"],
+    "extensions": ["go"]
+  },
+  "guidance": {
+    "reviewer": "guidance/reviewer.md",
+    "verifier": "guidance/verifier.md"
+  }
+}

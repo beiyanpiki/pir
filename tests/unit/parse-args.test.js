@@ -33,3 +33,10 @@ test("parseArgs: --flag=value on a non-value flag stays a distinct boolean flag"
   assert.equal(flags.get("--json=whatever"), true);
   assert.equal(flags.get("--json"), undefined);
 });
+
+test("parseArgs parses --plugins in both forms", () => {
+  const { flags } = parseArgs(["find", "--plugins", "golang,react"]);
+  assert.equal(flags.get("--plugins"), "golang,react");
+  const eq = parseArgs(["find", "--plugins=none"]);
+  assert.equal(eq.flags.get("--plugins"), "none");
+});

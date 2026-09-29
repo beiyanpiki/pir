@@ -213,6 +213,10 @@ user decision that a verifier re-validated), `claim`, `trigger`, `anchors`,
 `verifierRationale`, `memoryMatches`. `data.run.maxFindings` echoes the
 reported-findings cap (default 10, `--max-findings N`; a ceiling, not a
 target — fewer findings when evidence runs out is normal, never padded).
+`data.plugins[]` lists language packs whose review directions were injected
+(e.g. `golang@1.0.0 (auto)`); activation is marker-file detection pinned to
+the reviewed head (`--plugins golang,...` to force, `--plugins none` to
+disable, `pir plugins list` to inspect).
 Use `--fail-on P1` + exit code `1` for gating decisions.
 
 ## Troubleshooting quick table

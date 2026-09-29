@@ -1,4 +1,5 @@
 import { SEVERITY_ORDER, type Severity } from "../findings/types.js";
+import type { ActivePack } from "../plugins/types.js";
 import type { FindingView } from "./find.js";
 
 export const SCHEMA_VERSION = 1;
@@ -58,6 +59,7 @@ export function renderFindingsText(findings: FindingView[]): string {
 
 export function renderFindResultText(input: {
   degraded: boolean;
+  plugins?: ActivePack[];
   rounds: Array<{ round: number; fresh: number; confirmed: number; rejected: number; uncertain: number }>;
   findings: FindingView[];
   stoppedBecause: string;
@@ -68,6 +70,9 @@ export function renderFindResultText(input: {
   const lines: string[] = [];
   if (input.degraded) {
     lines.push("note: structural index unavailable (degraded mode) — run `codegraph init` for symbol-aware review");
+  }
+  if (input.plugins?.length) {
+    lines.push(`language packs: ${input.plugins.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`);
   }
   for (const round of input.rounds) {
     lines.push(

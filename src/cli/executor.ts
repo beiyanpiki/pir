@@ -51,6 +51,7 @@ Usage:
   pir serve [--host H --port P] [--cert C --key K] [--token T]   HTTPS service
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
   pir skill [path|install|print]         locate / install the LLM skill for pir
+  pir plugins list                      list language packs and what this repo activates
   pir version
 
 Find options:
@@ -66,6 +67,9 @@ Find options:
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
+  --plugins <list>    language packs injecting Go/Java/React-specific review
+                      directions: comma-separated names, "none" to disable,
+                      or "auto" to detect from marker files at head (default)
   --no-sync-index     skip codegraph index sync
 
 Models options:
@@ -158,6 +162,7 @@ export const VALUE_FLAGS = new Set([
   "--dir",
   "--server",
   "--token",
+  "--plugins",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
@@ -331,6 +336,10 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   if (command === "version") {
     emit(json ? envelope("version", { version: readVersion() }) : `pir ${readVersion()}\n`);
     return { code: 0, output: out.join("") };
+  }
+  if (command === "plugins") {
+    const code = await cmdPlugins(cwd, positional.slice(1), json, emit);
+    return { code, output: out.join("") };
   }
   if (command === "serve") {
     throw new UsageError("serve must run in the local CLI process, not through the executor");
@@ -535,6 +544,63 @@ function positiveIntFlag(flags: Map<string, string | boolean>, name: string): nu
   return value;
 }
 
+/**
+ * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
+ * available list, instead of a runtime error deep in the finding loop.
+ */
+async function parsePluginsFlag(
+  flags: Map<string, string | boolean>,
+): Promise<{ pluginMode?: "auto" | "manual" | "off"; manualPlugins?: string[] }> {
+  const raw = flags.get("--plugins");
+  if (raw === undefined) return {};
+  if (typeof raw !== "string") {
+    throw new UsageError(`invalid --plugins: a value is required (comma-separated names, "none", or "auto")`);
+  }
+  if (raw === "auto") return { pluginMode: "auto" };
+  if (raw === "none") return { pluginMode: "off" };
+  const names = [...new Set(raw.split(",").map((name) => name.trim()).filter(Boolean))];
+  if (names.length === 0) throw new UsageError(`invalid --plugins: ${raw}`);
+  const { loadBuiltInPacks } = await import("../plugins/index.js");
+  const known = loadBuiltInPacks().map((pack) => pack.name);
+  const unknown = names.filter((name) => !known.includes(name));
+  if (unknown.length > 0) {
+    throw new UsageError(`unknown --plugins pack(s): ${unknown.join(", ")} (available: ${known.join(", ") || "none"})`);
+  }
+  return { pluginMode: "manual", manualPlugins: names };
+}
+
+/** `pir plugins list`: built-in packs plus what the repo at <cwd> activates at HEAD. */
+async function cmdPlugins(cwd: string, args: string[], json: boolean, emit: Emit): Promise<number> {
+  const sub = args[0] ?? "list";
+  if (sub !== "list") throw new UsageError(`unknown plugins subcommand: ${sub} (expected: list)`);
+  const { getHeadCommit, isGitRepo } = await import("../changes/git.js");
+  const { detectPacks, loadBuiltInPacks } = await import("../plugins/index.js");
+  if (!(await isGitRepo(cwd))) throw new UsageError(`not a git repository: ${cwd}`);
+  const packs = loadBuiltInPacks();
+  const head = await getHeadCommit(cwd);
+  const active = await detectPacks(cwd, head, packs);
+  const activeByName = new Map(active.map((pack) => [pack.name, pack]));
+  const rows = packs.map((pack) => ({
+    name: pack.name,
+    title: pack.title,
+    version: pack.version,
+    markerFiles: pack.markerFiles,
+    active: activeByName.has(pack.name),
+    activation: activeByName.get(pack.name)?.activation ?? null,
+  }));
+  if (json) {
+    emit(envelope("plugins.list", { head, packs: rows }));
+    emit("\n");
+  } else {
+    emit(`head: ${head}\n`);
+    for (const row of rows) {
+      const mark = row.active ? "*" : " ";
+      emit(`${mark} ${row.name}@${row.version} (${row.title}) — markers: ${row.markerFiles.join(", ")}${row.active ? " [active]" : ""}\n`);
+    }
+  }
+  return 0;
+}
+
 async function cmdFind(
   ctx: Ctx,
   _args: string[],
@@ -553,6 +619,7 @@ async function cmdFind(
     maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
     model: flags.get("--model") as string | undefined,
+    ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
   });
   const findings = result.findings.map((row) => toFindingView(ctx, row));
@@ -577,6 +644,7 @@ async function cmdFind(
             })),
           },
           degraded: result.degraded,
+          plugins: result.plugins,
           stoppedBecause: result.stoppedBecause,
           estimatedTokens: result.estimatedTokens,
           usage: result.usage ?? null,
@@ -597,6 +665,7 @@ async function cmdFind(
     emit(
       `${renderFindResultText({
         degraded: result.degraded,
+        plugins: result.plugins,
         rounds: result.rounds,
         findings,
         stoppedBecause: result.stoppedBecause,

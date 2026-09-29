@@ -10,6 +10,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "plugins",
     "skills",
     "docs/for-llm.md"
   ],
