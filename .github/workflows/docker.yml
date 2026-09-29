@@ -2,11 +2,11 @@ name: docker
 
 # Builds and pushes the pir image to GHCR (GitHub Container Registry):
 #   ghcr.io/<owner>/pir:<tag>
-# - push to main  -> :main and :sha tags
+# - push to dev  -> :dev and :sha tags
 # - v* tag push   -> :1.2.3 and :1.2 semver tags
 on:
   push:
-    branches: [main]
+    branches: [dev]
     tags: ["v*"]
   workflow_dispatch:
 
