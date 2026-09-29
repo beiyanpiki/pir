@@ -471,7 +471,13 @@ test("findIssues: rejected findings do not consume the maxFindings budget", asyn
 test("findIssues: PIR_TRANSCRIPTS=1 dumps one transcript per session under the state root", async () => {
   const repo = setupRepo();
   const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-transcripts-e2e-"));
-  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  // Mirror what the server passes for its worktree flows: dbPath forced under
+  // PIR_STATE_ROOT (reviewDbPath). Transcripts must follow that db, not the
+  // env-var chain.
+  const ctx = await createAppContext(repo.dir, {
+    noSyncIndex: true,
+    dbPath: path.join(stateRoot, "proj", "memory.sqlite"),
+  });
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
@@ -504,6 +510,73 @@ test("findIssues: PIR_TRANSCRIPTS=1 dumps one transcript per session under the s
     if (savedStateRoot === undefined) delete process.env.PIR_STATE_ROOT;
     else process.env.PIR_STATE_ROOT = savedStateRoot;
     ctx.memory.close();
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  }
+});
+
+test("findIssues: transcripts survive worktree cleanup in serve mode (issue #7)", async () => {
+  // The shared image bakes PIR_STATE_IN_PROJECT=1 for docker-exec mode; the
+  // serve process inherits it. Combined with the server's explicit dbPath
+  // (reviewDbPath), env-first transcript resolution used to place transcripts
+  // inside the throwaway worktree — `git worktree remove --force` then deleted
+  // every transcript when the review ended.
+  const repo = setupRepo();
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-issue7-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-issue7-state-"));
+  const saved = {
+    PIR_REPOS_ROOT: process.env.PIR_REPOS_ROOT,
+    PIR_STATE_ROOT: process.env.PIR_STATE_ROOT,
+    PIR_STATE_IN_PROJECT: process.env.PIR_STATE_IN_PROJECT,
+    PIR_TRANSCRIPTS: process.env.PIR_TRANSCRIPTS,
+  };
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  process.env.PIR_STATE_IN_PROJECT = "1"; // leaked from the image, as deployed
+  process.env.PIR_TRANSCRIPTS = "1";
+
+  const { computeProjectIdentity } = await import("../../dist/memory/identity.js");
+  const { materializeRegistered, reviewDbPath } = await import("../../dist/app/repos.js");
+  const { projectId } = await computeProjectIdentity(repo.dir);
+  const review = await materializeRegistered(repo.dir, projectId, { noFetch: true });
+  const ctx = await createAppContext(review.worktree, {
+    noSyncIndex: true,
+    dbPath: reviewDbPath(projectId), // exactly what the server's /v1/review passes
+  });
+  const factory = new FakeSessionFactory({
+    reviewerScript: reviewerRecordsCandidate,
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: review.worktree,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 1 },
+    });
+    assert.ok(outcome.transcriptDir, "outcome names the transcript directory");
+    assert.ok(
+      outcome.transcriptDir.startsWith(stateRoot),
+      `transcripts live under PIR_STATE_ROOT, got ${outcome.transcriptDir}`,
+    );
+    const reviewerFile = path.join(outcome.transcriptDir, "reviewer-r1.json");
+    assert.ok(existsSync(reviewerFile), "reviewer transcript exists");
+
+    // The end-of-review worktree cleanup that used to destroy the transcripts.
+    await review.cleanup();
+    assert.ok(existsSync(reviewerFile), "transcript survives worktree cleanup");
+    assert.ok(!existsSync(review.worktree), "worktree really was removed");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    ctx.memory.close();
+    await review.cleanup();
+    rmSync(reposRoot, { recursive: true, force: true });
     rmSync(stateRoot, { recursive: true, force: true });
     repo.cleanup();
   }
