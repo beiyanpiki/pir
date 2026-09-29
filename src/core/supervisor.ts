@@ -89,7 +89,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const state: ReviewState = createReviewState(base, head, maxRounds);
 
   const transcriptDir = transcriptsEnabled()
-    ? runTranscriptDir(deps.repoRoot, deps.memory.identity.projectId, run.id)
+    ? runTranscriptDir(deps.memory.store.dbPath, run.id)
     : undefined;
   if (transcriptDir) {
     deps.onProgress?.({ type: "info", message: `transcripts: ${transcriptDir}` });

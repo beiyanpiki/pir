@@ -35,21 +35,25 @@ test("transcriptsEnabled: only 1/true opt in", () => {
   });
 });
 
-test("runTranscriptDir mirrors the memory state-dir resolution", () => {
+test("runTranscriptDir sits next to the run's effective memory db", () => {
   const root = mkdtempSync(path.join(tmpdir(), "pir-transcripts-"));
   try {
-    // Server mode: <PIR_STATE_ROOT>/<projectId>/transcripts/<runId>
-    const serverDir = withEnv({ PIR_STATE_ROOT: root }, () =>
-      runTranscriptDir("/repo", "proj-1", "run-9"),
-    );
+    // Server mode: db forced under PIR_STATE_ROOT/<projectId> -> transcripts
+    // beside it, never inside the throwaway worktree.
+    const serverDir = runTranscriptDir(path.join(root, "proj-1", "memory.sqlite"), "run-9");
     assert.equal(serverDir, path.join(root, "proj-1", "transcripts", "run-9"));
     assert.ok(existsSync(serverDir), "directory is created");
 
-    // Docker-exec mode: <repo>/.pir/transcripts/<runId>
-    const inProject = withEnv({ PIR_STATE_IN_PROJECT: "1" }, () =>
-      runTranscriptDir(path.join(root, "repo"), "proj-1", "run-9"),
-    );
+    // Docker-exec mode: db under <repo>/.pir -> transcripts beside it.
+    const inProject = runTranscriptDir(path.join(root, "repo", ".pir", "memory.sqlite"), "run-9");
     assert.equal(inProject, path.join(root, "repo", ".pir", "transcripts", "run-9"));
+
+    // The image bakes PIR_STATE_IN_PROJECT=1 for docker-exec and the serve
+    // process inherits it; the db the run uses wins regardless.
+    const leaked = withEnv({ PIR_STATE_IN_PROJECT: "1", PIR_STATE_ROOT: path.join(root, "state") }, () =>
+      runTranscriptDir(path.join(root, "state", "proj-2", "memory.sqlite"), "run-9"),
+    );
+    assert.equal(leaked, path.join(root, "state", "proj-2", "transcripts", "run-9"));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
