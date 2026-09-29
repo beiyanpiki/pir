@@ -1,14 +1,23 @@
 {
   "name": "typescript",
   "title": "TypeScript",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TypeScript/Node.js review directions: null-safety escape hatches, async ownership and the event loop, type erasure, ESM/CJS and exports maps, backend boundaries.",
   "detect": {
-    "markerFiles": ["tsconfig.json"],
-    "extensions": ["ts", "tsx", "mts", "cts"]
+    "markerFiles": [
+      "tsconfig.json"
+    ],
+    "extensions": [
+      "ts",
+      "tsx",
+      "mts",
+      "cts"
+    ]
   },
   "guidance": {
     "reviewer": "guidance/reviewer.md",
-    "verifier": "guidance/verifier.md"
+    "verifier": "guidance/verifier.md",
+    "reviewerAudit": "guidance/reviewer-audit.md",
+    "verifierAudit": "guidance/verifier-audit.md"
   }
 }
