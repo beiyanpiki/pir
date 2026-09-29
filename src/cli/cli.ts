@@ -5,7 +5,7 @@ import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "help", "version"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in
@@ -43,7 +43,8 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const transport = resolveTransport({ argv, env: process.env, config });
-  // serve/config/skill/version/help (and a bare `pir`) stay client-side;
+  // serve/config/skill/plugins/version/help (and a bare `pir`) stay
+  // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
   if (transport.mode === "remote" && forwardToServer) {

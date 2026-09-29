@@ -9,6 +9,7 @@ import { runTranscriptDir, transcriptsEnabled } from "../agents/transcripts.js";
 import type { AgentSessionFactory, SessionUsage } from "../agents/types.js";
 import { ReviewerRoundError, runReviewerRound, type ReviewerRoundResult } from "../agents/reviewer.js";
 import { runVerifier } from "../agents/verifier.js";
+import { loadBuiltInPacks, resolveLanguagePacks, type ActivePack } from "../plugins/index.js";
 import type { ToolContext } from "../tools/context.js";
 import { Budget } from "./budget.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
@@ -26,6 +27,10 @@ export interface FindOptions {
   maxVerificationsPerRound?: number;
   /** Confirmed and uncertain reports count; rejected and pending candidates do not. */
   maxFindings?: number;
+  /** Language-pack activation: auto-detect at head (default), manual list, or off. */
+  pluginMode?: "auto" | "manual" | "off";
+  /** Pack names for pluginMode "manual". */
+  manualPlugins?: string[];
 }
 
 export interface FindEvent {
@@ -62,11 +67,14 @@ export interface FindOutcome {
   memoryPackTokens: number;
   runId: string;
   maxFindings: number;
+  /** Language packs whose guidance was injected into reviewer/verifier prompts. */
+  plugins: ActivePack[];
   transcriptDir?: string;
 }
 
 const DEFAULT_MAX_ROUNDS = 2;
-const DEFAULT_MAX_TOKENS = 400_000;
+// No default token cap: review until rounds/findings/wall-clock say stop;
+// --max-tokens opts back into a bounded run.
 const DEFAULT_MAX_VERIFICATIONS = 8;
 const DEFAULT_MAX_FINDINGS = 10;
 
@@ -82,7 +90,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const budget = new Budget({
     maxRounds,
-    maxTokens: positiveInteger(options.maxTokens ?? DEFAULT_MAX_TOKENS, "maxTokens"),
+    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 
@@ -100,6 +108,18 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     featureKeys: [], entityKeys: [], headCommit: head,
   });
   const toolCtx: ToolContext = { repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory };
+  const languagePacks = await resolveLanguagePacks({
+    repoRoot: deps.repoRoot,
+    headCommit: head,
+    packs: loadBuiltInPacks(),
+    selection: { mode: options.pluginMode ?? "auto", manual: options.manualPlugins ?? [] },
+  });
+  if (languagePacks.active.length > 0) {
+    deps.onProgress?.({
+      type: "info",
+      message: `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`,
+    });
+  }
   let needsReview = true;
   let verificationErrors = 0;
   const uncertaintyReasons: Partial<Record<UncertaintyReason, number>> = {};
@@ -128,9 +148,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           maxRounds, maxFindings, findingsRemaining: maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
           investigationFeedback: state.investigationFeedback, model: options.model,
+          languageGuidance: languagePacks.reviewerGuidance,
           transcriptFile: transcriptDir ? path.join(transcriptDir, `reviewer-r${state.round}.json`) : undefined,
         });
-        budget.chargeSession(result.usage, memoryPack.text, result.assistantText, result.summary);
+        budget.chargeSession(result.usage, memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
         freshCount = dedup.fresh.length;
@@ -166,9 +187,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         }));
         const verdict = await runVerifier({
           factory: deps.factory, ctx: toolCtx, candidate, priorDecisions: memoryMatches, model: options.model,
+          languageGuidance: languagePacks.verifierGuidance,
           transcriptFile: transcriptDir ? path.join(transcriptDir, `verifier-r${state.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`) : undefined,
         });
-        budget.chargeSession(verdict.usage, verdict.rationale);
+        budget.chargeSession(verdict.usage, languagePacks.verifierGuidance, verdict.rationale);
         state.pending.shift();
         verifiedCount += 1;
         if (verdict.verdict === "uncertain") {
@@ -236,6 +258,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     stoppedBecause: state.stoppedBecause ?? "completed", estimatedTokens: budget.tokenEstimate,
     usage: budget.usage, usageComplete: budget.usageComplete, durationMs: budget.elapsedMs,
     memoryPackTokens: memoryPack.approxTokens, runId: run.id, maxFindings,
+    plugins: languagePacks.active,
     ...(transcriptDir ? { transcriptDir } : {}),
   };
 }

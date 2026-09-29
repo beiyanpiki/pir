@@ -2,8 +2,12 @@ import type { SessionUsage } from "../agents/types.js";
 
 export interface BudgetOptions {
   maxRounds: number;
-  /** Checked between sessions; an in-flight model turn may exceed the limit. */
-  maxTokens: number;
+  /**
+   * Checked between sessions; an in-flight model turn may exceed the limit.
+   * Undefined means unlimited: different problems need different amounts, so
+   * the review runs until rounds/findings/wall-clock stop it.
+   */
+  maxTokens?: number;
   maxWallClockMs?: number;
 }
 
@@ -43,7 +47,7 @@ export class Budget {
   }
 
   exhausted(): string | null {
-    if (this.spentTokens >= this.options.maxTokens) {
+    if (this.options.maxTokens !== undefined && this.spentTokens >= this.options.maxTokens) {
       return `token budget exhausted (${this.missingUsage ? "~" : ""}${this.spentTokens} tokens)`;
     }
     if (this.options.maxWallClockMs && this.elapsedMs >= this.options.maxWallClockMs) {

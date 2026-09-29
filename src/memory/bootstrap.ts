@@ -10,6 +10,7 @@ import { createReadCodeTool, createSearchTextTool, createFindSymbolTool } from "
 import type { ToolContext } from "../tools/context.js";
 import { hashFilesAtCommit } from "./freshness.js";
 import { getNameStatus } from "../changes/git.js";
+import { loadBuiltInPacks } from "../plugins/index.js";
 
 export interface BootstrapOptions {
   model?: string;
@@ -173,7 +174,13 @@ export async function bootstrapProjectMemory(deps: {
   const head = await getHeadCommit(deps.repoRoot);
 
   const files = await deps.codeMap.fileOverview();
-  const codeFiles = files.filter((f) => f.nodeCount > 0 || /\.(ts|tsx|js|jsx|py|go|rs|java|rb|c|cpp|h)$/i.test(f.path));
+  // Default code extensions plus every built-in language pack's extensions, so
+  // bootstrap sees all languages pir knows about, not a frozen list.
+  const codeExtensions = [
+    ...new Set(["ts", "tsx", "js", "jsx", "py", "go", "rs", "java", "rb", "c", "cpp", "h", ...loadBuiltInPacks().flatMap((pack) => pack.extensions)]),
+  ];
+  const codeFileRe = new RegExp(`\\.(?:${codeExtensions.map((ext) => ext.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})$`, "i");
+  const codeFiles = files.filter((f) => f.nodeCount > 0 || codeFileRe.test(f.path));
   const groups = groupByModule(codeFiles);
 
   const ctx: ToolContext = {

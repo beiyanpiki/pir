@@ -18,6 +18,8 @@ export { buildChangeSet } from "./changes/change-set.js";
 export { parseUnifiedDiff, addedLineNumbers } from "./changes/diff.js";
 export { createCodeMap, DegradedCodeMap, CodeGraphCliAdapter } from "./codemap/provider.js";
 export type { CodeMapProvider, CodeSymbol, IndexStatus } from "./codemap/types.js";
+export { detectPacks, loadBuiltInPacks, renderGuidance, resolveLanguagePacks } from "./plugins/index.js";
+export type { ActivePack, LanguagePack, PluginSelection } from "./plugins/index.js";
 export { findIssues } from "./core/supervisor.js";
 export { runReviewerRound } from "./agents/reviewer.js";
 export { runVerifier } from "./agents/verifier.js";

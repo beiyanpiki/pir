@@ -63,6 +63,8 @@ export interface ReviewerDeps {
   model?: string;
   /** Opt-in transcript dump location for this round's session. */
   transcriptFile?: string;
+  /** Rendered built-in language-pack directions for this round's prompt. */
+  languageGuidance?: string;
 }
 
 /**
@@ -113,6 +115,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
       investigationFeedback: deps.investigationFeedback,
       memoryPack: deps.memoryPack,
       structuralQueries: deps.ctx.codeMap.structuralQueries,
+      languageGuidance: deps.languageGuidance,
     }));
     assistantText = session.getLastAssistantText() ?? "";
     // Some providers resolve an errored turn rather than rejecting it.

@@ -17,6 +17,8 @@ export interface VerifierDeps {
   priorDecisions: MemoryMatch[];
   model?: string;
   transcriptFile?: string;
+  /** Rendered built-in language-pack playbooks for this session's prompt. */
+  languageGuidance?: string;
 }
 
 /** Verify technical realness independently of historical acceptance. */
@@ -70,6 +72,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
       fixHistory: fixHistory.map((fix) => ({
         originalClaim: fix.originalClaim, afterCommit: fix.afterCommit, verified: fix.verified,
       })),
+      languageGuidance: deps.languageGuidance,
     }));
     const providerError = session.getLastAssistantError();
     if (providerError) {

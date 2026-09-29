@@ -41,7 +41,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           model: extractFlag(tokens, "--model"),
         });
         const findings = result.findings.map((row) => toFindingView(app, row));
-        ctx.ui.notify(renderFindResultText({ degraded: result.degraded, rounds: result.rounds, findings, stoppedBecause: result.stoppedBecause, pendingCandidates: result.pendingCandidates, incomplete: result.incomplete, transcriptDir: result.transcriptDir }), "info");
+        ctx.ui.notify(renderFindResultText({ degraded: result.degraded, plugins: result.plugins, rounds: result.rounds, findings, stoppedBecause: result.stoppedBecause, pendingCandidates: result.pendingCandidates, incomplete: result.incomplete, transcriptDir: result.transcriptDir }), "info");
       } finally {
         ctx.ui.setStatus("review", undefined);
         app.memory.close();

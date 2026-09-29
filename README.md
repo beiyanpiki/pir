@@ -185,6 +185,8 @@ The interactive equivalent ships as `docker/deploy.sh`.
 ```bash
 pir find --json --fail-on P1          # review HEAD^..HEAD
 pir find --uncommitted --json         # review the working tree (untracked included)
+pir plugins list                      # language packs + what this repo activates
+pir find --plugins golang --json      # force a language pack (or --plugins none)
 pir feedback F-12 expected --note "intentional"   # teach repository memory
 pir find --json                       # same issue no longer reported
 pir verify-fix F-13                   # confirm a fix removed the trigger

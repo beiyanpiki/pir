@@ -260,8 +260,9 @@ $PIR_STATE_ROOT/<projectId>/memory.sqlite   centralized per-project memory
 
 ### 6.1 Supervisor (`supervisor.ts`)
 
-`findIssues(deps) → FindOutcome`. Defaults: `maxRounds = 2`, `maxTokens =
-400_000`, `maxVerifications = 8` per round, `maxFindings = 10` ("a ceiling,
+`findIssues(deps) → FindOutcome`. Defaults: `maxRounds = 2`, `maxTokens`
+unlimited (no cap unless `--max-tokens`; rounds/findings/wall-clock still
+stop the run), `maxVerifications = 8` per round, `maxFindings = 10` ("a ceiling,
 not a target"). Setup: resolve head (`--head` or `HEAD`), base (`--base` or
 `head^`), build the `ChangeSet`, create a run row, build the **memory pack
 once per run** (keyed on changed paths + head commit), assemble the shared
@@ -651,7 +652,50 @@ it is never copied into memory DBs, which hold *semantic* knowledge.
 
 ---
 
-## 13. Configuration and environment
+## 13. Language packs — `src/plugins/` and `plugins/`
+
+Language packs give the general finding loop language/framework-specific review
+directions (Go today; Java/React follow the same shape). A pack is **pure
+data**: `plugins/<name>/plugin.json` (name, version, marker files, extensions,
+guidance paths) plus `guidance/reviewer.md` and `guidance/verifier.md`.
+Packs ship inside the npm package (`files` includes `plugins/`); there is no
+runtime plugin discovery and no code execution — a pack cannot add tools,
+categories, or anything beyond its two guidance documents.
+
+- **Loading** (`loader.ts`): `loadBuiltInPacks()` reads the shipped directory
+  (resolved relative to `dist/`), hand-validates manifests, and **fails loud**
+  on damage — a broken built-in pack is a release bug, not user input.
+  `renderGuidance()` renders the per-role prompt section under a hard
+  **8000-character budget** (over-budget content truncates with an explicit
+  marker) so packs cannot bloat sessions.
+- **Activation** (`detect.ts`): default `auto` — a pack activates when any of
+  its `detect.markerFiles` exists at the **reviewed head commit** (pinned, via
+  `git cat-file`, like every other evidence read; the working tree never
+  influences activation). `--plugins golang,react` selects manually, `--plugins
+  none` disables; unknown names are usage errors listing what exists.
+  `pir plugins list` shows every pack and what the current repo activates.
+- **Injection**: `resolveLanguagePacks()` runs once per `find`; the supervisor
+  passes the rendered sections through `languageGuidance` into every reviewer
+  round and verifier session, ahead of the memory blocks. Guidance length is
+  charged to the token budget as prompt text. The envelope and human output
+  report `plugins: [{name, version, activation}]` for transparency.
+- **Trust model**: guidance is *trusted instructions*, same trust line as the
+  rest of the prompt — it comes exclusively from pir's own shipped packs and is
+  never derived from repository content. This is deliberately separate from
+  repository memory, which stays untrusted evidence (§2.4). Third-party packs
+  are a non-goal until an explicit trust model exists.
+- **Content discipline** (golang pack): directions are defect patterns with
+  change attribution — concurrency lifetimes, error-chain breaks, typed-nil,
+  slice aliasing, backend/DB boundaries, API/JSON compatibility breaks, and
+  tests that hide bugs — not style rules (gofmt/lint territory). Verifier
+  playbooks are falsification scripts, including a **version gate**: read the
+  `go` directive in go.mod before believing version-dependent claims (loop
+  variable capture is fixed at go ≥ 1.22, math/rand auto-seeds at ≥ 1.20).
+  `bootstrap.ts` also unions pack extensions into its code-file filter.
+
+---
+
+## 14. Configuration and environment
 
 `~/.pir/config.json` (chmod 600): `{mode: local|remote, server: {url, token,
 insecure}, model}`. Transport precedence and the wizard live in
@@ -673,7 +717,7 @@ insecure}, model}`. Transport precedence and the wizard live in
 
 ---
 
-## 14. Deployment
+## 15. Deployment
 
 Two-stage Dockerfile (`node:22-bookworm-slim`): installs `git ripgrep
 openssl`, optionally `@colbymchenry/codegraph`, runs as `node` with
@@ -693,7 +737,7 @@ publishes the package and the `ghcr.io/beiyanpiki/pir` image on every push to
 
 ---
 
-## 15. Repository layout
+## 16. Repository layout
 
 ```
 src/
@@ -715,7 +759,10 @@ src/
 │                       repos · retrieval · freshness · feedback · bootstrap ·
 │                       remember · sync · finding store
 ├── changes/            git · diff parsing · change-set
-└── codemap/            provider interface · codegraph CLI adapter · degraded
+├── codemap/            provider interface · codegraph CLI adapter · degraded
+└── plugins/            built-in language packs: loader · marker detection ·
+                        guidance rendering (budgeted)
+plugins/                shipped pack data: golang/{plugin.json, guidance/*.md}
 tests/
 ├── unit/               model-free unit tests (dedup, identity, memory,
 │                       prompts, session factory, tools, …)
@@ -729,7 +776,7 @@ docs/                   README.zh-CN · for-llm · design (this file) · review-
 
 ---
 
-## 16. Testing and evaluation
+## 17. Testing and evaluation
 
 - `npm test` — model-free regression suite (unit + integration): builds, then
   runs against fixtures; covers tools, scheduler, session isolation, scoring.
@@ -746,7 +793,7 @@ docs/                   README.zh-CN · for-llm · design (this file) · review-
 
 ---
 
-## 17. Key decisions and why
+## 18. Key decisions and why
 
 | Decision | Rationale |
 |---|---|
@@ -760,6 +807,7 @@ docs/                   README.zh-CN · for-llm · design (this file) · review-
 | One executor for CLI/extension/server/remote | Feature work lands once; every face inherits it, and the JSON/exit contract stays identical everywhere. |
 | Pending candidates persisted at limits | Budget exhaustion must never silently discard work; `candidate`-status rows keep it inspectable. |
 | Optional codegraph behind an interface | Symbol structure is valuable but must stay swappable and degradable; nothing structural leaks into memory. |
+| Language packs are data, not code | Language-specific review directions ship as pir-owned markdown under a hard character budget, activated by marker files pinned to head. No runtime discovery or execution; the trust line (trusted guidance vs untrusted memory evidence) stays crisp. |
 
 ---
 

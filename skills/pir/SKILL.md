@@ -72,7 +72,8 @@ pir config wizard                     # re-run the setup wizard
   review fine without pushing or sharing credentials**.
 
 One-off overrides: `--server <url> [--token T] [--insecure]` forces remote,
-`--local` forces local. `serve`/`config`/`skill`/`version` always run locally.
+`--local` forces local. `serve`/`config`/`skill`/`plugins`/`version` always run
+locally (`plugins list` inspects the local checkout).
 
 ## Output contract (build on this, don't screen-scrape)
 
@@ -123,6 +124,7 @@ pir memory refresh            # after large refactors
 | `pir memory status\|bootstrap\|refresh` | repository memory |
 | `pir remember project\|feature\|symbol <target> invariant\|note\|risk --text "…"` | store code knowledge |
 | `pir models [search] [--all] [--ids] [--provider p]` | model catalog |
+| `pir plugins list` | built-in language packs + what this repo activates (`find --plugins <names\|none\|auto>` overrides) |
 | `pir config show\|wizard\|set\|reset` | client config (`~/.pir/config.json`) |
 | `pir skill install [--dir D]` | install this skill (default `~/.agents/skills`) |
 | `pir serve` | run the HTTPS service side (see docs/for-llm.md) |
