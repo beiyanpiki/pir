@@ -38,6 +38,11 @@ export async function createAppContext(repoRoot: string, options: AppContextOpti
     ...(options.readOnlyMemory ? { readOnly: true } : {}),
   });
   const codeMapResult = await createCodeMap(repoRoot);
+  if (codeMapResult.degraded) {
+    // Structural context silently missing is the worst failure mode for a
+    // reviewer; make the degradation observable once per review run.
+    process.stderr.write(`pir: codegraph degraded (${codeMapResult.reason}): ${codeMapResult.detail}\n`);
+  }
   // A reader must not sync the index either: ensureSynced writes the shared
   // codegraph index a queued command may be relying on.
   if (!codeMapResult.degraded && !options.noSyncIndex && !options.readOnlyMemory) {

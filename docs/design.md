@@ -755,6 +755,7 @@ insecure}, model}`. Transport precedence and the wizard live in
 | `PIR_CONFIG_DIR` | relocate `~/.pir` |
 | `PIR_NO_WIZARD` / `--no-wizard` | suppress first-run wizard |
 | `PIR_SERVER_URL`, `PIR_MODE`, `PIR_SERVER_TOKEN`, `PIR_INSECURE` | transport overrides |
+| `PIR_REMOTE_TIMEOUT` | remote client wait for a server answer (seconds; default 1800, `0` = unlimited — replaces undici's 300 s default) |
 | `PIR_MODEL` | default model (after `--model`, before config) |
 | `PIR_MEMORY_DB` | explicit memory DB path |
 | `PIR_STATE_ROOT` / `PIR_STATE_IN_PROJECT` | state layout (server / docker exec mode) |
