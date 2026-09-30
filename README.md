@@ -89,8 +89,10 @@ installs.
 On the first interactive run `pir` starts a short setup wizard and writes
 `~/.pir/config.json` (chmod 600): **local mode** (default — review in the
 current repo with this machine's pi credentials) or **remote mode** (forward
-everything to a `pir serve` instance; `find` ships your local state as a git
-bundle, so unpushed/uncommitted code reviews fine). Non-interactive runs fall
+everything to a `pir serve` instance; repo commands — `find`, `audit` and the
+`memory`/`findings`/`feedback`/`remember`/`verify-fix` family — ship your
+local state as a git bundle, so unpushed/uncommitted code reviews fine).
+Non-interactive runs fall
 back to local defaults with a one-line hint. Manage later:
 
 ```bash

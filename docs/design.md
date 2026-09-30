@@ -179,15 +179,21 @@ are per-command).
 
 When transport resolves to remote:
 
-- **`find` without `--repo` takes the bundle path**: the client packs its local
-  state (unpushed commits, even an uncommitted working tree via
-  `createWorkingTreeSnapshot`) into a git bundle using transient refs
-  `refs/pir/bundle-head` / `refs/pir/bundle-base` — the user's index, working
-  tree, and refs are untouched. `--base/--head` are pinned to SHAs
-  (bundle-materialized repos have no remote-tracking refs), then
+- **Repo-context commands without `--repo` take the bundle path** (`find`,
+  `audit`, `memory`, `findings`, `feedback`, `remember`, `verify-fix` — the
+  server's `/v1/review` whitelist; `memory sync` always runs locally): the
+  client packs its local state (unpushed commits, even an uncommitted working
+  tree via `createWorkingTreeSnapshot` for `find`) into a git bundle using
+  transient refs `refs/pir/bundle-head` / `refs/pir/bundle-base` — the user's
+  index, working tree, and refs are untouched. `--base/--head` are pinned to
+  SHAs (bundle-materialized repos have no remote-tracking refs), then
   `POST /v1/review {remoteUrl, rootCommit, base, head, bundleBase64, argv}`.
-  A `{needFull: true}` response triggers one resend with `base: null` (full
-  history bundle). The server needs **no credentials for the client's origin**.
+  Only `find` computes a comparison base (thin bundle first); audit and the
+  memory family ship a full-history, head-pinned bundle. A `{needFull: true}`
+  response triggers one resend with `base: null` (full history bundle). The
+  server needs **no credentials for the client's origin** — and the memory
+  family gets the repo context `/v1/exec` can never provide on a stock serve
+  instance (its workspace is an empty mount point, not a checkout).
 - **Everything else takes the exec path**: `POST /v1/exec {"argv": [...]}`.
 - The relay writes `result.log` to stderr, `result.output` to stdout, returns
   `result.code`.
@@ -199,8 +205,8 @@ When transport resolves to remote:
 | Route | Body | Behavior |
 |---|---|---|
 | `GET /health` | — | `{ok, version, tls, executor: {pending, oldestPendingMs}}` |
-| `POST /v1/exec` | `{argv}` | Runs `executePirCommand` under `cwdGuard: workspace`; refuses recursive `serve`; `UsageError` → HTTP 200 with `code:2` |
-| `POST /v1/review` | `{rootCommit, base?, head, bundleBase64, argv?}` | Whitelisted commands (`find memory findings feedback remember verify-fix`); materializes the bundle and reviews it in a throwaway worktree; thin-bundle miss → `{needFull:true}` |
+| `POST /v1/exec` | `{argv}` | Runs `executePirCommand` under `cwdGuard: workspace`; refuses recursive `serve`; `UsageError` → HTTP 200 with `code:2`; repo-context commands on a non-git cwd → `code:2` guidance (bundle path / `--repo`) |
+| `POST /v1/review` | `{rootCommit, base?, head, bundleBase64, argv?}` | Whitelisted commands (`find audit memory findings feedback remember verify-fix`); materializes the bundle and reviews it in a throwaway worktree; thin-bundle miss → `{needFull:true}` |
 | `POST /v1/memory/sync` | `{projectId, snapshot, dryRun?}` | Re-derives `projectId` from `normalizedRemote+rootCommit` (a token holder cannot clobber another project); merges snapshots server-side |
 
 - **Auth**: bearer token, `timingSafeEqual`. No token configured = open

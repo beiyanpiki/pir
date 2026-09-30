@@ -1,3 +1,4 @@
+import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
@@ -8,11 +9,22 @@ export interface RemoteOptions {
 }
 
 /**
- * Client side of `pir serve`. find-family commands invoked from inside a git
+ * Commands that ship as a bundle — kept in sync with the server's
+ * REVIEW_ENDPOINT_COMMANDS whitelist. Beyond find/audit this is the whole
+ * memory family: on a stock serve instance /v1/exec has no repo context to
+ * run them against (the workspace is an empty mount point), so the
+ * bundle-materialized worktree is the only path that reaches the project's
+ * central memory db.
+ */
+const REVIEW_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
+
+/**
+ * Client side of `pir serve`. Repo-context commands invoked from inside a git
  * repository take the coderabbit-cli path: the LOCAL state (unpushed commits
  * included, working tree via --uncommitted) is packed as a git bundle and
- * shipped to POST /v1/review, so the server reviews exactly what the client
- * sees — no push required. Everything else forwards verbatim to /v1/exec.
+ * shipped to POST /v1/review, so the server runs them against exactly what
+ * the client sees — no push required. Everything else forwards verbatim to
+ * /v1/exec.
  */
 export async function remoteExec(serverUrl: string, argv: string[], options: RemoteOptions = {}): Promise<number> {
   if (options.insecure) {
@@ -35,28 +47,42 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
 }
 
 /**
- * A plain `find` or `audit` over the caller's own checkout ships as a bundle.
+ * A repo-context command over the caller's own checkout ships as a bundle.
+ * `memory sync` never does: it merges the caller's own db and always runs in
+ * the local process anyway (and /v1/exec refuses it with the right message).
  * parseArgs is the authority on the command (it skips value-flag values, so
  * `--model glm find` is still a find), matching the server's own check.
  */
 export function wantsBundle(cleanedArgv: string[]): boolean {
-  const command = parseArgs(cleanedArgv).positional[0];
-  return (command === "find" || command === "audit") && !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="));
+  const { positional } = parseArgs(cleanedArgv);
+  if (positional[0] === "memory" && positional[1] === "sync") return false;
+  const command = positional[0];
+  return (
+    command !== undefined &&
+    REVIEW_COMMANDS.has(command) &&
+    !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="))
+  );
 }
 
 async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions): Promise<number> {
   const { isGitRepo, getHeadCommit, getRootCommit, getRemoteUrl, createWorkingTreeSnapshot, git } = await import(
     "../changes/git.js"
   );
-  const cwd = process.cwd();
-  // Audit reviews a pinned snapshot: no comparison base, no working-tree mode.
-  const isAudit = parseArgs(argv).positional[0] === "audit";
+  const parsed = parseArgs(argv);
+  const command = parsed.positional[0];
+  // find compares base..head. audit and the memory family have no comparison
+  // semantics — they need a repo context at head, packed as a full bundle.
+  const isFind = command === "find";
+  // The repo to pack: an explicit --cwd names the caller's checkout (the
+  // server drops --cwd before running in the materialized worktree).
+  const cwdFlag = parsed.flags.get("--cwd");
+  const cwd = typeof cwdFlag === "string" ? path.resolve(cwdFlag) : process.cwd();
   if (!(await isGitRepo(cwd))) {
-    process.stderr.write("pir: remote find/audit requires a git repository (or use --repo)\n");
+    process.stderr.write(`pir: remote ${command} requires a git repository (or use --repo)\n`);
     return 3;
   }
-  if (isAudit && argv.includes("--uncommitted")) {
-    process.stderr.write("pir: audit reviews committed snapshots only; --uncommitted is a find-only flag\n");
+  if (!isFind && argv.includes("--uncommitted")) {
+    process.stderr.write("pir: --uncommitted is a find-only flag\n");
     return 2;
   }
 
@@ -85,10 +111,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     argv = argv.filter((a) => a !== "--uncommitted");
   }
   let base: string | null = null;
-  if (isAudit) {
-    // No comparison base exists for audits; ship the head-pinned bundle.
-    argv = pinRefsToShas(argv, { base: null, head });
-  } else {
+  if (isFind) {
     const baseFlag = flags.get("--base");
     if (baseFlag) {
       base = (await git(cwd, ["rev-parse", "--verify", `${baseFlag}^{commit}`])).trim();
@@ -101,6 +124,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       }
     }
     argv = pinRefsToShas(argv, { base, head });
+  } else {
+    // No comparison base exists (audits, memory family); ship the
+    // head-pinned bundle.
+    argv = pinRefsToShas(argv, { base: null, head });
   }
 
   const [remoteUrl, rootCommit] = await Promise.all([getRemoteUrl(cwd), getRootCommit(cwd)]);
@@ -129,12 +156,13 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     });
   };
 
-  process.stderr.write(`pir: shipping local state ${!isAudit && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
-  // Audits ship a full-history bundle from the start (there is no thin/base
-  // form to miss); find keeps its thin-first, one-retry-full strategy.
+  process.stderr.write(`pir: shipping local state ${isFind && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
+  // Audit and the memory family ship a full-history bundle from the start
+  // (there is no thin/base form to miss); find keeps its thin-first,
+  // one-retry-full strategy.
   let response: Response;
   try {
-    response = await send(!isAudit && base !== null);
+    response = await send(isFind && base !== null);
   } catch (err) {
     process.stderr.write(reportUnreachable(url.origin, err));
     return 3;
