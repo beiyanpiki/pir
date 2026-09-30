@@ -24,6 +24,7 @@ export default defineConfig({
       "/api": {
         target: process.env.PIR_DEV_API ?? "http://127.0.0.1:8790",
         changeOrigin: false,
+        secure: false,
       },
     },
   },

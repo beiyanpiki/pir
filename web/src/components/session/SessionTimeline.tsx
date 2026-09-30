@@ -173,10 +173,16 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
       <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} />
       <div className="session-flow">
         <UserGoalCard text={session.prompt} />
-        <div className="session-flow-items">
-          {session.items.map((item, index) => (
-            <LiveItemView key={index} item={item} />
-          ))}
+        <div className="assistant-turn">
+          <div className="assistant-label">
+            {session.role}
+            {session.model && <span>{session.model}</span>}
+          </div>
+          <div className="session-flow-items">
+            {session.items.map((item, index) => (
+              <LiveItemView key={index} item={item} />
+            ))}
+          </div>
         </div>
         {session.error && (
           <div className="my-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{session.error}</div>

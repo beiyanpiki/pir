@@ -38,7 +38,7 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): ApiState<
       .catch((cause: unknown) => {
         if (cancelled) return;
         if (cause instanceof ApiError && cause.status === 401) {
-          navigate("/login");
+          navigate("/login", { replace: true, state: { from: window.location.pathname } });
           return;
         }
         setError(cause instanceof Error ? cause.message : String(cause));

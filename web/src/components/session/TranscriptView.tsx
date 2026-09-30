@@ -19,7 +19,7 @@ type RenderItem =
   | { type: "raw"; label: string; value: unknown };
 
 /**
- * One settled session as a ZCode-style activity stream: the prompt as a
+ * One settled session as a dsh-style activity stream: the prompt as a
  * centered goal card, then a flat sequence of rows — thinking, prose, tool
  * calls — with the session's role quiet in the divider above.
  */
@@ -29,10 +29,16 @@ export function TranscriptView({ transcript }: { transcript: SessionTranscript }
   return (
     <div className="session-transcript">
       <UserGoalCard text={transcript.prompt} />
-      <div className="session-flow-items">
-        {items.map((item, index) => (
-          <TranscriptItem key={index} item={item} />
-        ))}
+      <div className="assistant-turn">
+        <div className="assistant-label">
+          {transcript.role}
+          {transcript.model && <span>{transcript.model}</span>}
+        </div>
+        <div className="session-flow-items">
+          {items.map((item, index) => (
+            <TranscriptItem key={index} item={item} />
+          ))}
+        </div>
       </div>
       <SessionFooter
         usage={transcript.usage}
@@ -127,6 +133,9 @@ export function buildItems(messages: SessionMessage[]): RenderItem[] {
       items.push({ type: "user", text: userText(message as UserMessage) });
       continue;
     }
+    // Tool results are paired with their preceding tool call above. Rendering
+    // them again as raw messages adds a noisy duplicate row to the timeline.
+    if (role === "toolResult") continue;
     if (role !== "assistant") {
       items.push({ type: "raw", label: `message (${role ?? "unknown"})`, value: message });
       continue;

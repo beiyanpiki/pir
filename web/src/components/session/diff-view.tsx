@@ -141,6 +141,7 @@ function TokenLine({ tokens }: { tokens?: DiffToken[] }) {
       {(tokens ?? []).map((token, index) => (
         <span
           key={`${token.content}-${index}`}
+          className="dark:!text-[var(--shiki-dark)]"
           style={{
             color: token.color,
             fontStyle: token.fontStyle ? "italic" : undefined,
@@ -252,7 +253,7 @@ export function DiffView({ text }: { text: string }) {
         {files.map((file, fileIndex) => (
           <section className="diff-file" key={`${fileIndex}-${file.path}`}>
             <header>
-              <span className="diff-status">{file.status}</span>
+              <span className={`diff-status is-${file.status.toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`}>{file.status}</span>
               <strong>{file.path}</strong>
               <span className="diff-count is-add">+{file.additions}</span>
               <span className="diff-count is-delete">−{file.deletions}</span>

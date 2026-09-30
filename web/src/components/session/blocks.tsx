@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Braces,
   Brain,
   CheckCircle2,
   ChevronRight,
@@ -27,19 +26,18 @@ import { fmtBytes } from "../../format";
 import { codeLanguage } from "../code-lang";
 import { DiffView } from "./diff-view";
 
-// ZCode-style activity stream rows: every step is one quiet line —
-// "思考 · N chars", "读取 src/web.ts", "查阅 diff" — with the assistant's
+// dsh-style activity stream rows: every step is one quiet line —
+// "Thinking · N chars", "Read src/web.ts", "Inspect diff" — with the assistant's
 // prose flat between them. Rows expand in place for the full details
 // (AI Elements Reasoning/Tool panels live inside the collapsed area).
 
 export function UserGoalCard({ text }: { text: string }) {
-  const firstLine = text.split("\n").find((line) => line.trim().length > 0) ?? "";
-  const summary = firstLine.length > 160 ? `${firstLine.slice(0, 160)}…` : firstLine;
+  const summary = text.replace(/\s+/g, " ").trim();
   return (
     <Collapsible className="goal-block">
       <CollapsibleTrigger className="goal-toggle" aria-label="Toggle full review goal">
         <Target size={15} className="goal-icon" />
-        <span className="goal-label">目标</span>
+        <span className="goal-label">Goal</span>
         <span className="goal-summary" title={text}>{summary}</span>
         <ChevronRight size={13} className="activity-chevron" />
       </CollapsibleTrigger>
@@ -52,11 +50,11 @@ export function UserGoalCard({ text }: { text: string }) {
 
 export function ThinkingRow({ text, redacted, streaming = false }: { text: string; redacted?: boolean; streaming?: boolean }) {
   return (
-    <Collapsible className="activity-thinking" defaultOpen>
+    <Collapsible className="activity-thinking" defaultOpen={false}>
       <CollapsibleTrigger className="activity-row">
         <ChevronRight size={13} className="activity-chevron" />
         <Brain size={14} className="activity-icon" />
-        <span>{redacted ? "思考 · redacted by provider" : "思考"}</span>
+        <span>{redacted ? "Thinking · redacted by provider" : "Thinking"}</span>
         <span className="activity-meta">{text.length.toLocaleString()} chars</span>
         {streaming && <LoaderCircle size={13} className="spin" />}
       </CollapsibleTrigger>
@@ -125,54 +123,54 @@ export function toolRow(name: string, args: unknown): ToolVerb {
     const tag = String(lang).toUpperCase().slice(0, 2);
     return (
       <span className="inline-flex min-w-0 items-center gap-1.5">
-        <span className="rounded-[3px] bg-sky-500/15 px-1 font-mono text-[9.5px] font-bold text-sky-400">{tag}</span>
-        <span className="truncate text-foreground/80">{base}{range}</span>
-        {dir && <span className="truncate text-muted-foreground/50">{dir}</span>}
+        <span className="tool-file-type">{tag}</span>
+        <span className="tool-file-name">{base}{range}</span>
+        {dir && <span className="tool-file-dir">{dir}</span>}
       </span>
     );
   };
   switch (name) {
     case "read_code":
     case "read":
-      return { icon: <FileText size={14} className="shrink-0 opacity-70" />, verb: "读取", object: a.path ? fileObject(a.path) : null };
+      return { icon: <FileText size={14} className="shrink-0 opacity-70" />, verb: "Read", object: a.path ? fileObject(a.path) : null };
     case "search_text":
     case "grep":
       return {
         icon: <Search size={14} className="shrink-0 opacity-70" />,
-        verb: "查询",
+        verb: "Search",
         object: (
           <span className="truncate">
-            <span className="text-foreground/80">"{a.pattern ?? a.query ?? ""}"</span>
-            {a.path && <span className="text-muted-foreground/50"> in {a.path}</span>}
+            <span className="tool-query">"{a.pattern ?? a.query ?? ""}"</span>
+            {a.path && <span className="tool-file-dir"> in {a.path}</span>}
           </span>
         ),
       };
     case "find_symbol":
-      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "检索符号", object: <span className="truncate text-foreground/80">{a.symbol ?? a.name ?? ""}</span> };
+      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "Find symbol", object: <span className="truncate tool-object-value">{a.symbol ?? a.name ?? ""}</span> };
     case "find_callers":
-      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "查找调用方", object: <span className="truncate text-foreground/80">{a.symbol ?? a.name ?? ""}</span> };
+      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "Find callers", object: <span className="truncate tool-object-value">{a.symbol ?? a.name ?? ""}</span> };
     case "find_callees":
-      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "查找被调", object: <span className="truncate text-foreground/80">{a.symbol ?? a.name ?? ""}</span> };
+      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "Find callees", object: <span className="truncate tool-object-value">{a.symbol ?? a.name ?? ""}</span> };
     case "find_references":
-      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "查找引用", object: <span className="truncate text-foreground/80">{a.symbol ?? a.name ?? ""}</span> };
+      return { icon: <GitBranch size={14} className="shrink-0 opacity-70" />, verb: "Find references", object: <span className="truncate tool-object-value">{a.symbol ?? a.name ?? ""}</span> };
     case "get_change":
-      return { icon: <FileDiff size={14} className="shrink-0 opacity-70" />, verb: "查阅", object: <span className="truncate text-foreground/80">{a.base ? `${a.base.slice(0, 7)}..${(a.head ?? "").slice(0, 7)} diff` : "change diff"}</span> };
+      return { icon: <FileDiff size={14} className="shrink-0 opacity-70" />, verb: "Inspect diff", object: <span className="truncate tool-object-value">{a.base ? `${a.base.slice(0, 7)}..${(a.head ?? "").slice(0, 7)} diff` : "change diff"}</span> };
     case "list_snapshot_files":
-      return { icon: <FolderOpen size={14} className="shrink-0 opacity-70" />, verb: "列出文件", object: null };
+      return { icon: <FolderOpen size={14} className="shrink-0 opacity-70" />, verb: "List files", object: null };
     case "get_project_memory":
     case "get_feature_memory":
     case "get_entity_memory":
     case "get_relevant_issue_memory":
-      return { icon: <Database size={14} className="shrink-0 opacity-70" />, verb: "记忆", object: a.name ? <span className="truncate text-foreground/80">{String(a.name)}</span> : null };
+      return { icon: <Database size={14} className="shrink-0 opacity-70" />, verb: "Memory", object: a.name ? <span className="truncate tool-object-value">{String(a.name)}</span> : null };
     case "record_candidate":
-      return { icon: <PenLine size={14} className="shrink-0 opacity-70" />, verb: "记录候选", object: a.title ? <span className="truncate text-foreground/80">{String(a.title).slice(0, 100)}</span> : null };
+      return { icon: <PenLine size={14} className="shrink-0 opacity-70" />, verb: "Record candidate", object: a.title ? <span className="truncate tool-object-value">{String(a.title).slice(0, 100)}</span> : null };
     case "finish_round":
-      return { icon: <CheckCircle2 size={14} className="shrink-0 opacity-70" />, verb: "结束轮次", object: a.summary ? <span className="truncate text-foreground/80">{String(a.summary).slice(0, 100)}</span> : null };
+      return { icon: <CheckCircle2 size={14} className="shrink-0 opacity-70" />, verb: "Finish round", object: a.summary ? <span className="truncate tool-object-value">{String(a.summary).slice(0, 100)}</span> : null };
     case "submit_verdict":
-      return { icon: <Scale size={14} className="shrink-0 opacity-70" />, verb: "裁定", object: a.verdict ? <span className="truncate text-foreground/80">{a.verdict}</span> : null };
+      return { icon: <Scale size={14} className="shrink-0 opacity-70" />, verb: "Submit verdict", object: a.verdict ? <span className="truncate tool-object-value">{a.verdict}</span> : null };
     default: {
       const first = Object.entries(a).find(([, value]) => typeof value === "string" || typeof value === "number");
-      return { icon: <FileText size={14} className="shrink-0 opacity-70" />, verb: name, object: first ? <span className="truncate text-foreground/80">{`${first[1]}`.slice(0, 100)}</span> : null };
+      return { icon: <FileText size={14} className="shrink-0 opacity-70" />, verb: name, object: first ? <span className="truncate tool-object-value">{`${first[1]}`.slice(0, 100)}</span> : null };
     }
   }
 }
@@ -278,7 +276,7 @@ export function ToolRow({
 }) {
   const [open, setOpen] = useState(false);
   const { icon, verb, object } = toolRow(name, args);
-  const hasDetail = Boolean(result) || (args !== null && args !== undefined && Object.keys(args as object).length > 0);
+  const hasDetail = Boolean(result);
   const toolArgs = (args ?? {}) as ToolArgs;
   const summary = result ? resultSummary(name, result.text, result.isError) : running ? "running" : "no result";
 
@@ -287,7 +285,6 @@ export function ToolRow({
       <CollapsibleTrigger
         className={`tool-row ${hasDetail ? "is-expandable" : ""}`}
       >
-        <ChevronRight size={13} className="activity-chevron" />
         <span className="activity-icon">{icon}</span>
         <span className="tool-verb">{verb}</span>
         {object && <span className="tool-object">{object}</span>}
@@ -300,24 +297,12 @@ export function ToolRow({
             </span>
           )}
           {result && !running && <span className="activity-meta">{fmtBytes(result.text.length)}</span>}
+          <ChevronRight size={13} className="activity-chevron" />
         </span>
       </CollapsibleTrigger>
       {hasDetail && (
         <CollapsibleContent>
           <div className="tool-detail">
-            {args !== null && args !== undefined && Object.keys(args as object).length > 0 && (
-              <Collapsible className="tool-params">
-                <CollapsibleTrigger>
-                  <Braces size={12} />
-                  <span>Parameters</span>
-                  <span>{Object.keys(args as object).length} fields</span>
-                  <ChevronRight size={12} className="activity-chevron" />
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <pre>{JSON.stringify(args, null, 2)}</pre>
-                </CollapsibleContent>
-              </Collapsible>
-            )}
             {result && (
               <ResultView
                 name={name}

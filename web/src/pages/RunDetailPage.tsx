@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../format";
@@ -180,8 +181,11 @@ export function RunDetailPage() {
           )}
         </section>
 
+        {inspectorOpen && <button className="inspector-scrim" type="button" aria-label="Close inspector" onClick={() => setInspectorOpen(false)} />}
+
         <aside className={`run-inspector ${inspectorOpen ? "is-open" : ""}`} aria-label="Review inspector">
           <div className="inspector-tabs" role="tablist" aria-label="Inspector views">
+            <span className="inspector-title">Inspect</span>
             <button
               type="button"
               role="tab"
@@ -210,6 +214,9 @@ export function RunDetailPage() {
               onClick={() => setInspectorTab("details")}
             >
               <Info size={14} /> Details
+            </button>
+            <button className="icon-button inspector-close" type="button" aria-label="Close inspector" title="Close inspector" onClick={() => setInspectorOpen(false)}>
+              <X size={16} />
             </button>
           </div>
           <div className="inspector-content">
