@@ -188,3 +188,37 @@ test("runJson recognizes the real 1.6.0 not-initialized wording", async () => {
     );
   });
 });
+
+test("hard failures mentioning codegraph init stay classified as failed", async () => {
+  // e.g. an index-corruption hint suggesting an unquoted `codegraph init
+  // --force` rebuild: a plain re-init will not fix it, so it must not be
+  // sniffed into the clean not_initialized degradation.
+  const { binDir } = makeFakeCodegraph({
+    status: { json: { initialized: true, pendingChanges: 0 } },
+    query: { exit: 1, stderr: "index corrupt: run codegraph init --force to rebuild\n" },
+  });
+  await withPath(binDir, async () => {
+    const adapter = new CodeGraphCliAdapter("/tmp/repo");
+    await assert.rejects(
+      () => adapter.searchSymbols("x"),
+      (err) => err.kind === "failed" && /index corrupt/.test(err.message),
+    );
+  });
+});
+
+test("the 1.6.0 'no .codegraph/ index exists' wording classifies as not_initialized", async () => {
+  const { binDir } = makeFakeCodegraph({
+    status: { json: { initialized: true, pendingChanges: 0 } },
+    query: {
+      exit: 1,
+      stderr: "CodeGraph isn't available here — no .codegraph/ index exists in /tmp/repo. (The project owner can enable CodeGraph with 'codegraph init'.)\n",
+    },
+  });
+  await withPath(binDir, async () => {
+    const adapter = new CodeGraphCliAdapter("/tmp/repo");
+    await assert.rejects(
+      () => adapter.searchSymbols("x"),
+      (err) => err.kind === "not_initialized",
+    );
+  });
+});

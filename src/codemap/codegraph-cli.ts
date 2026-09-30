@@ -59,10 +59,17 @@ function execCodegraph(args: string[], options: { stdin?: string; timeoutMs?: nu
   });
 }
 
+// Known "no index here" wordings from codegraph 1.6.0: `CodeGraph not
+// initialized in …`, `no .codegraph/ index exists in …`, and the quoted
+// `Run "codegraph init" …` advice. Matched by shape, not by bare substring —
+// an unquoted `codegraph init` also shows up in hard-failure hints (e.g.
+// index-corruption suggesting `codegraph init --force`) that a re-init will
+// not fix and must stay classified as `failed`.
+const NOT_INITIALIZED_RE = /not initialized|no \.codegraph[/-] index exists|run ["']codegraph init["']/i;
+
 function classifyExit(args: string[], result: ExecResult): void {
   if (result.code === 0) return;
-  const lower = result.stderr.toLowerCase();
-  if (lower.includes("not initialized") || lower.includes("codegraph init")) {
+  if (NOT_INITIALIZED_RE.test(result.stderr)) {
     throw new CodeMapError("codegraph index not initialized for this project", "not_initialized");
   }
   throw new CodeMapError(`codegraph ${args[0]} exited ${result.code}: ${result.stderr.trim()}`, "failed");
