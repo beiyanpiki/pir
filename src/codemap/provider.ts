@@ -119,7 +119,10 @@ function isListable(relPath: string): boolean {
 export interface CreateCodeMapResult {
   provider: CodeMapProvider;
   degraded: boolean;
+  /** Machine-readable degradation code when degraded. */
   reason?: string;
+  /** Human-readable degradation explanation when degraded. */
+  detail?: string;
 }
 
 /**
@@ -131,33 +134,26 @@ export async function createCodeMap(repoRoot: string): Promise<CreateCodeMapResu
   try {
     const status = await adapter.status();
     if (!status.initialized) {
-      return {
-        provider: new DegradedCodeMap(repoRoot, "codegraph index not initialized; run `codegraph init` to enable structural queries"),
-        degraded: true,
-        reason: "not_initialized",
-      };
+      return degraded(repoRoot, "not_initialized");
     }
     return { provider: adapter, degraded: false };
   } catch (err) {
     if (err instanceof CodeMapError && (err.kind === "not_installed" || err.kind === "timeout")) {
-      return {
-        provider: new DegradedCodeMap(repoRoot, "codegraph CLI not available"),
-        degraded: true,
-        reason: err.kind,
-      };
+      return degraded(repoRoot, err.kind, "codegraph CLI not available");
     }
     if (err instanceof CodeMapError && err.kind === "not_initialized") {
-      return {
-        provider: new DegradedCodeMap(repoRoot, "codegraph index not initialized; run `codegraph init` to enable structural queries"),
-        degraded: true,
-        reason: "not_initialized",
-      };
+      return degraded(repoRoot, "not_initialized");
     }
     // Unexpected failure probing the CLI: degrade rather than block review.
-    return {
-      provider: new DegradedCodeMap(repoRoot, `codegraph probe failed: ${err instanceof Error ? err.message : String(err)}`),
-      degraded: true,
-      reason: "probe_failed",
-    };
+    return degraded(
+      repoRoot,
+      "probe_failed",
+      `codegraph probe failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
+}
+
+function degraded(repoRoot: string, reason: string, detail?: string): CreateCodeMapResult {
+  const message = detail ?? "codegraph index not initialized; run `codegraph init` to enable structural queries";
+  return { provider: new DegradedCodeMap(repoRoot, message), degraded: true, reason, detail: message };
 }

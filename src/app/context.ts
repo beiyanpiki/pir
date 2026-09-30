@@ -28,6 +28,11 @@ export async function createAppContext(repoRoot: string, options: AppContextOpti
   }
   const memory = await Memory.open(repoRoot, options.dbPath ? { dbPath: options.dbPath } : {});
   const codeMapResult = await createCodeMap(repoRoot);
+  if (codeMapResult.degraded) {
+    // Structural context silently missing is the worst failure mode for a
+    // reviewer; make the degradation observable once per review run.
+    process.stderr.write(`pir: codegraph degraded (${codeMapResult.reason}): ${codeMapResult.detail}\n`);
+  }
   if (!codeMapResult.degraded && !options.noSyncIndex) {
     try {
       await codeMapResult.provider.ensureSynced();
