@@ -128,6 +128,17 @@ test("web ui: bearer token gates the api, static shell stays public", async (t) 
   // Path traversal out of the web root is refused.
   const traversal = await fetch(`${base}/..%2f..%2fpackage.json`);
   assert.notEqual(traversal.status, 200);
+
+  // Malformed percent-escapes must answer 400, never escape the request
+  // listener (an unhandled throw there kills the whole serve process, and
+  // the static branch runs BEFORE any token check — F-17 regression).
+  for (const malformed of ["/%", "/%zz", "/assets/%E0%A4%A"]) {
+    const response = await fetch(`${base}${malformed}`);
+    assert.equal(response.status, 400, `${malformed} answers 400`);
+    assert.equal((await response.json()).error, "malformed request path");
+  }
+  const afterMalformed = await fetch(`${base}/api/overview`, { headers: { authorization: `Bearer ${WEB_TOKEN}` } });
+  assert.equal(afterMalformed.status, 200, "server stays alive after malformed paths");
 });
 
 test("web ui: runs, run detail and transcripts are served read-only", async (t) => {

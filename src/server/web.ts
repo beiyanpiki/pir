@@ -78,7 +78,16 @@ function serveStatic(webRoot: string, pathname: string, res: http.ServerResponse
     res.end(NO_ASSETS_PAGE);
     return;
   }
-  const relative = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+  let relative: string;
+  try {
+    // Malformed escapes (a lone "%", "%zz") survive URL parsing untouched and
+    // make decodeURIComponent throw — that must answer 400, not escape the
+    // request listener (an unhandled throw there kills the whole server).
+    relative = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+  } catch {
+    json(res, 400, { error: "malformed request path" });
+    return;
+  }
   const resolved = path.resolve(webRoot, relative);
   if (!resolved.startsWith(`${webRoot}${path.sep}`) && resolved !== webRoot) {
     json(res, 404, { error: "not found" });

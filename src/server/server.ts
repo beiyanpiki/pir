@@ -158,9 +158,22 @@ export async function startServer(input: {
       return;
     }
     // /v1/* and /health stay JSON-only; everything else GET falls through to
-    // the web UI when it is mounted.
+    // the web UI when it is mounted. The guard is load-bearing: an exception
+    // thrown synchronously by a request handler would take down the whole
+    // serve process (executor included), so the web tier answers 500 instead.
     if (webHandler && !url.pathname.startsWith("/v1/") && url.pathname !== "/health") {
-      if (webHandler.handle(req, res, url, req.method ?? "GET")) return;
+      try {
+        if (webHandler.handle(req, res, url, req.method ?? "GET")) return;
+      } catch (err) {
+        log(`web error: ${err instanceof Error ? err.message : String(err)}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "internal error" }));
+        } else {
+          res.end();
+        }
+        return;
+      }
     }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(
