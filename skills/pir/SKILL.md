@@ -67,9 +67,11 @@ pir config wizard                     # re-run the setup wizard
 ```
 
 - **local** (default): runs in the current repo, uses this machine's pi credentials.
-- **remote**: every command forwards to a `pir serve` instance; `find` ships the
-  local state as a git bundle, so **unpushed commits and uncommitted changes
-  review fine without pushing or sharing credentials**.
+- **remote**: every command forwards to a `pir serve` instance; repo commands
+  (`find`, `audit`, `memory`, `findings`, `feedback`, `remember`,
+  `verify-fix`) ship the local state as a git bundle, so **unpushed commits
+  and uncommitted changes review fine without pushing or sharing
+  credentials** — and memory commands reach the project's server-side db.
 
 One-off overrides: `--server <url> [--token T] [--insecure]` forces remote,
 `--local` forces local. `serve`/`config`/`skill`/`plugins`/`version` always run

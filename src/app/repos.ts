@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { commitExists, git, gitBuffer } from "../changes/git.js";
-import { normalizeRemoteUrl } from "../changes/git.js";
+import { getRemoteUrl, normalizeRemoteUrl } from "../changes/git.js";
 import { sha256 } from "../core/types.js";
 import { stateRootDbPath } from "../memory/index.js";
 
@@ -389,6 +389,20 @@ export async function materializeFromBundle(
       } catch {
         throw err; // the bundle itself is unusable — surface the original failure
       }
+    }
+    // A bundle carries no remotes and this repo was built by init+fetch, so
+    // without an origin the worktree-derived identity (computeProjectIdentity
+    // reads the origin URL) falls back to the "local" project id while the
+    // project dir, its memory db and the whole sync protocol are keyed by the
+    // remote-derived id — remote memory writes would land under the wrong row
+    // scoping and never sync back. Anchor origin to the client's remote so
+    // both ids always agree. A dir that already has an origin (a repos-add
+    // clone, a prior materialization) necessarily spelled the same normalized
+    // remote — the dir name is the hash of it — so only the missing case
+    // needs writing. meta.remoteUrl null (client without an origin) stays
+    // remote-less: both sides then derive the same "local" id.
+    if (meta.remoteUrl !== null && (await getRemoteUrl(dir)) === null) {
+      await git(dir, ["remote", "add", "origin", meta.remoteUrl]);
     }
     // Older clients forwarded raw refs ("HEAD", "origin/x", a branch name)
     // as the head; nothing by that name exists in this repo (or it resolves

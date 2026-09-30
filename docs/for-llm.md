@@ -22,9 +22,13 @@ Two deployment shapes share one image:
 | `docker exec` | mount the project, run `pir <cmd>` | local, state in `<project>/.pir/` |
 | `serve` | HTTPS service (`POST /v1/exec`, `POST /v1/review`) | shared engine; reviews arrive as git bundles — **no push required, no repo credentials needed** |
 
-`/v1/review` executes review commands only (`find`, `memory`, `findings`,
-`feedback`, `remember`, `verify-fix`) against the bundle the client shipped;
-registry management (`repos …`) and everything else go through `/v1/exec`.
+`/v1/review` executes repo-context commands only (`find`, `audit`, `memory`,
+`findings`, `feedback`, `remember`, `verify-fix`) against the bundle the
+client shipped; registry management (`repos …`) and everything else go
+through `/v1/exec`. Remote `pir` clients route all of those commands to the
+bundle path automatically (except `memory sync`, which always runs locally) —
+a stock serve workspace has no git repository, so `/v1/exec` can never give
+them a repo context; requests that try anyway fail with `code:2` guidance.
 Named refs in a review's `--base`/`--head` are resolved to SHAs by the client
 (older clients are handled server-side); the shipped JSON body is unchanged.
 A `head` that is a well-formed commit id but missing from the shipped bundle
