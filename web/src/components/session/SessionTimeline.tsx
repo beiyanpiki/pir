@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Chip } from "@heroui/react";
+import { Message } from "@/components/ai-elements/message";
 import { apiGet, transcriptUrl } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
 import type { RunEvent, SessionRef, SessionTranscript, SessionUsage } from "../../types";
@@ -15,7 +15,7 @@ import { TranscriptView } from "./TranscriptView";
 type LiveItem =
   | { type: "thinking"; text: string; streaming: boolean }
   | { type: "text"; text: string; streaming: boolean }
-  | { type: "tool"; call: { id: string; name: string; arguments: unknown }; result?: { text: string; isError: boolean; truncated: boolean }; running: boolean };
+  | { type: "tool"; name: string; args: unknown; callId: string; result?: { text: string; isError: boolean; truncated: boolean }; running: boolean };
 
 interface DerivedSession {
   sessionId: string;
@@ -77,7 +77,7 @@ export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
       const block = event.block;
       if (block.type === "toolCall") {
         flush(event.sessionId);
-        session.items.push({ type: "tool", call: { id: block.id, name: block.name, arguments: block.arguments }, running: true });
+        session.items.push({ type: "tool", name: block.name, args: block.arguments, callId: block.id, running: true });
       } else {
         const buffer = buffers.get(event.sessionId);
         const kind = block.type === "thinking" ? "thinking" : "text";
@@ -92,14 +92,13 @@ export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
     } else if (event.kind === "session-tool-result") {
       const session = sessions.get(event.sessionId);
       if (!session) continue;
-      const open = [...session.items].reverse().find((item) => item.type === "tool" && item.call.id === event.toolCallId);
+      const open = [...session.items].reverse().find((item) => item.type === "tool" && item.callId === event.toolCallId);
       if (open && open.type === "tool") {
         open.result = { text: event.result, isError: event.isError, truncated: event.truncated };
         open.running = false;
       } else {
         session.items.push({
-          type: "tool",
-          call: { id: event.toolCallId, name: event.name, arguments: {} },
+          type: "tool", name: event.name, args: {}, callId: event.toolCallId,
           result: { text: event.result, isError: event.isError, truncated: event.truncated },
           running: false,
         });
@@ -122,42 +121,39 @@ export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session sections: a centered divider per session, chat flow underneath.
+// Session sections: centered divider, chat flow underneath.
 // ---------------------------------------------------------------------------
 
 function sessionTitle(kind: string, meta: { round?: number; unitId?: string; attempt?: number; displayId?: string }): string {
   if (kind === "reviewer") {
-    if (meta.unitId !== undefined) return `Unit ${meta.unitId}${meta.attempt !== undefined ? ` · attempt ${meta.attempt}` : ""}`;
-    return meta.round !== undefined ? `Review round ${meta.round}` : "Reviewer session";
+    if (meta.unitId !== undefined) return `unit ${meta.unitId}${meta.attempt !== undefined ? ` · attempt ${meta.attempt}` : ""}`;
+    return meta.round !== undefined ? `review round ${meta.round}` : "reviewer session";
   }
-  return meta.displayId !== undefined ? `Verify ${meta.displayId}` : "Verifier session";
+  return meta.displayId !== undefined ? `verify ${meta.displayId}` : "verifier session";
 }
 
 function SessionDivider({
   kind,
   title,
-  open,
   meta,
   state,
   onToggle,
 }: {
   kind: string;
   title: string;
-  open: boolean;
   meta?: string;
   state?: "running" | "error" | "done";
   onToggle: () => void;
 }) {
   return (
-    <div className="session-divider" onClick={onToggle}>
-      <span className="divider-line" />
+    <div className="pir-session-sep" onClick={onToggle}>
+      <span className="line" />
       <SessionKindBadge kind={kind} />
-      <span className="divider-title">{title}</span>
-      {meta && <span className="divider-meta">{meta}</span>}
+      <span className="title">{title}</span>
+      {meta && <span className="meta">{meta}</span>}
       {state === "running" && <LiveBadge />}
-      {state === "error" && <Chip size="sm" variant="soft" color="danger">error</Chip>}
-      <span className={`chevron${open ? " open" : ""}`} style={{ fontSize: 9, color: "var(--pir-faint)" }}>▶</span>
-      <span className="divider-line" />
+      {state === "error" && <span className="text-[11px] font-mono text-red-400">error</span>}
+      <span className="line" />
     </div>
   );
 }
@@ -172,19 +168,21 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
   ].filter(Boolean).join(" · ");
   return (
     <section>
-      <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} open meta={meta} state={state} onToggle={() => {}} />
-      <div className="chat-flow">
-        <UserBubble text={session.prompt} />
-        <div className="assistant-turn">
-          <div className="assistant-label">
+      <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} onToggle={() => {}} />
+      <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-3">
+        <Message from="user" className="items-end">
+          <UserBubble text={session.prompt} />
+        </Message>
+        <div className="flex flex-col gap-4">
+          <div className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground font-mono">
             {session.role}
-            {session.model && <span style={{ marginLeft: 8, opacity: 0.7 }}>{session.model}</span>}
+            {session.model && <span className="ml-2 normal-case tracking-normal opacity-70">{session.model}</span>}
           </div>
           {session.items.map((item, index) => (
             <LiveItemView key={index} item={item} />
           ))}
         </div>
-        {session.error && <div className="error-banner">{session.error}</div>}
+        {session.error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{session.error}</div>}
       </div>
     </section>
   );
@@ -193,7 +191,7 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
 function LiveItemView({ item }: { item: LiveItem }) {
   if (item.type === "thinking") return <ThinkingBlock text={item.text} streaming={item.streaming} />;
   if (item.type === "text") return <TextBlockView text={item.text} streaming={item.streaming} />;
-  return <ToolCallView call={item.call} result={item.result} running={item.running} />;
+  return <ToolCallView name={item.name} args={item.args} result={item.result} running={item.running} />;
 }
 
 /**
@@ -247,11 +245,8 @@ function TranscriptSessionSection({
     };
   }, [projectId, runId, session.file, open, visible, transcript]);
 
-  const meta = transcript
-    ? [
-        transcript.usage ? `${fmtCount(transcript.usage.totalTokens)} tok · ${fmtCost(transcript.usage.cost)}` : "",
-        transcript.usage ? fmtDuration(transcript.usage.durationMs) : "",
-      ].filter(Boolean).join(" · ")
+  const meta = transcript?.usage
+    ? `${fmtCount(transcript.usage.totalTokens)} tok · ${fmtCost(transcript.usage.cost)}`
     : session.file;
 
   return (
@@ -259,20 +254,17 @@ function TranscriptSessionSection({
       <SessionDivider
         kind={session.sessionKind}
         title={sessionTitle(session.sessionKind, session)}
-        open={open}
         meta={meta}
         state={transcript === null ? "error" : "done"}
         onToggle={() => setOpen(!open)}
       />
       {open && (
-        <div className="chat-flow">
+        <div className="mx-auto max-w-3xl pb-3">
           {transcript === undefined && (
-            <div className="loading-row"><span className="pir-mini-spinner" /> loading session…</div>
+            <div className="py-6 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading session…</div>
           )}
           {transcript === null && (
-            <div className="empty-state" style={{ padding: 16 }}>
-              Transcript file missing for <code>{session.file}</code>.
-            </div>
+            <div className="pir-empty">Transcript file missing for <code>{session.file}</code>.</div>
           )}
           {transcript !== null && transcript !== undefined && <TranscriptView transcript={transcript} />}
         </div>
@@ -297,7 +289,7 @@ export function SessionTimeline({
 
   if (useLive) {
     return (
-      <div className="timeline-chat">
+      <div className="flex flex-col">
         {liveSessions.map((session) => (
           <LiveSessionSection key={session.sessionId} session={session} />
         ))}
@@ -307,7 +299,7 @@ export function SessionTimeline({
 
   if (sessions.length === 0) {
     return (
-      <div className="empty-state">
+      <div className="pir-empty">
         No session transcripts for this run — it predates <code>PIR_TRANSCRIPTS=1</code>, or the
         session dump failed. Findings below are reconstructed from the repository memory.
       </div>
@@ -315,12 +307,10 @@ export function SessionTimeline({
   }
 
   return (
-    <div className="timeline-chat">
+    <div className="flex flex-col">
       {sessions.map((session) => (
         <TranscriptSessionSection key={session.file} projectId={projectId} runId={runId} session={session} />
       ))}
     </div>
   );
 }
-
-export type { DerivedSession };

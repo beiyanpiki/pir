@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Message, MessageContent } from "@/components/ai-elements/message";
 import { fmtClock, fmtCost, fmtCount } from "../../format";
 import type {
   AssistantMessage,
@@ -23,25 +24,43 @@ type Turn =
   | { kind: "assistant"; items: RenderItem[] };
 
 /**
- * Renders one settled session transcript as a chat conversation: the prompt
- * as a right-aligned user bubble, then assistant turns (thinking, markdown
- * answers, inline tool cards) in flow order.
+ * Renders one settled session transcript as a conversation: the prompt as a
+ * right user bubble, then assistant turns — Reasoning for thinking,
+ * MessageResponse for markdown, Tool for every call with its result.
  */
 export function TranscriptView({ transcript }: { transcript: SessionTranscript }) {
   const turns = useMemo(() => groupTurns(buildItems(transcript.messages)), [transcript]);
 
   return (
-    <div className="chat-flow">
-      <UserBubble text={transcript.prompt} />
+    <div className="flex flex-col gap-5">
+      <Message from="user" className="items-end">
+        <MessageContent className="w-auto max-w-[88%] min-w-0 p-0">
+          <UserBubble text={transcript.prompt} />
+        </MessageContent>
+      </Message>
       {turns.map((turn, index) =>
         turn.kind === "user" ? (
-          <UserBubble key={index} text={turn.text} />
+          <Message key={index} from="user" className="items-end">
+            <MessageContent className="w-auto max-w-[88%] min-w-0 p-0">
+              <UserBubble text={turn.text} />
+            </MessageContent>
+          </Message>
         ) : (
-          <AssistantTurn key={index} role={transcript.role} model={transcript.model}>
-            {turn.items.map((item, itemIndex) => (
-              <TranscriptItem key={itemIndex} item={item} />
-            ))}
-          </AssistantTurn>
+          <Message key={index} from="assistant">
+            <MessageContent className="w-full p-0">
+              <div className="mb-2 text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground font-mono">
+                {transcript.role}
+                {transcript.model && transcript.model !== "(pi default)" && (
+                  <span className="ml-2 normal-case tracking-normal opacity-70">{transcript.model}</span>
+                )}
+              </div>
+              <div className="flex flex-col gap-3">
+                {turn.items.map((item, itemIndex) => (
+                  <TranscriptItem key={itemIndex} item={item} />
+                ))}
+              </div>
+            </MessageContent>
+          </Message>
         ),
       )}
       <SessionFooter
@@ -50,27 +69,6 @@ export function TranscriptView({ transcript }: { transcript: SessionTranscript }
         endedAt={transcript.endedAt}
         error={transcript.error}
       />
-    </div>
-  );
-}
-
-/** One assistant turn: dsh style — small label row, then full-width content. */
-function AssistantTurn({
-  role,
-  model,
-  children,
-}: {
-  role: string;
-  model: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="assistant-turn">
-      <div className="assistant-label">
-        {role}
-        {model && model !== "(pi default)" && <span style={{ marginLeft: 8, opacity: 0.7 }}>{model}</span>}
-      </div>
-      {children}
     </div>
   );
 }
@@ -89,9 +87,9 @@ function SessionFooter({
   if (!usage && !error) return null;
   return (
     <>
-      {error && <div className="error-banner">session error: {error}</div>}
+      {error && <div className="error-banner">{error}</div>}
       {usage && (
-        <div className="session-footer">
+        <div className="flex flex-wrap gap-4 border-t border-border pt-2 text-[11px] font-mono text-muted-foreground">
           <span>{fmtCount(usage.totalTokens)} tokens</span>
           <span>{fmtCost(usage.cost)}</span>
           <span>{usage.toolCalls ?? 0} tool calls</span>
@@ -113,7 +111,8 @@ function TranscriptItem({ item }: { item: RenderItem }) {
     case "tool":
       return (
         <ToolCallView
-          call={item.call}
+          name={item.call.name}
+          args={item.call.arguments}
           result={item.result ? { text: item.result.text, isError: item.result.isError, truncated: false } : undefined}
         />
       );

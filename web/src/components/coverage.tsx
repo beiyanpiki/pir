@@ -1,4 +1,4 @@
-import { Chip } from "@heroui/react";
+import { Chip } from "./badges";
 import type { RunManifest } from "../types";
 
 const COVERAGE_KEYS: Array<[string, string]> = [
@@ -21,18 +21,18 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
   const units = manifest.units ?? [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="panel">
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "baseline" }}>
-          <strong>Snapshot coverage</strong>
-          <span className="mono" style={{ color: "var(--pir-dim)", fontSize: 12 }}>
+    <div className="flex flex-col gap-4">
+      <div className="pir-panel px-4 py-3.5">
+        <div className="mb-2 flex items-baseline justify-between">
+          <strong className="text-sm">Snapshot coverage</strong>
+          <span className="font-mono text-xs text-muted-foreground">
             {reviewed + partial} / {inScope} files touched ({pct}%)
           </span>
         </div>
-        <div className="progressbar">
-          <div style={{ width: `${pct}%` }} />
+        <div className="h-2 overflow-hidden rounded-full border border-border bg-muted/50">
+          <div className="h-full bg-emerald-500/80" style={{ width: `${pct}%` }} />
         </div>
-        <div className="stat-row" style={{ marginTop: 10 }}>
+        <div className="pir-stat-row mt-3">
           {COVERAGE_KEYS.filter(([key]) => coverage[key] !== undefined).map(([key, label]) => (
             <span key={key} className="stat">{label} <b>{String(coverage[key])}</b></span>
           ))}
@@ -40,8 +40,8 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
       </div>
 
       {units.length > 0 && (
-        <div className="panel" style={{ padding: 0, overflowX: "auto" }}>
-          <table className="grid">
+        <div className="pir-panel overflow-x-auto">
+          <table className="pir-table">
             <thead>
               <tr>
                 <th>Unit</th>
@@ -55,16 +55,16 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
             <tbody>
               {units.map((unit) => (
                 <tr key={unit.id}>
-                  <td className="mono">{unit.id}</td>
+                  <td className="font-mono">{unit.id}</td>
                   <td className="dim">{unit.module || "—"}</td>
                   <td>
-                    <Chip size="sm" variant="soft" color={unit.state === "reviewed" ? "success" : unit.state === "blocked" || unit.state === "failed" ? "danger" : "warning"}>
+                    <Chip tone={unit.state === "reviewed" ? "success" : unit.state === "blocked" || unit.state === "failed" ? "destructive" : "warning"}>
                       {unit.state}
                     </Chip>
                   </td>
                   <td className="num dim">{unit.files}</td>
                   <td className="num dim">{unit.attempts}</td>
-                  <td className="dim" style={{ fontSize: 12 }}>{unit.reason ?? "—"}</td>
+                  <td className="dim max-w-[380px] text-xs">{unit.reason ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

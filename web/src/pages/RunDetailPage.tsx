@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Tabs, Tab, TabList, TabPanel } from "@heroui/react";
 import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, fmtTime, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
@@ -10,9 +9,11 @@ import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import type { RunDetail, RunEvent } from "../types";
 
+type Tab = "timeline" | "findings" | "coverage" | "details";
+
 export function RunDetailPage() {
   const { projectId = "", runId = "" } = useParams();
-  const [tab, setTab] = useState<string>("timeline");
+  const [tab, setTab] = useState<Tab>("timeline");
   const detail = useApi<RunDetail>(() => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`), [projectId, runId]);
 
   const run = detail.data?.run;
@@ -44,9 +45,9 @@ export function RunDetailPage() {
   const now = useTicker(ongoing ? 1000 : 0);
   const displayStatus = deriveStatus(run, live, sseStatus);
 
-  if (detail.loading && !detail.data) return <div className="loading-row"><span className="pir-mini-spinner" /> loading run…</div>;
-  if (detail.error) return <div className="error-banner">{detail.error}</div>;
-  if (!run) return <div className="empty-state">Run not found.</div>;
+  if (detail.loading && !detail.data) return <div className="py-10 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading run…</div>;
+  if (detail.error) return <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{detail.error}</div>;
+  if (!run) return <div className="pir-empty">Run not found.</div>;
 
   const manifest = detail.data?.manifest ?? null;
   const counts = live?.end?.counts ?? null;
@@ -56,70 +57,94 @@ export function RunDetailPage() {
   const rounds = counts?.rounds ?? run.rounds;
   const duration = live && live.end === null ? now - live.startedAt : (run.durationMs ?? (run.finishedAt !== null ? run.finishedAt - run.startedAt : null));
   const isAudit = run.mode === "audit";
-  const sessionsCount = detail.data?.sessions.length ?? (liveEvents ? new Set(liveEvents.filter((event) => event.kind === "session-start").map((event) => (event as { sessionId: string }).sessionId)).size : 0);
+  const sessionsCount =
+    detail.data?.sessions.length ??
+    (liveEvents ? new Set(liveEvents.filter((event) => event.kind === "session-start").map((event) => (event as { sessionId: string }).sessionId)).size : 0);
+
+  const tabs: Array<{ id: Tab; label: string; hint?: string }> = [
+    { id: "timeline", label: "Timeline", hint: `${sessionsCount} sessions` },
+    { id: "findings", label: "Findings", hint: `${detail.data?.findings.length ?? 0}` },
+    ...(isAudit ? [{ id: "coverage" as Tab, label: "Coverage" }] : []),
+    { id: "details", label: "Details" },
+  ];
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>
+    <div className="mx-auto max-w-5xl">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold">
           {run.base ? `${shortSha(run.base, 7)}…${shortSha(run.head, 7)}` : `snapshot ${shortSha(run.head, 7)}`}
         </h1>
         <ModeBadge mode={run.mode} />
         <StatusBadge status={displayStatus} />
         {sseStatus === "open" && <LiveBadge />}
-        <span style={{ flex: 1 }} />
-        <Link to={`/projects/${projectId}`} className="sub">← all runs</Link>
+        <span className="flex-1" />
+        <Link to={`/projects/${projectId}`} className="text-[13px] text-muted-foreground transition-colors hover:text-foreground">
+          ← all runs
+        </Link>
       </div>
 
-      <div style={{
-        background: "var(--pir-panel)", border: "1px solid var(--pir-border)",
-        borderRadius: 12, padding: "14px 16px", marginBottom: 18,
-      }}>
-        <div className="stat-row">
-          <span className="stat">started <b>{fmtTime(run.startedAt)}</b> ({relTime(run.startedAt)})</span>
-          {run.finishedAt !== null && <span className="stat">finished <b>{fmtTime(run.finishedAt)}</b></span>}
-          <span className="stat">duration <b>{fmtDuration(duration)}</b></span>
-          <span className="stat">rounds <b>{rounds}</b></span>
-          <span className="stat">
-            <b style={{ color: "#3fb26f" }}>{confirmed}</b> confirmed ·{" "}
-            <b style={{ color: "#e5534b" }}>{rejected}</b> rejected ·{" "}
-            <b style={{ color: "#d29922" }}>{uncertain}</b> uncertain
-          </span>
+      <div className="pir-metrics mb-5">
+        <div className="pir-metric">
+          <div className="k">Started</div>
+          <div className="v">{fmtTime(run.startedAt)}<small>{relTime(run.startedAt)}</small></div>
         </div>
-        <div className="stat-row" style={{ marginBottom: 0 }}>
-          <span className="stat">model <b>{run.model ?? manifest?.model ?? "pi default"}</b></span>
-          {run.totalTokens !== null && <span className="stat">tokens <b>{fmtCount(run.totalTokens)}</b></span>}
-          {run.cost !== null && <span className="stat">cost <b>{fmtCost(run.cost)}</b></span>}
-          {manifest?.plugins.map((plugin) => (
-            <span key={plugin.name} className="stat">plugin <b>{plugin.name}{plugin.version ? `@${plugin.version}` : ""}</b></span>
-          ))}
+        <div className="pir-metric">
+          <div className="k">Duration</div>
+          <div className="v">{fmtDuration(duration)}</div>
         </div>
-        {(manifest?.stoppedBecause ?? run.notes) && (
-          <div style={{ color: "var(--pir-dim)", fontSize: 12.5, marginTop: 8, borderTop: "1px solid var(--pir-border)", paddingTop: 8 }}>
-            {manifest ? `${manifest.stoppedBecause}` : run.notes}
-            {manifest?.incomplete && <span style={{ color: "#d29922" }}> · incomplete</span>}
+        <div className="pir-metric">
+          <div className="k">Rounds</div>
+          <div className="v">{rounds}</div>
+        </div>
+        <div className="pir-metric">
+          <div className="k">Findings</div>
+          <div className="v">
+            <span className="text-emerald-400">{confirmed}</span>
+            <small>/</small>
+            <span className="text-red-400">{rejected}</span>
+            <small>/</small>
+            <span className="text-amber-400">{uncertain}</span>
           </div>
-        )}
-        {!run.transcriptsAvailable && (
-          <div style={{ color: "var(--pir-faint)", fontSize: 12, marginTop: 6 }}>
-            Transcripts were not captured for this run (it predates PIR_TRANSCRIPTS=1) — the timeline is unavailable.
-          </div>
-        )}
+        </div>
+        <div className="pir-metric">
+          <div className="k">Tokens</div>
+          <div className="v">{run.totalTokens === null ? "—" : fmtCount(run.totalTokens)}<small>{fmtCost(run.cost)}</small></div>
+        </div>
+        <div className="pir-metric">
+          <div className="k">Model</div>
+          <div className="v" style={{ fontSize: 12.5 }}>{run.model ?? manifest?.model ?? "pi default"}</div>
+        </div>
       </div>
 
-      <Tabs
-        selectedKey={tab}
-        onSelectionChange={(key) => setTab(String(key))}
-        aria-label="run views"
-        style={{ marginBottom: 18 }}
-      >
-        <TabList>
-          <Tab id="timeline">Timeline <span style={{ opacity: 0.5, fontSize: 11 }}>{sessionsCount} sessions</span></Tab>
-          <Tab id="findings">Findings <span style={{ opacity: 0.5, fontSize: 11 }}>{detail.data?.findings.length ?? 0}</span></Tab>
-          {isAudit && <Tab id="coverage">Coverage</Tab>}
-          <Tab id="details">Details</Tab>
-        </TabList>
-        <TabPanel id="timeline">
+      {(manifest?.stoppedBecause ?? run.notes) && (
+        <div className="mb-4 text-[12.5px] text-muted-foreground">
+          {manifest ? manifest.stoppedBecause : run.notes}
+          {manifest?.incomplete && <span className="ml-1.5 text-amber-400">· incomplete</span>}
+        </div>
+      )}
+      {!run.transcriptsAvailable && (
+        <div className="mb-4 text-xs text-muted-foreground/80">
+          Transcripts were not captured for this run (it predates PIR_TRANSCRIPTS=1) — the timeline is unavailable.
+        </div>
+      )}
+
+      <div className="mb-5 inline-flex gap-1 rounded-xl border border-border bg-muted/40 p-1">
+        {tabs.map((entry) => (
+          <button
+            key={entry.id}
+            className={`rounded-lg px-3.5 py-1.5 text-[13px] transition-colors ${
+              tab === entry.id ? "bg-card font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+            }`}
+            onClick={() => setTab(entry.id)}
+          >
+            {entry.label}
+            {entry.hint && <span className="ml-1.5 font-mono text-[10.5px] opacity-50">{entry.hint}</span>}
+          </button>
+        ))}
+      </div>
+
+      {tab === "timeline" && (
+        <>
           {liveEvents && <ActivityLog events={liveEvents} />}
           <SessionTimeline
             projectId={projectId}
@@ -127,19 +152,11 @@ export function RunDetailPage() {
             sessions={detail.data?.sessions ?? []}
             liveEvents={liveEvents}
           />
-        </TabPanel>
-        <TabPanel id="findings">
-          <FindingsTab findings={detail.data?.findings ?? []} />
-        </TabPanel>
-        {isAudit && (
-          <TabPanel id="coverage">
-            {manifest ? <CoverageTab manifest={manifest} /> : <div className="empty-state">No manifest for this run.</div>}
-          </TabPanel>
-        )}
-        <TabPanel id="details">
-          <DetailsTab detail={detail.data} />
-        </TabPanel>
-      </Tabs>
+        </>
+      )}
+      {tab === "findings" && <FindingsTab findings={detail.data?.findings ?? []} />}
+      {tab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
+      {tab === "details" && <DetailsTab detail={detail.data} />}
     </div>
   );
 }
@@ -173,23 +190,20 @@ function ActivityLog({ events }: { events: RunEvent[] }) {
   const visible = open ? progress : progress.slice(-5);
 
   return (
-    <div style={{
-      background: "var(--pir-panel)", border: "1px solid var(--pir-border)",
-      borderRadius: 12, padding: "8px 14px", fontSize: 12.5, marginBottom: 14,
-    }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>
-        <span style={{ color: "var(--pir-faint)", textTransform: "uppercase", fontSize: 11, letterSpacing: ".06em" }}>activity</span>
-        {progress.length > 5 && <button className="link-btn">{open ? "collapse" : `${progress.length} events`}</button>}
+    <div className="pir-panel mb-4 px-4 py-2.5 text-[12.5px]">
+      <div className="flex cursor-pointer select-none items-center justify-between" onClick={() => setOpen(!open)}>
+        <span className="text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">activity</span>
+        {progress.length > 5 && <button className="text-[11px] font-mono text-indigo-400 hover:underline">{open ? "collapse" : `${progress.length} events`}</button>}
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
+      <div className="mt-1.5 flex flex-col gap-0.5">
         {visible.map((event, index) => (
-          <div key={`${event.seq}-${index}`} style={{ display: "flex", gap: 10 }}>
-            <span style={{ color: "var(--pir-faint)", flexShrink: 0, fontFamily: "var(--pir-mono)", fontSize: 11 }}>
+          <div key={`${event.seq}-${index}`} className="flex gap-2.5">
+            <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground/70">
               {new Date(event.ts).toLocaleTimeString()}
             </span>
             {event.kind === "progress" && (
-              <span style={{ color: "var(--pir-dim)" }}>
-                <span style={{ color: "#39c5cf", fontFamily: "var(--pir-mono)", fontSize: 11 }}>{event.phase}</span>{" "}
+              <span className="text-muted-foreground">
+                <span className="font-mono text-[11px] text-sky-400">{event.phase}</span>{" "}
                 {event.round !== undefined ? `r${event.round} · ` : ""}{event.message}
               </span>
             )}
@@ -204,10 +218,10 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
   if (!detail) return null;
   const { run, manifest } = detail;
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, padding: "14px 16px" }}>
-        <strong style={{ display: "block", marginBottom: 8 }}>Run</strong>
-        <dl className="kv">
+    <div className="flex flex-col gap-4">
+      <div className="pir-panel px-4 py-3.5">
+        <strong className="mb-2 block text-sm">Run</strong>
+        <dl className="pir-kv">
           <dt>run id</dt><dd>{run.runId}</dd>
           <dt>mode</dt><dd>{run.mode}</dd>
           <dt>base</dt><dd>{run.base ?? "— (snapshot audit)"}</dd>
@@ -232,8 +246,8 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
       </div>
 
       {manifest && manifest.rounds.length > 0 && (
-        <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, overflowX: "auto" }}>
-          <table className="grid">
+        <div className="pir-panel overflow-x-auto">
+          <table className="pir-table">
             <thead>
               <tr>
                 <th>Round</th>
@@ -250,15 +264,15 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
             <tbody>
               {manifest.rounds.map((info) => (
                 <tr key={info.round}>
-                  <td style={{ fontFamily: "var(--pir-mono)" }}>{info.round}</td>
+                  <td className="font-mono">{info.round}</td>
                   <td className="num dim">{info.candidates}</td>
                   <td className="num dim">{info.fresh}</td>
-                  <td className="num" style={{ color: "#3fb26f" }}>{info.confirmed}</td>
-                  <td className="num" style={{ color: "#e5534b" }}>{info.rejected}</td>
-                  <td className="num" style={{ color: "#d29922" }}>{info.uncertain}</td>
+                  <td className="num text-emerald-400">{info.confirmed}</td>
+                  <td className="num text-red-400">{info.rejected}</td>
+                  <td className="num text-amber-400">{info.uncertain}</td>
                   <td className="num dim">{info.pending ?? 0}</td>
                   <td className="dim">{info.reviewerRan ? "ran" : "drain only"}</td>
-                  <td className="dim" style={{ fontSize: 12, maxWidth: 420 }}>{info.summary}</td>
+                  <td className="dim max-w-[420px] text-xs">{info.summary}</td>
                 </tr>
               ))}
             </tbody>
@@ -267,18 +281,18 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
       )}
 
       {manifest?.files && manifest.files.length > 0 && (
-        <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, overflowX: "auto" }}>
-          <table className="grid">
+        <div className="pir-panel overflow-x-auto">
+          <table className="pir-table">
             <thead>
               <tr><th>File</th><th>Status</th><th className="num">+</th><th className="num">−</th></tr>
             </thead>
             <tbody>
               {manifest.files.map((file) => (
                 <tr key={file.path}>
-                  <td style={{ fontFamily: "var(--pir-mono)", fontSize: 12 }}>{file.path}</td>
+                  <td className="font-mono text-xs">{file.path}</td>
                   <td className="dim">{file.status}</td>
-                  <td className="num" style={{ color: "#3fb26f" }}>{file.additions}</td>
-                  <td className="num" style={{ color: "#e5534b" }}>{file.deletions}</td>
+                  <td className="num text-emerald-400">{file.additions}</td>
+                  <td className="num text-red-400">{file.deletions}</td>
                 </tr>
               ))}
             </tbody>
@@ -286,9 +300,9 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
         </div>
       )}
 
-      <div style={{ color: "var(--pir-faint)", fontSize: 12, padding: "0 4px" }}>
+      <div className="px-1 text-xs text-muted-foreground/80">
         pir review sessions are hermetic: no extensions, skills or hooks execute inside them.
-        “Plugins” above are language guidance packs injected into prompts; every model turn,
+        "Plugins" above are language guidance packs injected into prompts; every model turn,
         thinking block and tool call is captured in the timeline transcripts.
       </div>
     </div>

@@ -12,15 +12,15 @@ export function App() {
       <Route
         path="/*"
         element={
-          <div className="app-shell">
+          <div className="app-shell flex h-screen overflow-hidden">
             <Sidebar />
-            <main className="app-main">
+            <main className="min-w-0 flex-1 overflow-y-auto px-7 py-6">
               <Routes>
                 <Route path="/" element={<Navigate to="/projects" replace />} />
                 <Route path="/projects" element={<ProjectsPage />} />
                 <Route path="/projects/:projectId" element={<RunsPage />} />
                 <Route path="/runs/:projectId/:runId" element={<RunDetailPage />} />
-                <Route path="*" element={<div className="empty-state">Nothing here.</div>} />
+                <Route path="*" element={<div className="pir-empty">Nothing here.</div>} />
               </Routes>
             </main>
           </div>

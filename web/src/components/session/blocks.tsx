@@ -1,23 +1,42 @@
 import { useState } from "react";
-import { Markdown } from "../Markdown";
-import { CodeBlock } from "../CodeBlock";
-import { fmtBytes, languageForPath } from "../../format";
+import {
+  Reasoning,
+  ReasoningContent,
+  ReasoningTrigger,
+} from "@/components/ai-elements/reasoning";
+import {
+  Tool,
+  ToolContent,
+  ToolHeader,
+  ToolInput,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
+import { MessageResponse } from "@/components/ai-elements/message";
+import {
+  CodeBlock,
+  CodeBlockCopyButton,
+} from "@/components/ai-elements/code-block";
+import { fmtBytes } from "../../format";
+import { codeLanguage } from "../code-lang";
 
-// dsh-style chat primitives: a right user bubble for the prompt, a collapsed
-// deep-thinking strip, plain markdown answers, and — the centerpiece —
-// compact one-line tool strips with humanized arguments that expand into
-// argument/result detail panels.
+// Chat building blocks on AI Elements primitives: the user prompt as a right
+// bubble, thinking via Reasoning, markdown answers via MessageResponse
+// (Streamdown), and every tool call as a collapsible Tool with a humanized
+// title and a syntax-highlighted result.
 
 export function UserBubble({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const long = text.length > 1500;
   return (
-    <div className="user-turn">
-      <div className={`user-bubble${long && !open ? " clamped" : ""}`}>
-        <div className="user-bubble-text">{text}</div>
+    <div className="flex flex-col items-end gap-1">
+      <div className={`pir-user-bubble${long && !open ? " clamped" : ""}`}>
+        <div className="text">{text}</div>
       </div>
       {long && (
-        <button className="link-btn" onClick={() => setOpen(!open)}>
+        <button
+          className="text-[11px] font-mono text-indigo-400 hover:underline px-1.5"
+          onClick={() => setOpen(!open)}
+        >
           {open ? "collapse prompt" : `show full prompt · ${text.length.toLocaleString()} chars`}
         </button>
       )}
@@ -26,27 +45,28 @@ export function UserBubble({ text }: { text: string }) {
 }
 
 export function ThinkingBlock({ text, redacted, streaming = false }: { text: string; redacted?: boolean; streaming?: boolean }) {
-  const [open, setOpen] = useState(false);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <button className="thinking-strip" onClick={() => setOpen(!open)}>
-        <span className={`chevron${open ? " open" : ""}`}>▶</span>
-        {redacted ? "thinking · redacted by provider" : "深度思考"}
-        <span style={{ color: "var(--pir-faint)" }}>· {text.length.toLocaleString()} chars</span>
-        {streaming && <span className="pir-mini-spinner" />}
-      </button>
-      {open && <div className="thinking-body">{redacted ? "The provider redacted this reasoning." : text}</div>}
-    </div>
+    <Reasoning isStreaming={streaming} defaultOpen={false} className="w-full">
+      <ReasoningTrigger
+        getThinkingMessage={(isStreamingValue) =>
+          redacted ? "thinking · redacted by provider" : isStreamingValue ? "thinking…" : "thinking"
+        }
+      />
+      <ReasoningContent>{redacted ? "The provider redacted this reasoning." : text}</ReasoningContent>
+    </Reasoning>
   );
 }
 
 export function TextBlockView({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  if (streaming) return <div className="stream-text">{text}</div>;
-  return <div className="answer-text"><Markdown text={text} /></div>;
+  if (streaming) {
+    return <div className="whitespace-pre-wrap text-sm text-muted-foreground">{text}<span className="text-primary animate-pulse">▍</span></div>;
+  }
+  return <MessageResponse>{text}</MessageResponse>;
 }
 
 // ---------------------------------------------------------------------------
-// Tool calls: collapsed = one readable line; expanded = args + result.
+// Tool calls: AI Elements Tool with a humanized one-line title
+// (`read_code · src/server/web.ts:81`) and a highlighted result view.
 // ---------------------------------------------------------------------------
 
 interface ToolArgs {
@@ -57,152 +77,130 @@ interface ToolArgs {
   query?: string;
   symbol?: string;
   name?: string;
-  id?: string;
   title?: string;
-  summary?: string;
   verdict?: string;
   base?: string;
   head?: string;
+  summary?: string;
   [key: string]: unknown;
 }
 
-const TOOL_ICONS: Record<string, string> = {
-  read_code: "📄",
-  read: "📄",
-  ls: "📁",
-  find: "📁",
-  search_text: "🔎",
-  grep: "🔎",
-  find_symbol: "◈",
-  find_callers: "←◈",
-  find_callees: "◈→",
-  find_references: "⇄",
-  get_change: "±",
-  list_snapshot_files: "🗂",
-  get_project_memory: "🧠",
-  get_feature_memory: "🧠",
-  get_entity_memory: "🧠",
-  get_relevant_issue_memory: "🧠",
-  record_candidate: "✚",
-  finish_round: "✓",
-  submit_verdict: "⚖",
-};
-
-/** One human-readable summary of the call, e.g. `src/web.ts:80-120` or `"decode" in src/`. */
-export function humanizeToolCall(name: string, args: unknown): { icon: string; arg: string } {
+/** Human-readable one-liner, e.g. `src/web.ts:80-120` or `"decode" in src/`. */
+export function humanizeToolArgs(name: string, args: unknown): string {
   const a = (args ?? {}) as ToolArgs;
-  const icon = TOOL_ICONS[name] ?? "🛠";
   const range = a.startLine !== undefined ? `:${a.startLine}${a.endLine !== undefined && a.endLine !== a.startLine ? `-${a.endLine}` : ""}` : "";
   switch (name) {
     case "read_code":
     case "read":
-      return { icon, arg: `${a.path ?? ""}${range}` };
+      return `${a.path ?? ""}${range}`;
     case "search_text":
     case "grep":
-      return { icon, arg: `"${a.pattern ?? a.query ?? ""}"${a.path ? ` in ${a.path}` : ""}` };
+      return `"${a.pattern ?? a.query ?? ""}"${a.path ? ` in ${a.path}` : ""}`;
     case "find_symbol":
-      return { icon, arg: `symbol ${a.symbol ?? a.name ?? ""}` };
+      return `symbol ${a.symbol ?? a.name ?? ""}`;
     case "find_callers":
-      return { icon, arg: `callers of ${a.symbol ?? a.name ?? ""}` };
+      return `callers of ${a.symbol ?? a.name ?? ""}`;
     case "find_callees":
-      return { icon, arg: `callees of ${a.symbol ?? a.name ?? ""}` };
+      return `callees of ${a.symbol ?? a.name ?? ""}`;
     case "find_references":
-      return { icon, arg: `references of ${a.symbol ?? a.name ?? ""}` };
+      return `references of ${a.symbol ?? a.name ?? ""}`;
     case "get_change":
-      return { icon, arg: a.base ? `${short(a.base)}..${short(a.head ?? "head")} diff` : "change diff" };
+      return a.base ? `${a.base.slice(0, 7)}..${(a.head ?? "").slice(0, 7)} diff` : "change diff";
     case "record_candidate":
-      return { icon, arg: a.title ? String(a.title).slice(0, 90) : "candidate" };
+      return a.title ? String(a.title).slice(0, 90) : "candidate";
     case "finish_round":
-      return { icon, arg: a.summary ? String(a.summary).slice(0, 90) : "end round" };
+      return a.summary ? String(a.summary).slice(0, 90) : "end round";
     case "submit_verdict":
-      return { icon, arg: a.verdict ? `verdict: ${a.verdict}` : "verdict" };
+      return a.verdict ? `verdict: ${a.verdict}` : "verdict";
     default: {
       const first = Object.entries(a).find(([, value]) => typeof value === "string" || typeof value === "number");
-      return { icon, arg: first ? `${first[1]}`.slice(0, 90) : name };
+      return first ? `${first[1]}`.slice(0, 90) : "";
     }
   }
 }
 
-function short(value: string): string {
-  return value.slice(0, 7);
-}
+/** Long tool results would freeze the page — cap and offer expand. */
+const MAX_RESULT_CHARS = 96 * 1024;
 
-export function ToolCallView({
-  call,
-  result,
-  running = false,
-}: {
-  call: { id: string; name: string; arguments: unknown };
-  result?: { text: string; isError: boolean; truncated: boolean };
-  running?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const { icon, arg } = humanizeToolCall(call.name, call.arguments);
-  const args = (call.arguments ?? {}) as ToolArgs;
-  const resultLanguage = guessResultLanguage(call.name, args);
-  const startLine = typeof args.startLine === "number" && resultLanguage !== "diff" ? args.startLine : undefined;
-  const status = running ? "running" : result?.isError ? "error" : result ? "ok" : "pending";
-
+function ResultView({ text, language, truncated, isErrorOnly = false }: { text: string; language?: string; truncated: boolean; isErrorOnly?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const clipped = text.length > MAX_RESULT_CHARS && !expanded;
+  const shown = clipped ? `${text.slice(0, MAX_RESULT_CHARS)}\n… [truncated — ${fmtBytes(text.length)} total]` : text;
+  if (isErrorOnly) {
+    // Error results render inline in the ToolOutput's destructive panel.
+    return <pre className="whitespace-pre-wrap break-words text-xs">{shown}</pre>;
+  }
   return (
-    <div>
-      <div
-        className={`tool-strip${status === "running" ? " running" : ""}${status === "error" ? " error" : ""}`}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="tool-icon">{icon}</span>
-        <span className="tool-name">{call.name}</span>
-        <span className="tool-arg">{arg}</span>
-        <span className="tool-tail">
-          {status === "running" && <span className="pir-mini-spinner" aria-label="running" />}
-          {status === "ok" && <span className="tool-status-ok" title="success">✓</span>}
-          {status === "error" && <span className="tool-status-err" title="error">✕</span>}
-          {result && !running && <span>{fmtBytes(result.text.length)}</span>}
-          <span className={`chevron${open ? " open" : ""}`}>▶</span>
-        </span>
-      </div>
-      {open && (
-        <div className="tool-detail">
-          {Object.keys(args).length > 0 && (
-            <div>
-              <div className="tool-detail-label">arguments</div>
-              <CodeBlock code={JSON.stringify(call.arguments, null, 2)} language="json" wrap collapseOver={4_000} />
-            </div>
-          )}
-          {result && (
-            <div>
-              <div className="tool-detail-label">{result.isError ? "result · error" : "result"}{result.truncated ? " · truncated" : ""}</div>
-              <CodeBlock
-                code={result.text}
-                language={resultLanguage}
-                title={undefined}
-                lineNumbers={resultLanguage !== undefined && resultLanguage !== "diff"}
-                startLine={startLine}
-              />
-            </div>
-          )}
-          {!result && !running && <div style={{ color: "var(--pir-faint)", fontSize: 12 }}>no result recorded</div>}
-        </div>
+    <div className="flex flex-col gap-2">
+      {clipped && (
+        <button className="self-start text-[11px] font-mono text-indigo-400 hover:underline" onClick={() => setExpanded(true)}>
+          show full result ({fmtBytes(text.length)})
+        </button>
       )}
+      <div className="rounded-lg border border-border overflow-hidden">
+        <CodeBlock code={shown} language={codeLanguage(language)}>
+          <CodeBlockCopyButton />
+        </CodeBlock>
+      </div>
+      {truncated && <div className="text-[11px] text-muted-foreground">server truncated this result (live capture limit)</div>}
     </div>
   );
 }
 
-function guessResultLanguage(name: string, args: ToolArgs): string | undefined {
-  if (name === "get_change") return "diff";
-  if (typeof args.path === "string") return languageForPath(args.path);
-  return undefined;
+export type ToolState = "input-streaming" | "input-available" | "output-available" | "output-error";
+
+export function ToolCallView({
+  name,
+  args,
+  result,
+  running = false,
+}: {
+  name: string;
+  args: unknown;
+  result?: { text: string; isError: boolean; truncated: boolean };
+  running?: boolean;
+}) {
+  const summary = humanizeToolArgs(name, args);
+  const state: ToolState = running
+    ? "input-available"
+    : result?.isError
+      ? "output-error"
+      : result
+        ? "output-available"
+        : "input-available";
+  const resultLanguage: string | undefined =
+    name === "get_change" ? "diff" : typeof (args as ToolArgs).path === "string" ? codeLanguage((args as ToolArgs).path) : undefined;
+
+  return (
+    <Tool defaultOpen={false}>
+      <ToolHeader type={`tool-${name}` as `tool-${string}`} state={state} title={summary ? `${name} · ${summary}` : name} />
+      <ToolContent>
+        {args !== null && args !== undefined && Object.keys(args as object).length > 0 && <ToolInput input={args} />}
+        {result && (
+          <ToolOutput
+            errorText={result.isError ? "tool execution failed" : undefined}
+            output={
+              result.isError
+                ? <ResultView text={result.text} language={resultLanguage} truncated={result.truncated} isErrorOnly />
+                : <ResultView text={result.text} language={resultLanguage} truncated={result.truncated} />
+            }
+          />
+        )}
+        {!result && !running && (
+          <ToolOutput output={<div className="text-xs text-muted-foreground">no result recorded</div>} errorText={undefined} />
+        )}
+      </ToolContent>
+    </Tool>
+  );
 }
 
 export function RawBlock({ label, value }: { label: string; value: unknown }) {
   return (
-    <div>
-      <div className="tool-strip" style={{ cursor: "default" }}>
-        <span className="tool-icon">?</span>
-        <span className="tool-name">{label}</span>
-      </div>
-      <div className="tool-detail">
-        <CodeBlock code={JSON.stringify(value, null, 2)} language="json" wrap collapseOver={4_000} />
-      </div>
-    </div>
+    <Tool defaultOpen={false}>
+      <ToolHeader type={`tool-${label}` as `tool-${string}`} state="output-available" title={label} />
+      <ToolContent>
+        <ToolInput input={value} />
+      </ToolContent>
+    </Tool>
   );
 }
