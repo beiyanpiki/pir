@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { Message, MessageContent } from "@/components/ai-elements/message";
 import { fmtClock, fmtCost, fmtCount } from "../../format";
 import type {
   AssistantMessage,
@@ -10,7 +9,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from "../../types";
-import { RawBlock, TextBlockView, ThinkingBlock, ToolCallView, UserBubble } from "./blocks";
+import { RawBlock, TextBlockView, ThinkingRow, ToolRow, UserGoalCard } from "./blocks";
 
 type RenderItem =
   | { type: "thinking"; text: string; redacted?: boolean }
@@ -19,50 +18,22 @@ type RenderItem =
   | { type: "user"; text: string }
   | { type: "raw"; label: string; value: unknown };
 
-type Turn =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; items: RenderItem[] };
-
 /**
- * Renders one settled session transcript as a conversation: the prompt as a
- * right user bubble, then assistant turns — Reasoning for thinking,
- * MessageResponse for markdown, Tool for every call with its result.
+ * One settled session as a ZCode-style activity stream: the prompt as a
+ * centered goal card, then a flat sequence of rows — thinking, prose, tool
+ * calls — with the session's role quiet in the divider above.
  */
 export function TranscriptView({ transcript }: { transcript: SessionTranscript }) {
-  const turns = useMemo(() => groupTurns(buildItems(transcript.messages)), [transcript]);
+  const items = useMemo(() => buildItems(transcript.messages), [transcript]);
 
   return (
-    <div className="flex flex-col gap-5">
-      <Message from="user" className="items-end">
-        <MessageContent className="w-auto max-w-[88%] min-w-0 p-0">
-          <UserBubble text={transcript.prompt} />
-        </MessageContent>
-      </Message>
-      {turns.map((turn, index) =>
-        turn.kind === "user" ? (
-          <Message key={index} from="user" className="items-end">
-            <MessageContent className="w-auto max-w-[88%] min-w-0 p-0">
-              <UserBubble text={turn.text} />
-            </MessageContent>
-          </Message>
-        ) : (
-          <Message key={index} from="assistant">
-            <MessageContent className="w-full p-0">
-              <div className="mb-2 text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground font-mono">
-                {transcript.role}
-                {transcript.model && transcript.model !== "(pi default)" && (
-                  <span className="ml-2 normal-case tracking-normal opacity-70">{transcript.model}</span>
-                )}
-              </div>
-              <div className="flex flex-col gap-3">
-                {turn.items.map((item, itemIndex) => (
-                  <TranscriptItem key={itemIndex} item={item} />
-                ))}
-              </div>
-            </MessageContent>
-          </Message>
-        ),
-      )}
+    <div className="flex flex-col">
+      <UserGoalCard text={transcript.prompt} />
+      <div className="mt-4 flex flex-col gap-0.5">
+        {items.map((item, index) => (
+          <TranscriptItem key={index} item={item} />
+        ))}
+      </div>
       <SessionFooter
         usage={transcript.usage}
         startedAt={transcript.startedAt}
@@ -87,9 +58,9 @@ function SessionFooter({
   if (!usage && !error) return null;
   return (
     <>
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="my-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{error}</div>}
       {usage && (
-        <div className="flex flex-wrap gap-4 border-t border-border pt-2 text-[11px] font-mono text-muted-foreground">
+        <div className="mt-3 flex flex-wrap gap-4 border-t border-border/60 pt-2 text-[11px] font-mono text-muted-foreground/60">
           <span>{fmtCount(usage.totalTokens)} tokens</span>
           <span>{fmtCost(usage.cost)}</span>
           <span>{usage.toolCalls ?? 0} tool calls</span>
@@ -105,19 +76,19 @@ function SessionFooter({
 function TranscriptItem({ item }: { item: RenderItem }) {
   switch (item.type) {
     case "thinking":
-      return <ThinkingBlock text={item.text} redacted={item.redacted} />;
+      return <ThinkingRow text={item.text} redacted={item.redacted} />;
     case "text":
       return <TextBlockView text={item.text} />;
     case "tool":
       return (
-        <ToolCallView
+        <ToolRow
           name={item.call.name}
           args={item.call.arguments}
           result={item.result ? { text: item.result.text, isError: item.result.isError, truncated: false } : undefined}
         />
       );
     case "user":
-      return <UserBubble text={item.text} />;
+      return <UserGoalCard text={item.text} />;
     case "raw":
       return <RawBlock label={item.label} value={item.value} />;
   }
@@ -188,21 +159,6 @@ export function buildItems(messages: SessionMessage[]): RenderItem[] {
     }
   }
   return items;
-}
-
-/** Consecutive assistant items form one turn; user items stand alone. */
-function groupTurns(items: RenderItem[]): Turn[] {
-  const turns: Turn[] = [];
-  for (const item of items) {
-    if (item.type === "user") {
-      turns.push({ kind: "user", text: item.text });
-      continue;
-    }
-    const last = turns[turns.length - 1];
-    if (last && last.kind === "assistant") last.items.push(item);
-    else turns.push({ kind: "assistant", items: [item] });
-  }
-  return turns;
 }
 
 function userText(message: UserMessage): string {

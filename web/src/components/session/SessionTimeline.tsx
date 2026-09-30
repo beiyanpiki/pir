@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Message } from "@/components/ai-elements/message";
 import { apiGet, transcriptUrl } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
 import type { RunEvent, SessionRef, SessionTranscript, SessionUsage } from "../../types";
 import { LiveBadge, SessionKindBadge } from "../badges";
-import { TextBlockView, ThinkingBlock, ToolCallView, UserBubble } from "./blocks";
+import { TextBlockView, ThinkingRow, ToolRow, UserGoalCard } from "./blocks";
 import { TranscriptView } from "./TranscriptView";
 
 // ---------------------------------------------------------------------------
@@ -121,7 +120,7 @@ export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session sections: centered divider, chat flow underneath.
+// Session sections: quiet divider, then the activity stream.
 // ---------------------------------------------------------------------------
 
 function sessionTitle(kind: string, meta: { round?: number; unitId?: string; attempt?: number; displayId?: string }): string {
@@ -137,28 +136,26 @@ function SessionDivider({
   title,
   meta,
   state,
-  onToggle,
 }: {
   kind: string;
   title: string;
   meta?: string;
   state?: "running" | "error" | "done";
-  onToggle: () => void;
 }) {
   return (
-    <div className="pir-session-sep" onClick={onToggle}>
+    <div className="pir-session-sep" style={{ cursor: "default" }}>
       <span className="line" />
       <SessionKindBadge kind={kind} />
       <span className="title">{title}</span>
       {meta && <span className="meta">{meta}</span>}
       {state === "running" && <LiveBadge />}
-      {state === "error" && <span className="text-[11px] font-mono text-red-400">error</span>}
+      {state === "error" && <span className="font-mono text-[11px] text-red-400">error</span>}
       <span className="line" />
     </div>
   );
 }
 
-/** Chat rendering of a live session (events already in memory). */
+/** Activity stream of a live session (events already in memory). */
 function LiveSessionSection({ session }: { session: DerivedSession }) {
   const state: "running" | "error" | "done" = session.endedAt === null ? "running" : session.error ? "error" : "done";
   const meta = [
@@ -168,34 +165,30 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
   ].filter(Boolean).join(" · ");
   return (
     <section>
-      <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} onToggle={() => {}} />
-      <div className="mx-auto flex max-w-3xl flex-col gap-5 pb-3">
-        <Message from="user" className="items-end">
-          <UserBubble text={session.prompt} />
-        </Message>
-        <div className="flex flex-col gap-4">
-          <div className="text-[10.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground font-mono">
-            {session.role}
-            {session.model && <span className="ml-2 normal-case tracking-normal opacity-70">{session.model}</span>}
-          </div>
+      <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} />
+      <div className="mx-auto flex max-w-3xl flex-col gap-0.5 pb-3">
+        <UserGoalCard text={session.prompt} />
+        <div className="mt-4 flex flex-col gap-0.5">
           {session.items.map((item, index) => (
             <LiveItemView key={index} item={item} />
           ))}
         </div>
-        {session.error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{session.error}</div>}
+        {session.error && (
+          <div className="my-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{session.error}</div>
+        )}
       </div>
     </section>
   );
 }
 
 function LiveItemView({ item }: { item: LiveItem }) {
-  if (item.type === "thinking") return <ThinkingBlock text={item.text} streaming={item.streaming} />;
+  if (item.type === "thinking") return <ThinkingRow text={item.text} streaming={item.streaming} />;
   if (item.type === "text") return <TextBlockView text={item.text} streaming={item.streaming} />;
-  return <ToolCallView name={item.name} args={item.args} result={item.result} running={item.running} />;
+  return <ToolRow name={item.name} args={item.args} result={item.result} running={item.running} />;
 }
 
 /**
- * One settled session: divider + transcript chat. The transcript JSON is
+ * One settled session: divider + activity stream. The transcript JSON is
  * fetched only when the section scrolls near the viewport — long runs have
  * many verifier sessions and nobody reads them all at once.
  */
@@ -208,7 +201,7 @@ function TranscriptSessionSection({
   runId: string;
   session: SessionRef;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open] = useState(true);
   const [visible, setVisible] = useState(false);
   const [transcript, setTranscript] = useState<SessionTranscript | null | undefined>(undefined);
   const sectionRef = useRef<HTMLElement | null>(null);
@@ -256,7 +249,6 @@ function TranscriptSessionSection({
         title={sessionTitle(session.sessionKind, session)}
         meta={meta}
         state={transcript === null ? "error" : "done"}
-        onToggle={() => setOpen(!open)}
       />
       {open && (
         <div className="mx-auto max-w-3xl pb-3">
