@@ -38,8 +38,12 @@ const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings",
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
  * invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns
- * {code, output, log}. Commands run serially — review sessions and the
- * sqlite store assume single-writer access per workspace.
+ * {code, output, log}. Mutating commands run serially — review sessions and
+ * the sqlite store assume single-writer access per workspace — but provably
+ * read-only ones (version, models, repos list) skip the queue entirely, and
+ * pure sqlite reads (memory status, findings list/show) run as WAL readers
+ * alongside the writer. Both fast lanes share a small concurrency cap. See
+ * classifyExecLane.
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
@@ -90,17 +94,41 @@ export async function startServer(input: {
   };
 
   let queue: Promise<unknown> = Promise.resolve();
+  // Tasks that have been enqueued but not settled yet, with their arrival
+  // time — the basis for the /health queue observability.
+  const queuedAt = new Map<object, number>();
   const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
+    const id = {};
+    queuedAt.set(id, Date.now());
     const run = queue.then(task, task);
-    queue = run.catch(() => undefined);
+    // The chain tail never rejects and drops the bookkeeping entry on
+    // settle, whichever way the task went.
+    queue = run.then(
+      () => queuedAt.delete(id),
+      () => queuedAt.delete(id),
+    );
     return run;
   };
+  const executorStats = (): { pending: number; oldestPendingMs: number } => {
+    let oldest: number | null = null;
+    for (const at of queuedAt.values()) if (oldest === null || at < oldest) oldest = at;
+    return { pending: queuedAt.size, oldestPendingMs: oldest === null ? 0 : Date.now() - oldest };
+  };
+
+  // Fast-lane requests (unqueued + readonly) run outside the serial queue,
+  // so they need their own bound: each one spawns git/codegraph subprocesses
+  // and opens sqlite, and an unbounded flood would exhaust process/file
+  // descriptors and starve the queued reviews (F-19). FIFO, so bursts drain
+  // in arrival order.
+  const fastLane = createFastLaneLimiter(FAST_LANE_CONCURRENCY);
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
     if (req.method === "GET" && url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls) }));
+      res.end(
+        JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls), executor: executorStats() }),
+      );
       return;
     }
     if (
@@ -324,16 +352,32 @@ export async function startServer(input: {
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
+      // Two-step scheduling: the cheap classification is pure; only the
+      // readonly candidate needs the (subprocess-spawning) db probe, which
+      // runs under the fast-lane cap. Probe and execution take the cap as
+      // two separate slots so a candidate that degrades to "queued" never
+      // holds a fast slot while waiting behind a long review.
+      const cheap = cheapExecLane(effectiveArgv);
+      const lane: ExecLane =
+        cheap === "readonly-candidate"
+          ? (await fastLane.run(() => readonlyLaneReady(effectiveArgv, input.workspace)))
+            ? "readonly"
+            : "queued"
+          : cheap;
       const logLines: string[] = [];
-      const result = await enqueue(() =>
-        executePirCommand(effectiveArgv, {
-          cwdGuard: input.workspace,
-          onLog: (message) => {
-            logLines.push(message);
-            log(`${argv.join(" ")} :: ${message}`);
-          },
-        }),
-      );
+      const execOptions = {
+        cwdGuard: input.workspace,
+        ...(lane === "readonly" ? { readOnlyMemory: true } : {}),
+        onLog: (message: string) => {
+          logLines.push(message);
+          log(`${argv.join(" ")} :: ${message}`);
+        },
+      };
+      // Only the queued lane joins the serial chain; the other two run
+      // alongside whatever the queue is busy with, under the fast-lane cap.
+      const result = await (lane === "queued"
+        ? enqueue(() => executePirCommand(effectiveArgv, execOptions))
+        : fastLane.run(() => executePirCommand(effectiveArgv, execOptions)));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
     } catch (err) {
@@ -376,6 +420,113 @@ function isAuthorizedRequest(header: unknown, token: string): boolean {
   const received = Buffer.from(header, "utf8");
   if (received.length !== expected.length) return false;
   return timingSafeEqual(received, expected);
+}
+
+type ExecLane = "unqueued" | "readonly" | "queued";
+
+/** Max concurrent fast-lane (unqueued + readonly) executions per server. */
+const FAST_LANE_CONCURRENCY = 16;
+
+/**
+ * FIFO counting semaphore bounding concurrent fast-lane work. Exported for
+ * tests.
+ */
+export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Promise<T>): Promise<T> } {
+  if (!Number.isInteger(capacity) || capacity < 1) {
+    throw new RangeError(`fast-lane capacity must be a positive integer, got ${capacity}`);
+  }
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    async run<T>(task: () => Promise<T>): Promise<T> {
+      if (active >= capacity) await new Promise<void>((resolve) => waiters.push(resolve));
+      active++;
+      try {
+        return await task();
+      } finally {
+        active--;
+        waiters.shift()?.();
+      }
+    },
+  };
+}
+
+/**
+ * Scheduling decision for a /v1/exec request. The serial queue exists
+ * because review sessions, worktree materialization and the memory db
+ * assume single-writer access — but that assumption only covers commands
+ * that write. Three groups don't need the queue:
+ *
+ * - "unqueued" — commands that touch no review worktree and no memory db:
+ *   version, help, models, and `repos list` (a pure registry read; the
+ *   registry is an atomic-rename file guarded by its own cross-process
+ *   lock). They answer instantly no matter what the queue is running.
+ * - "readonly" — pure sqlite reads (`memory status`, `findings list/show`)
+ *   served as WAL readers alongside the single writer. First contact (no
+ *   db yet, or one missing the current migrations) falls back to "queued"
+ *   so the db is created and migrated under the queue, as before.
+ * - everything else — "queued". That deliberately includes `repos add` /
+ *   `repos remove`: the registry writes are lock-protected, but add/remove
+ *   also clone into, fetch into and rmSync the shared per-project dirs
+ *   under PIR_REPOS_ROOT — the same dirs bundle reviews materialize from —
+ *   so un-queuing them without per-project locks could break an in-flight
+ *   review.
+ *
+ * Exported for tests; the lane only picks a scheduling order, never
+ * validation (usage errors surface from the queued executor path).
+ */
+export async function classifyExecLane(effectiveArgv: string[], workspace: string): Promise<ExecLane> {
+  const cheap = cheapExecLane(effectiveArgv);
+  if (cheap !== "readonly-candidate") return cheap;
+  return (await readonlyLaneReady(effectiveArgv, workspace)) ? "readonly" : "queued";
+}
+
+/**
+ * The subprocess-free half of the classification. "readonly-candidate"
+ * marks a read command whose db still has to be probed (the probe spawns
+ * git) before it may run off-queue.
+ */
+function cheapExecLane(effectiveArgv: string[]): ExecLane | "readonly-candidate" {
+  let parsed;
+  try {
+    parsed = parseArgs(effectiveArgv);
+  } catch {
+    return "queued"; // usage errors surface from the queued executor path
+  }
+  const command = parsed.positional[0];
+  // --repo materializes a worktree under PIR_REPOS_ROOT: queue it.
+  if (parsed.flags.get("--repo")) return "queued";
+  if (command === undefined || command === "help" || command === "version" || command === "models") {
+    return "unqueued";
+  }
+  if (command === "repos") {
+    return (parsed.positional[1] ?? "list") === "list" ? "unqueued" : "queued";
+  }
+  const isReadCommand =
+    (command === "memory" && (parsed.positional[1] ?? "status") === "status") ||
+    (command === "findings" && ["list", "show"].includes(parsed.positional[1] ?? "list"));
+  return isReadCommand ? "readonly-candidate" : "queued";
+}
+
+/**
+ * The db probe that upgrades a readonly candidate to the readonly lane: a
+ * read stays off the queue only when its db is already there to be read.
+ * Anything else (missing db, --cwd escaping the workspace, identity
+ * trouble) goes through the queued path, which reports or creates as
+ * before.
+ */
+async function readonlyLaneReady(effectiveArgv: string[], workspace: string): Promise<boolean> {
+  try {
+    const parsed = parseArgs(effectiveArgv);
+    const cwd = typeof parsed.flags.get("--cwd") === "string" ? (parsed.flags.get("--cwd") as string) : workspace;
+    const resolved = path.resolve(cwd);
+    const guard = path.resolve(workspace);
+    if (resolved !== guard && !resolved.startsWith(guard + path.sep)) return false;
+    const { memoryDbReadyForRead } = await import("../memory/index.js");
+    return await memoryDbReadyForRead(resolved);
+  } catch {
+    return false; // identity/git problems: let the queued path report them
+  }
 }
 
 function parseServeArgs(argv: string[]): ServeOptions {

@@ -1,6 +1,7 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { computeProjectIdentity, ensureStateDir, memoryDbPath, projectStateDir, type ProjectIdentity } from "./identity.js";
+import { MIGRATIONS } from "./migrations.js";
 import { SqliteStore } from "./sqlite-store.js";
 import { ProjectMemoriesRepo } from "./project-memory.js";
 import { FeaturesRepo } from "./feature-memory.js";
@@ -28,6 +29,71 @@ export function stateRootDbPath(projectId: string): string {
 export interface OpenMemoryOptions {
   /** Override the sqlite location (tests). */
   dbPath?: string;
+  /**
+   * Open as a WAL reader: no migrations, no projects-row insert — nothing
+   * that takes the write lock, so the caller may run while the review flow
+   * holds single-writer access. The db file must already exist; callers
+   * fall back to a creating open on first contact.
+   */
+  readOnly?: boolean;
+}
+
+/**
+ * Resolve the sqlite path Memory.open would use for <repoRoot>, without
+ * opening the db. Lets callers check for first contact (file missing) and
+ * route to a creating open before committing to a read-only one.
+ */
+async function memoryDbPathFor(repoRoot: string, options: Pick<OpenMemoryOptions, "dbPath"> = {}): Promise<string> {
+  const identity = await computeProjectIdentity(repoRoot);
+  return resolveMemoryDbPath(repoRoot, identity, options);
+}
+
+/**
+ * True when Memory.open(<repoRoot>, {readOnly: true}) will serve reads:
+ * the db file exists and carries every migration. A missing db (first
+ * contact) or a stale one (written by an older pir) must go through a
+ * normal creating open instead, which is the caller's queue to arrange.
+ */
+export async function memoryDbReadyForRead(
+  repoRoot: string,
+  options: Pick<OpenMemoryOptions, "dbPath"> = {},
+): Promise<boolean> {
+  let dbPath: string;
+  try {
+    dbPath = await memoryDbPathFor(repoRoot, options);
+  } catch {
+    return false; // identity/git problems: let the normal open report them
+  }
+  if (!existsSync(dbPath)) return false;
+  const store = SqliteStore.open(dbPath, { readOnly: true });
+  try {
+    const row = store.get<{ v: number | null }>("SELECT MAX(version) AS v FROM _migrations");
+    const latest = MIGRATIONS.reduce((max, migration) => Math.max(max, migration.version), 0);
+    return (row?.v ?? -1) >= latest;
+  } catch {
+    return false; // no _migrations table (zero-length file, foreign db): not readable
+  } finally {
+    store.close();
+  }
+}
+
+function resolveMemoryDbPath(
+  repoRoot: string,
+  identity: ProjectIdentity,
+  options: Pick<OpenMemoryOptions, "dbPath">,
+): string {
+  // Resolution order: explicit path (tests / worktree flows) >
+  // PIR_MEMORY_DB (single db override) > PIR_STATE_IN_PROJECT (Docker exec
+  // mode: everything under <repo>/.pir/) > PIR_STATE_ROOT (server mode:
+  // centralized <root>/<projectId>/) > per-project XDG state dir.
+  return (
+    options.dbPath ??
+    process.env.PIR_MEMORY_DB ??
+    (process.env.PIR_STATE_IN_PROJECT === "1"
+      ? (mkdirSync(path.join(repoRoot, ".pir"), { recursive: true }),
+        path.join(repoRoot, ".pir", "memory.sqlite"))
+      : stateRootDbPath(identity.projectId))
+  );
 }
 
 /**
@@ -60,18 +126,12 @@ export class Memory {
 
   static async open(repoRoot: string, options: OpenMemoryOptions = {}): Promise<Memory> {
     const identity = await computeProjectIdentity(repoRoot);
-    // Resolution order: explicit path (tests / worktree flows) >
-    // PIR_MEMORY_DB (single db override) > PIR_STATE_IN_PROJECT (Docker exec
-    // mode: everything under <repo>/.pir/) > PIR_STATE_ROOT (server mode:
-    // centralized <root>/<projectId>/) > per-project XDG state dir.
-    const dbPath =
-      options.dbPath ??
-      process.env.PIR_MEMORY_DB ??
-      (process.env.PIR_STATE_IN_PROJECT === "1"
-        ? (mkdirSync(path.join(repoRoot, ".pir"), { recursive: true }),
-          path.join(repoRoot, ".pir", "memory.sqlite"))
-        : stateRootDbPath(identity.projectId));
-    const store = SqliteStore.open(dbPath);
+    const dbPath = resolveMemoryDbPath(repoRoot, identity, options);
+    if (options.readOnly && !existsSync(dbPath)) {
+      throw new Error(`memory db does not exist yet: ${dbPath} (open it read-write once to create it)`);
+    }
+    const store = SqliteStore.open(dbPath, { readOnly: options.readOnly });
+    if (options.readOnly) return new Memory(identity, store);
     store.run(
       `INSERT INTO projects (id, remote, normalized_remote, root_commit, created_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (id) DO NOTHING`,
