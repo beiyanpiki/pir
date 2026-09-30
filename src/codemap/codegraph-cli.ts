@@ -59,20 +59,18 @@ function execCodegraph(args: string[], options: { stdin?: string; timeoutMs?: nu
   });
 }
 
+function classifyExit(args: string[], result: ExecResult): void {
+  if (result.code === 0) return;
+  const lower = result.stderr.toLowerCase();
+  if (lower.includes("not initialized") || lower.includes("codegraph init")) {
+    throw new CodeMapError("codegraph index not initialized for this project", "not_initialized");
+  }
+  throw new CodeMapError(`codegraph ${args[0]} exited ${result.code}: ${result.stderr.trim()}`, "failed");
+}
+
 async function runJson<T>(args: string[], options: { stdin?: string; timeoutMs?: number } = {}): Promise<T> {
-  let result: ExecResult;
-  try {
-    result = await execCodegraph(args, options);
-  } catch (err) {
-    throw err;
-  }
-  if (result.code !== 0) {
-    const lower = result.stderr.toLowerCase();
-    if (lower.includes("not initialized") || lower.includes("run 'codegraph init'")) {
-      throw new CodeMapError("codegraph index not initialized for this project", "not_initialized");
-    }
-    throw new CodeMapError(`codegraph ${args[0]} exited ${result.code}: ${result.stderr.trim()}`, "failed");
-  }
+  const result = await execCodegraph(args, options);
+  classifyExit(args, result);
   try {
     return JSON.parse(result.stdout) as T;
   } catch {
@@ -148,7 +146,8 @@ export class CodeGraphCliAdapter implements CodeMapProvider {
   constructor(private readonly repoRoot: string) {}
 
   async status(): Promise<IndexStatus> {
-    const payload = await runJson<StatusPayload>(["status", "-j", "-p", this.repoRoot]);
+    // codegraph 1.6.0 `status` takes only -j plus a positional path — no -p.
+    const payload = await runJson<StatusPayload>(["status", "-j", this.repoRoot]);
     return {
       initialized: payload.initialized === true,
       available: true,
@@ -165,7 +164,9 @@ export class CodeGraphCliAdapter implements CodeMapProvider {
     const current = await this.status();
     if (!current.initialized) return current;
     if (current.pendingChanges > 0) {
-      await runJson<unknown>(["sync", "-p", this.repoRoot], { timeoutMs: SYNC_TIMEOUT_MS });
+      // `sync` has no -p and never emits JSON: -q + positional path, judge by exit code.
+      const result = await execCodegraph(["sync", "-q", this.repoRoot], { timeoutMs: SYNC_TIMEOUT_MS });
+      classifyExit(["sync"], result);
       return this.status();
     }
     return current;

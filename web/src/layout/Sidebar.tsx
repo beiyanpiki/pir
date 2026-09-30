@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import { apiGet, getToken, setToken } from "../api";
 import { relTime } from "../format";
 import { useApi } from "../hooks";
+import { LiveBadge } from "../components/badges";
 import type { ActiveRunView, ProjectSummary } from "../types";
 
 interface Overview {
@@ -47,12 +48,12 @@ export function Sidebar() {
         <>
           <div className="sidebar-section">
             <span>Active now</span>
-            <span className="live-pill"><span className="pulse" />{active.length}</span>
+            <LiveBadge label={String(active.length)} />
           </div>
           <nav>
             {active.map((run) => (
               <Link key={run.runId} className="project-link" to={`/runs/${run.projectId}/${run.runId}`}>
-                <span className="dot" style={{ background: "var(--ok)" }} />
+                <span className="dot" />
                 <span className="name">{run.mode} · {run.sessions} session{run.sessions === 1 ? "" : "s"}</span>
                 <span className="count">{relTime(run.startedAt)}</span>
               </Link>
@@ -69,15 +70,12 @@ export function Sidebar() {
         <input
           type="search"
           placeholder="filter…"
+          className="sidebar-filter"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
-          style={{
-            background: "var(--bg-inset)", border: "1px solid var(--border)", color: "var(--text)",
-            borderRadius: 6, padding: "4px 8px", fontSize: 12, marginBottom: 6, width: "100%",
-          }}
         />
-        {overview.loading && projects.length === 0 && <div className="loading-row"><span className="spinner" /></div>}
-        {overview.error && <div style={{ color: "var(--err)", padding: "4px 8px", fontSize: 12 }}>{overview.error}</div>}
+        {overview.loading && projects.length === 0 && <div className="loading-row"><span className="pir-mini-spinner" /></div>}
+        {overview.error && <div style={{ color: "#e5534b", padding: "4px 8px", fontSize: 12 }}>{overview.error}</div>}
         {projects.map((project) => (
           <Link
             key={project.projectId}
@@ -90,7 +88,7 @@ export function Sidebar() {
           </Link>
         ))}
         {!overview.loading && projects.length === 0 && (
-          <div style={{ color: "var(--text-faint)", padding: "4px 8px", fontSize: 12 }}>
+          <div style={{ color: "var(--pir-faint)", padding: "4px 8px", fontSize: 12 }}>
             no projects — run a review with transcripts on
           </div>
         )}

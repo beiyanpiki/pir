@@ -26,7 +26,7 @@ export function FindingsTab({ findings }: { findings: FindingView[] }) {
         <button className="copy-btn" onClick={() => setShowAll(!showAll)}>
           {showAll ? "reported only" : `show all verdicts (${hidden} rejected/suppressed/pending)`}
         </button>
-        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+        <span style={{ color: "var(--pir-faint)", fontSize: 12 }}>
           {visible.filter((finding) => finding.status === "confirmed").length} confirmed ·{" "}
           {visible.filter((finding) => finding.status === "uncertain").length} uncertain
         </span>
@@ -46,7 +46,7 @@ function FindingCard({ finding }: { finding: FindingView }) {
         <span className="id">{finding.displayId}</span>
         <span className="title">{finding.title}</span>
         <VerdictBadge status={finding.status} />
-        <span className="meta mono" style={{ color: "var(--text-faint)", fontSize: 11 }}>
+        <span className="meta mono" style={{ color: "var(--pir-faint)", fontSize: 11 }}>
           round {finding.round} · {finding.category} · {fmtTime(finding.createdAt)}
         </span>
       </div>
@@ -58,7 +58,7 @@ function FindingCard({ finding }: { finding: FindingView }) {
         {finding.trigger && (
           <div>
             <div className="label">trigger</div>
-            <span className="mono" style={{ color: "var(--text-dim)", fontSize: 12.5 }}>{finding.trigger}</span>
+            <span className="mono" style={{ color: "var(--pir-dim)", fontSize: 12.5 }}>{finding.trigger}</span>
           </div>
         )}
         {finding.evidence.length > 0 && (
@@ -71,7 +71,7 @@ function FindingCard({ finding }: { finding: FindingView }) {
                     {item.kind}
                     {item.path ? ` · ${item.path}${item.startLine !== undefined ? `:${item.startLine}` : ""}` : ""}
                   </span>
-                  {item.description && <span style={{ color: "var(--text-dim)", fontSize: 12.5 }}>{item.description}</span>}
+                  {item.description && <span style={{ color: "var(--pir-dim)", fontSize: 12.5 }}>{item.description}</span>}
                   {item.excerpt && (
                     <CodeBlock
                       code={item.excerpt}

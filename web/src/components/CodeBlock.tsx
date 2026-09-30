@@ -22,6 +22,7 @@ export function CodeBlock({
   lineNumbers = false,
   wrap = false,
   collapseOver = 40_000,
+  startLine = 1,
 }: {
   code: string;
   language?: string;
@@ -29,6 +30,8 @@ export function CodeBlock({
   lineNumbers?: boolean;
   wrap?: boolean;
   collapseOver?: number;
+  /** First line number to display (read_code results start mid-file). */
+  startLine?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -48,10 +51,10 @@ export function CodeBlock({
     const lines = shown.split("\n").length;
     return (
       <span className="line-numbers" aria-hidden="true">
-        {Array.from({ length: lines }, (_, index) => index + 1).join("\n")}
+        {Array.from({ length: lines }, (_, index) => startLine + index).join("\n")}
       </span>
     );
-  }, [shown, lineNumbers]);
+  }, [shown, lineNumbers, startLine]);
 
   const copy = async (): Promise<void> => {
     try {

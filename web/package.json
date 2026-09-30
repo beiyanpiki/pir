@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@heroui/react": "^3.2.6",
+    "@heroui/styles": "^3.2.6",
     "dompurify": "^3.2.4",
     "eventsource-parser": "^3.0.0",
     "highlight.js": "^11.11.1",
@@ -19,9 +21,11 @@
     "react-router-dom": "^7.1.5"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.0",
     "vite": "^6.0.0"
   }

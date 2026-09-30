@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // The SPA builds to the pir package's dist/web, which `pir serve --web`
 // serves statically; dev mode proxies the API to a local serve instance.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: {
     outDir: "../dist/web",
     emptyOutDir: true,

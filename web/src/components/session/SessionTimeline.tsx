@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Chip } from "@heroui/react";
 import { apiGet, transcriptUrl } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
-import { useApi } from "../../hooks";
-import type { LiveSessionState, RunEvent, SessionRef, SessionTranscript, SessionUsage } from "../../types";
-import { SessionKindBadge } from "../badges";
-import { TextBlockView, ThinkingBlock, ToolCallView, UserPromptBlock } from "./blocks";
+import type { RunEvent, SessionRef, SessionTranscript, SessionUsage } from "../../types";
+import { LiveBadge, SessionKindBadge } from "../badges";
+import { TextBlockView, ThinkingBlock, ToolCallView, UserBubble } from "./blocks";
 import { TranscriptView } from "./TranscriptView";
 
 // ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
 }
 
 // ---------------------------------------------------------------------------
-// Session nodes
+// Session sections: a centered divider per session, chat flow underneath.
 // ---------------------------------------------------------------------------
 
 function sessionTitle(kind: string, meta: { round?: number; unitId?: string; attempt?: number; displayId?: string }): string {
@@ -133,43 +133,60 @@ function sessionTitle(kind: string, meta: { round?: number; unitId?: string; att
   return meta.displayId !== undefined ? `Verify ${meta.displayId}` : "Verifier session";
 }
 
-function LiveSessionNode({ session, defaultOpen }: { session: DerivedSession; defaultOpen: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
+function SessionDivider({
+  kind,
+  title,
+  open,
+  meta,
+  state,
+  onToggle,
+}: {
+  kind: string;
+  title: string;
+  open: boolean;
+  meta?: string;
+  state?: "running" | "error" | "done";
+  onToggle: () => void;
+}) {
   return (
-    <div className={`session-node ${session.kind}${session.endedAt === null ? " active" : ""}${session.error ? " error" : ""}`}>
-      <div className="session-card live" style={session.endedAt === null ? { borderColor: "var(--ok)" } : undefined}>
-        <div className="session-head" onClick={() => setOpen(!open)}>
-          <SessionKindBadge kind={session.kind} />
-          <span className="title">{sessionTitle(session.kind, session)}</span>
-          <span className="meta">{session.model ?? ""}</span>
-          <span className="spacer" />
-          {session.endedAt === null
-            ? <span className="live-pill"><span className="pulse" />running</span>
-            : session.error
-              ? <span className="badge status-failed">error</span>
-              : <span className="meta">{fmtDuration(session.endedAt - session.startedAt)}</span>}
-          <span className={`chevron${open ? " open" : ""}`}>▶</span>
-        </div>
-        {open && (
-          <div className="session-body">
-            <div className="chat">
-              <UserPromptBlock prompt={session.prompt} />
-              {session.items.map((item, index) => (
-                <LiveItemView key={index} item={item} />
-              ))}
-              {session.usage && (
-                <div className="stat-row">
-                  <span className="stat"><b>{fmtCount(session.usage.totalTokens)}</b> tokens</span>
-                  <span className="stat"><b>{fmtCost(session.usage.cost)}</b></span>
-                  <span className="stat"><b>{session.usage.toolCalls ?? 0}</b> tool calls</span>
-                </div>
-              )}
-              {session.error && <div className="error-banner" style={{ marginBottom: 0 }}>{session.error}</div>}
-            </div>
-          </div>
-        )}
-      </div>
+    <div className="session-divider" onClick={onToggle}>
+      <span className="divider-line" />
+      <SessionKindBadge kind={kind} />
+      <span className="divider-title">{title}</span>
+      {meta && <span className="divider-meta">{meta}</span>}
+      {state === "running" && <LiveBadge />}
+      {state === "error" && <Chip size="sm" variant="soft" color="danger">error</Chip>}
+      <span className={`chevron${open ? " open" : ""}`} style={{ fontSize: 9, color: "var(--pir-faint)" }}>▶</span>
+      <span className="divider-line" />
     </div>
+  );
+}
+
+/** Chat rendering of a live session (events already in memory). */
+function LiveSessionSection({ session }: { session: DerivedSession }) {
+  const state: "running" | "error" | "done" = session.endedAt === null ? "running" : session.error ? "error" : "done";
+  const meta = [
+    session.model ?? "",
+    session.endedAt !== null ? fmtDuration(session.endedAt - session.startedAt) : "",
+    session.usage ? `${fmtCount(session.usage.totalTokens)} tok · ${fmtCost(session.usage.cost)}` : "",
+  ].filter(Boolean).join(" · ");
+  return (
+    <section>
+      <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} open meta={meta} state={state} onToggle={() => {}} />
+      <div className="chat-flow">
+        <UserBubble text={session.prompt} />
+        <div className="assistant-turn">
+          <div className="assistant-label">
+            {session.role}
+            {session.model && <span style={{ marginLeft: 8, opacity: 0.7 }}>{session.model}</span>}
+          </div>
+          {session.items.map((item, index) => (
+            <LiveItemView key={index} item={item} />
+          ))}
+        </div>
+        {session.error && <div className="error-banner">{session.error}</div>}
+      </div>
+    </section>
   );
 }
 
@@ -179,63 +196,88 @@ function LiveItemView({ item }: { item: LiveItem }) {
   return <ToolCallView call={item.call} result={item.result} running={item.running} />;
 }
 
-function TranscriptSessionNode({
+/**
+ * One settled session: divider + transcript chat. The transcript JSON is
+ * fetched only when the section scrolls near the viewport — long runs have
+ * many verifier sessions and nobody reads them all at once.
+ */
+function TranscriptSessionSection({
   projectId,
   runId,
   session,
-  defaultOpen,
 }: {
   projectId: string;
   runId: string;
   session: SessionRef;
-  defaultOpen: boolean;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
-  const [cache, setCache] = useState<SessionTranscript | null | undefined>(undefined);
-  const transcript = useApi<SessionTranscript | null>(
-    async () => {
-      if (cache !== undefined) return cache;
-      try {
-        const data = await apiGet<SessionTranscript>(transcriptUrl(projectId, runId, session.file));
-        setCache(data);
-        return data;
-      } catch {
-        setCache(null);
-        return null;
-      }
-    },
-    [projectId, runId, session.file, open],
-  );
+  const [open, setOpen] = useState(true);
+  const [visible, setVisible] = useState(false);
+  const [transcript, setTranscript] = useState<SessionTranscript | null | undefined>(undefined);
+  const sectionRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open || visible || transcript !== undefined) return;
+    const element = sectionRef.current;
+    if (element === null) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "400px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [open, visible, transcript]);
+
+  useEffect(() => {
+    if (!open || !visible || transcript !== undefined) return;
+    let cancelled = false;
+    apiGet<SessionTranscript>(transcriptUrl(projectId, runId, session.file))
+      .then((data) => {
+        if (!cancelled) setTranscript(data);
+      })
+      .catch(() => {
+        if (!cancelled) setTranscript(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, runId, session.file, open, visible, transcript]);
+
+  const meta = transcript
+    ? [
+        transcript.usage ? `${fmtCount(transcript.usage.totalTokens)} tok · ${fmtCost(transcript.usage.cost)}` : "",
+        transcript.usage ? fmtDuration(transcript.usage.durationMs) : "",
+      ].filter(Boolean).join(" · ")
+    : session.file;
 
   return (
-    <div className={`session-node ${session.sessionKind}`}>
-      <div className="session-card">
-        <div className="session-head" onClick={() => setOpen(!open)}>
-          <SessionKindBadge kind={session.sessionKind} />
-          <span className="title">{sessionTitle(session.sessionKind, session)}</span>
-          <span className="meta">{session.file}</span>
-          <span className="spacer" />
-          {open && transcript.data?.usage && (
-            <span className="meta">
-              {fmtCount(transcript.data.usage.totalTokens)} tok · {fmtCost(transcript.data.usage.cost)}
-            </span>
+    <section ref={sectionRef}>
+      <SessionDivider
+        kind={session.sessionKind}
+        title={sessionTitle(session.sessionKind, session)}
+        open={open}
+        meta={meta}
+        state={transcript === null ? "error" : "done"}
+        onToggle={() => setOpen(!open)}
+      />
+      {open && (
+        <div className="chat-flow">
+          {transcript === undefined && (
+            <div className="loading-row"><span className="pir-mini-spinner" /> loading session…</div>
           )}
-          {open && transcript.loading && <span className="spinner" />}
-          <span className={`chevron${open ? " open" : ""}`}>▶</span>
+          {transcript === null && (
+            <div className="empty-state" style={{ padding: 16 }}>
+              Transcript file missing for <code>{session.file}</code>.
+            </div>
+          )}
+          {transcript !== null && transcript !== undefined && <TranscriptView transcript={transcript} />}
         </div>
-        {open && (
-          <div className="session-body">
-            {transcript.loading && !transcript.data && <div className="loading-row"><span className="spinner" /></div>}
-            {transcript.data && <TranscriptView transcript={transcript.data} />}
-            {transcript.data === null && !transcript.loading && (
-              <div className="empty-state" style={{ padding: 16 }}>
-                Transcript file missing for <code>{session.file}</code>.
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+      )}
+    </section>
   );
 }
 
@@ -255,9 +297,9 @@ export function SessionTimeline({
 
   if (useLive) {
     return (
-      <div className="timeline">
-        {liveSessions.map((session, index) => (
-          <LiveSessionNode key={session.sessionId} session={session} defaultOpen={index === liveSessions.length - 1} />
+      <div className="timeline-chat">
+        {liveSessions.map((session) => (
+          <LiveSessionSection key={session.sessionId} session={session} />
         ))}
       </div>
     );
@@ -273,12 +315,12 @@ export function SessionTimeline({
   }
 
   return (
-    <div className="timeline">
-      {sessions.map((session, index) => (
-        <TranscriptSessionNode key={session.file} projectId={projectId} runId={runId} session={session} defaultOpen={index === 0} />
+    <div className="timeline-chat">
+      {sessions.map((session) => (
+        <TranscriptSessionSection key={session.file} projectId={projectId} runId={runId} session={session} />
       ))}
     </div>
   );
 }
 
-export type { LiveSessionState };
+export type { DerivedSession };

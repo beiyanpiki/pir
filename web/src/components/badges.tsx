@@ -1,32 +1,51 @@
-export function statusClass(status: string | null | undefined): string {
+import { Chip } from "@heroui/react";
+
+type ChipColor = "accent" | "danger" | "success" | "warning" | "default";
+
+export function statusColor(status: string | null | undefined): ChipColor {
   switch (status) {
-    case "running": return "status-running";
-    case "completed": return "status-completed";
-    case "incomplete": return "status-incomplete";
-    case "failed": return "status-failed";
-    case "interrupted": return "status-interrupted";
-    default: return "status-unknown";
+    case "running": return "accent";
+    case "completed": return "success";
+    case "incomplete": return "warning";
+    case "failed":
+    case "interrupted": return "danger";
+    default: return "default";
   }
 }
 
 export function StatusBadge({ status }: { status: string | null | undefined }) {
-  return <span className={`badge ${statusClass(status)}`}>{status ?? "unknown"}</span>;
+  return <Chip size="sm" variant="soft" color={statusColor(status)}>{status ?? "unknown"}</Chip>;
 }
 
 export function SeverityBadge({ severity }: { severity: string }) {
-  return <span className={`badge sev-${severity}`}>{severity}</span>;
+  const color: ChipColor = severity === "P0" ? "danger" : severity === "P1" ? "warning" : severity === "P2" ? "warning" : "default";
+  return <Chip size="sm" variant="soft" color={color}>{severity}</Chip>;
 }
 
 export function VerdictBadge({ status }: { status: string }) {
-  return <span className={`verdict v-${status}`}>{status}</span>;
+  const color: ChipColor =
+    status === "confirmed" ? "success"
+    : status === "rejected" ? "danger"
+    : status === "uncertain" ? "warning"
+    : "default";
+  return <Chip size="sm" variant="soft" color={color}>{status}</Chip>;
 }
 
 export function ModeBadge({ mode }: { mode: string }) {
   const known = mode === "change" || mode === "audit";
-  return <span className={`badge ${known ? `mode-${mode}` : "status-unknown"}`}>{mode}</span>;
+  return <Chip size="sm" variant="soft" color={known ? "accent" : "default"}>{mode}</Chip>;
 }
 
 export function SessionKindBadge({ kind }: { kind: string }) {
   const known = kind === "reviewer" || kind === "verifier";
-  return <span className={`badge ${known ? `kind-${kind}` : "status-unknown"}`}>{kind}</span>;
+  return <Chip size="sm" variant="soft" color={known ? "accent" : "default"}>{kind}</Chip>;
+}
+
+export function LiveBadge({ label = "live" }: { label?: string }) {
+  return (
+    <span className="pir-live-pill">
+      <span className="pir-live-dot" />
+      {label}
+    </span>
+  );
 }

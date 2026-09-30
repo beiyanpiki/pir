@@ -1,3 +1,4 @@
+import { Chip } from "@heroui/react";
 import type { RunManifest } from "../types";
 
 const COVERAGE_KEYS: Array<[string, string]> = [
@@ -21,10 +22,10 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="card">
+      <div className="panel">
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "baseline" }}>
           <strong>Snapshot coverage</strong>
-          <span className="mono" style={{ color: "var(--text-dim)", fontSize: 12 }}>
+          <span className="mono" style={{ color: "var(--pir-dim)", fontSize: 12 }}>
             {reviewed + partial} / {inScope} files touched ({pct}%)
           </span>
         </div>
@@ -39,7 +40,7 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
       </div>
 
       {units.length > 0 && (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+        <div className="panel" style={{ padding: 0, overflowX: "auto" }}>
           <table className="grid">
             <thead>
               <tr>
@@ -57,9 +58,9 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
                   <td className="mono">{unit.id}</td>
                   <td className="dim">{unit.module || "—"}</td>
                   <td>
-                    <span className={`badge ${unit.state === "reviewed" ? "status-completed" : unit.state === "blocked" || unit.state === "failed" ? "status-failed" : "status-incomplete"}`}>
+                    <Chip size="sm" variant="soft" color={unit.state === "reviewed" ? "success" : unit.state === "blocked" || unit.state === "failed" ? "danger" : "warning"}>
                       {unit.state}
-                    </span>
+                    </Chip>
                   </td>
                   <td className="num dim">{unit.files}</td>
                   <td className="num dim">{unit.attempts}</td>

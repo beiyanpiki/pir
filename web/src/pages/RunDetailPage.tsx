@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { Tabs, Tab, TabList, TabPanel } from "@heroui/react";
 import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, fmtTime, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
-import { ModeBadge, StatusBadge } from "../components/badges";
+import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
 import { SessionTimeline } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import type { RunDetail, RunEvent } from "../types";
 
-type Tab = "timeline" | "findings" | "coverage" | "details";
-
 export function RunDetailPage() {
   const { projectId = "", runId = "" } = useParams();
-  const [tab, setTab] = useState<Tab>("timeline");
+  const [tab, setTab] = useState<string>("timeline");
   const detail = useApi<RunDetail>(() => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`), [projectId, runId]);
 
   const run = detail.data?.run;
@@ -45,7 +44,7 @@ export function RunDetailPage() {
   const now = useTicker(ongoing ? 1000 : 0);
   const displayStatus = deriveStatus(run, live, sseStatus);
 
-  if (detail.loading && !detail.data) return <div className="loading-row"><span className="spinner" /> loading run…</div>;
+  if (detail.loading && !detail.data) return <div className="loading-row"><span className="pir-mini-spinner" /> loading run…</div>;
   if (detail.error) return <div className="error-banner">{detail.error}</div>;
   if (!run) return <div className="empty-state">Run not found.</div>;
 
@@ -57,6 +56,7 @@ export function RunDetailPage() {
   const rounds = counts?.rounds ?? run.rounds;
   const duration = live && live.end === null ? now - live.startedAt : (run.durationMs ?? (run.finishedAt !== null ? run.finishedAt - run.startedAt : null));
   const isAudit = run.mode === "audit";
+  const sessionsCount = detail.data?.sessions.length ?? (liveEvents ? new Set(liveEvents.filter((event) => event.kind === "session-start").map((event) => (event as { sessionId: string }).sessionId)).size : 0);
 
   return (
     <div className="page">
@@ -66,21 +66,24 @@ export function RunDetailPage() {
         </h1>
         <ModeBadge mode={run.mode} />
         <StatusBadge status={displayStatus} />
-        {sseStatus === "open" && <span className="live-pill"><span className="pulse" />live</span>}
-        <span className="spacer" style={{ flex: 1 }} />
+        {sseStatus === "open" && <LiveBadge />}
+        <span style={{ flex: 1 }} />
         <Link to={`/projects/${projectId}`} className="sub">← all runs</Link>
       </div>
 
-      <div className="card" style={{ marginBottom: 18 }}>
+      <div style={{
+        background: "var(--pir-panel)", border: "1px solid var(--pir-border)",
+        borderRadius: 12, padding: "14px 16px", marginBottom: 18,
+      }}>
         <div className="stat-row">
           <span className="stat">started <b>{fmtTime(run.startedAt)}</b> ({relTime(run.startedAt)})</span>
           {run.finishedAt !== null && <span className="stat">finished <b>{fmtTime(run.finishedAt)}</b></span>}
           <span className="stat">duration <b>{fmtDuration(duration)}</b></span>
           <span className="stat">rounds <b>{rounds}</b></span>
           <span className="stat">
-            <b style={{ color: "var(--ok)" }}>{confirmed}</b> confirmed ·{" "}
-            <b style={{ color: "var(--err)" }}>{rejected}</b> rejected ·{" "}
-            <b style={{ color: "var(--warn)" }}>{uncertain}</b> uncertain
+            <b style={{ color: "#3fb26f" }}>{confirmed}</b> confirmed ·{" "}
+            <b style={{ color: "#e5534b" }}>{rejected}</b> rejected ·{" "}
+            <b style={{ color: "#d29922" }}>{uncertain}</b> uncertain
           </span>
         </div>
         <div className="stat-row" style={{ marginBottom: 0 }}>
@@ -92,35 +95,31 @@ export function RunDetailPage() {
           ))}
         </div>
         {(manifest?.stoppedBecause ?? run.notes) && (
-          <div style={{ color: "var(--text-dim)", fontSize: 12.5, marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+          <div style={{ color: "var(--pir-dim)", fontSize: 12.5, marginTop: 8, borderTop: "1px solid var(--pir-border)", paddingTop: 8 }}>
             {manifest ? `${manifest.stoppedBecause}` : run.notes}
-            {manifest?.incomplete && <span style={{ color: "var(--warn)" }}> · incomplete</span>}
+            {manifest?.incomplete && <span style={{ color: "#d29922" }}> · incomplete</span>}
           </div>
         )}
         {!run.transcriptsAvailable && (
-          <div style={{ color: "var(--text-faint)", fontSize: 12, marginTop: 6 }}>
+          <div style={{ color: "var(--pir-faint)", fontSize: 12, marginTop: 6 }}>
             Transcripts were not captured for this run (it predates PIR_TRANSCRIPTS=1) — the timeline is unavailable.
           </div>
         )}
       </div>
 
-      <div className="tabs">
-        <button className={tab === "timeline" ? "active" : ""} onClick={() => setTab("timeline")}>
-          Timeline <span className="hint">{detail.data?.sessions.length ?? (liveEvents ? new Set(liveEvents.filter((event) => event.kind === "session-start").map((event) => (event as { sessionId: string }).sessionId)).size : 0)} sessions</span>
-        </button>
-        <button className={tab === "findings" ? "active" : ""} onClick={() => setTab("findings")}>
-          Findings <span className="hint">{detail.data?.findings.length ?? 0}</span>
-        </button>
-        {isAudit && (
-          <button className={tab === "coverage" ? "active" : ""} onClick={() => setTab("coverage")} disabled={!manifest}>
-            Coverage
-          </button>
-        )}
-        <button className={tab === "details" ? "active" : ""} onClick={() => setTab("details")}>Details</button>
-      </div>
-
-      {tab === "timeline" && (
-        <>
+      <Tabs
+        selectedKey={tab}
+        onSelectionChange={(key) => setTab(String(key))}
+        aria-label="run views"
+        style={{ marginBottom: 18 }}
+      >
+        <TabList>
+          <Tab id="timeline">Timeline <span style={{ opacity: 0.5, fontSize: 11 }}>{sessionsCount} sessions</span></Tab>
+          <Tab id="findings">Findings <span style={{ opacity: 0.5, fontSize: 11 }}>{detail.data?.findings.length ?? 0}</span></Tab>
+          {isAudit && <Tab id="coverage">Coverage</Tab>}
+          <Tab id="details">Details</Tab>
+        </TabList>
+        <TabPanel id="timeline">
           {liveEvents && <ActivityLog events={liveEvents} />}
           <SessionTimeline
             projectId={projectId}
@@ -128,11 +127,19 @@ export function RunDetailPage() {
             sessions={detail.data?.sessions ?? []}
             liveEvents={liveEvents}
           />
-        </>
-      )}
-      {tab === "findings" && <FindingsTab findings={detail.data?.findings ?? []} />}
-      {tab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
-      {tab === "details" && <DetailsTab detail={detail.data} />}
+        </TabPanel>
+        <TabPanel id="findings">
+          <FindingsTab findings={detail.data?.findings ?? []} />
+        </TabPanel>
+        {isAudit && (
+          <TabPanel id="coverage">
+            {manifest ? <CoverageTab manifest={manifest} /> : <div className="empty-state">No manifest for this run.</div>}
+          </TabPanel>
+        )}
+        <TabPanel id="details">
+          <DetailsTab detail={detail.data} />
+        </TabPanel>
+      </Tabs>
     </div>
   );
 }
@@ -163,23 +170,26 @@ function useTicker(intervalMs: number): number {
 function ActivityLog({ events }: { events: RunEvent[] }) {
   const [open, setOpen] = useState(false);
   const progress = useMemo(() => events.filter((event) => event.kind === "progress"), [events]);
-  const [visible, last] = open ? [progress, null] : [progress.slice(-5), progress.length > 5];
+  const visible = open ? progress : progress.slice(-5);
 
   return (
-    <div className="card" style={{ marginBottom: 14, padding: "8px 14px", fontSize: 12.5 }}>
+    <div style={{
+      background: "var(--pir-panel)", border: "1px solid var(--pir-border)",
+      borderRadius: 12, padding: "8px 14px", fontSize: 12.5, marginBottom: 14,
+    }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }} onClick={() => setOpen(!open)}>
-        <span style={{ color: "var(--text-faint)", textTransform: "uppercase", fontSize: 11, letterSpacing: "0.06em" }}>activity</span>
-        {last && <span className="copy-btn">{open ? "collapse" : `${progress.length} events`}</span>}
+        <span style={{ color: "var(--pir-faint)", textTransform: "uppercase", fontSize: 11, letterSpacing: ".06em" }}>activity</span>
+        {progress.length > 5 && <button className="link-btn">{open ? "collapse" : `${progress.length} events`}</button>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 6 }}>
         {visible.map((event, index) => (
           <div key={`${event.seq}-${index}`} style={{ display: "flex", gap: 10 }}>
-            <span className="mono" style={{ color: "var(--text-faint)", flexShrink: 0 }}>
+            <span style={{ color: "var(--pir-faint)", flexShrink: 0, fontFamily: "var(--pir-mono)", fontSize: 11 }}>
               {new Date(event.ts).toLocaleTimeString()}
             </span>
             {event.kind === "progress" && (
-              <span style={{ color: "var(--text-dim)" }}>
-                <span className="mono" style={{ color: "var(--cyan)" }}>{event.phase}</span>{" "}
+              <span style={{ color: "var(--pir-dim)" }}>
+                <span style={{ color: "#39c5cf", fontFamily: "var(--pir-mono)", fontSize: 11 }}>{event.phase}</span>{" "}
                 {event.round !== undefined ? `r${event.round} · ` : ""}{event.message}
               </span>
             )}
@@ -195,7 +205,7 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
   const { run, manifest } = detail;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div className="card">
+      <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, padding: "14px 16px" }}>
         <strong style={{ display: "block", marginBottom: 8 }}>Run</strong>
         <dl className="kv">
           <dt>run id</dt><dd>{run.runId}</dd>
@@ -222,7 +232,7 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
       </div>
 
       {manifest && manifest.rounds.length > 0 && (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+        <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, overflowX: "auto" }}>
           <table className="grid">
             <thead>
               <tr>
@@ -240,12 +250,12 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
             <tbody>
               {manifest.rounds.map((info) => (
                 <tr key={info.round}>
-                  <td className="mono">{info.round}</td>
+                  <td style={{ fontFamily: "var(--pir-mono)" }}>{info.round}</td>
                   <td className="num dim">{info.candidates}</td>
                   <td className="num dim">{info.fresh}</td>
-                  <td className="num" style={{ color: "var(--ok)" }}>{info.confirmed}</td>
-                  <td className="num" style={{ color: "var(--err)" }}>{info.rejected}</td>
-                  <td className="num" style={{ color: "var(--warn)" }}>{info.uncertain}</td>
+                  <td className="num" style={{ color: "#3fb26f" }}>{info.confirmed}</td>
+                  <td className="num" style={{ color: "#e5534b" }}>{info.rejected}</td>
+                  <td className="num" style={{ color: "#d29922" }}>{info.uncertain}</td>
                   <td className="num dim">{info.pending ?? 0}</td>
                   <td className="dim">{info.reviewerRan ? "ran" : "drain only"}</td>
                   <td className="dim" style={{ fontSize: 12, maxWidth: 420 }}>{info.summary}</td>
@@ -257,7 +267,7 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
       )}
 
       {manifest?.files && manifest.files.length > 0 && (
-        <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+        <div style={{ background: "var(--pir-panel)", border: "1px solid var(--pir-border)", borderRadius: 12, overflowX: "auto" }}>
           <table className="grid">
             <thead>
               <tr><th>File</th><th>Status</th><th className="num">+</th><th className="num">−</th></tr>
@@ -265,10 +275,10 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
             <tbody>
               {manifest.files.map((file) => (
                 <tr key={file.path}>
-                  <td className="mono" style={{ fontSize: 12 }}>{file.path}</td>
+                  <td style={{ fontFamily: "var(--pir-mono)", fontSize: 12 }}>{file.path}</td>
                   <td className="dim">{file.status}</td>
-                  <td className="num" style={{ color: "var(--ok)" }}>{file.additions}</td>
-                  <td className="num" style={{ color: "var(--err)" }}>{file.deletions}</td>
+                  <td className="num" style={{ color: "#3fb26f" }}>{file.additions}</td>
+                  <td className="num" style={{ color: "#e5534b" }}>{file.deletions}</td>
                 </tr>
               ))}
             </tbody>
@@ -276,7 +286,7 @@ function DetailsTab({ detail }: { detail: RunDetail | null }) {
         </div>
       )}
 
-      <div className="card" style={{ color: "var(--text-faint)", fontSize: 12 }}>
+      <div style={{ color: "var(--pir-faint)", fontSize: 12, padding: "0 4px" }}>
         pir review sessions are hermetic: no extensions, skills or hooks execute inside them.
         “Plugins” above are language guidance packs injected into prompts; every model turn,
         thinking block and tool call is captured in the timeline transcripts.

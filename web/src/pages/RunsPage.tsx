@@ -49,7 +49,7 @@ export function RunsPage() {
           <button
             key={status || "all"}
             className={`copy-btn${statusFilter === status ? "" : ""}`}
-            style={statusFilter === status ? { color: "var(--text)", borderColor: "var(--accent)" } : undefined}
+            style={statusFilter === status ? { color: "var(--pir-text)", borderColor: "var(--pir-accent)" } : undefined}
             onClick={() => {
               setStatusFilter(status);
               setOffset(0);
@@ -59,7 +59,7 @@ export function RunsPage() {
           </button>
         ))}
         <span style={{ flex: 1 }} />
-        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>
+        <span style={{ color: "var(--pir-faint)", fontSize: 12 }}>
           {project ? `${project.runsTotal} runs · ${project.openFindings} open findings` : ""}
         </span>
       </div>
@@ -69,7 +69,7 @@ export function RunsPage() {
 
       {runs.data && (
         <>
-          <div className="card" style={{ padding: 0, overflowX: "auto" }}>
+          <div className="panel" style={{ padding: 0, overflowX: "auto" }}>
             <table className="grid">
               <thead>
                 <tr>
@@ -99,11 +99,11 @@ export function RunsPage() {
                       <td className="num dim">{fmtDuration(run.durationMs)}</td>
                       <td className="num dim">{run.rounds}</td>
                       <td className="num">
-                        <span style={{ color: "var(--ok)" }}>{run.confirmed}</span>
+                        <span style={{ color: "var(--pir-ok)" }}>{run.confirmed}</span>
                         {" / "}
-                        <span style={{ color: "var(--err)" }}>{run.rejected}</span>
+                        <span style={{ color: "var(--pir-err)" }}>{run.rejected}</span>
                         {" / "}
-                        <span style={{ color: "var(--warn)" }}>{run.uncertain}</span>
+                        <span style={{ color: "var(--pir-warn)" }}>{run.uncertain}</span>
                       </td>
                       <td className="num dim">{run.totalTokens === null ? "—" : fmtCount(run.totalTokens)}</td>
                       <td className="num dim">{fmtCost(run.cost)}</td>

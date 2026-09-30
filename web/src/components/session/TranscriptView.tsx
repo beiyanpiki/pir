@@ -1,8 +1,15 @@
 import { useMemo } from "react";
-import { CodeBlock } from "../CodeBlock";
 import { fmtClock, fmtCost, fmtCount } from "../../format";
-import type { AssistantMessage, SessionMessage, SessionTranscript, ToolCallBlock, ToolResultMessage, UserMessage } from "../../types";
-import { RawBlock, TextBlockView, ThinkingBlock, ToolCallView, UserPromptBlock } from "./blocks";
+import type {
+  AssistantMessage,
+  SessionMessage,
+  SessionTranscript,
+  SessionUsage,
+  ToolCallBlock,
+  ToolResultMessage,
+  UserMessage,
+} from "../../types";
+import { RawBlock, TextBlockView, ThinkingBlock, ToolCallView, UserBubble } from "./blocks";
 
 type RenderItem =
   | { type: "thinking"; text: string; redacted?: boolean }
@@ -11,32 +18,89 @@ type RenderItem =
   | { type: "user"; text: string }
   | { type: "raw"; label: string; value: unknown };
 
+type Turn =
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; items: RenderItem[] };
+
 /**
- * Renders one settled session transcript: the rendered prompt, then the final
- * SDK message list (thinking, text, tool calls with their results, in order).
+ * Renders one settled session transcript as a chat conversation: the prompt
+ * as a right-aligned user bubble, then assistant turns (thinking, markdown
+ * answers, inline tool cards) in flow order.
  */
 export function TranscriptView({ transcript }: { transcript: SessionTranscript }) {
-  const items = useMemo(() => buildItems(transcript.messages), [transcript]);
+  const turns = useMemo(() => groupTurns(buildItems(transcript.messages)), [transcript]);
 
   return (
-    <div className="chat">
-      <UserPromptBlock prompt={transcript.prompt} />
-      {items.map((item, index) => (
-        <TranscriptItem key={index} item={item} />
-      ))}
-      {transcript.usage && (
-        <div className="stat-row" style={{ marginTop: 4 }}>
-          <span className="stat"><b>{fmtCount(transcript.usage.totalTokens)}</b> tokens</span>
-          <span className="stat"><b>{fmtCost(transcript.usage.cost)}</b></span>
-          <span className="stat"><b>{transcript.usage.toolCalls ?? 0}</b> tool calls</span>
-          <span className="stat">in <b>{transcript.startedAt ? fmtClock(transcript.startedAt) : "—"}</b></span>
-          <span className="stat">out <b>{transcript.endedAt ? fmtClock(transcript.endedAt) : "—"}</b></span>
+    <div className="chat-flow">
+      <UserBubble text={transcript.prompt} />
+      {turns.map((turn, index) =>
+        turn.kind === "user" ? (
+          <UserBubble key={index} text={turn.text} />
+        ) : (
+          <AssistantTurn key={index} role={transcript.role} model={transcript.model}>
+            {turn.items.map((item, itemIndex) => (
+              <TranscriptItem key={itemIndex} item={item} />
+            ))}
+          </AssistantTurn>
+        ),
+      )}
+      <SessionFooter
+        usage={transcript.usage}
+        startedAt={transcript.startedAt}
+        endedAt={transcript.endedAt}
+        error={transcript.error}
+      />
+    </div>
+  );
+}
+
+/** One assistant turn: dsh style — small label row, then full-width content. */
+function AssistantTurn({
+  role,
+  model,
+  children,
+}: {
+  role: string;
+  model: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="assistant-turn">
+      <div className="assistant-label">
+        {role}
+        {model && model !== "(pi default)" && <span style={{ marginLeft: 8, opacity: 0.7 }}>{model}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SessionFooter({
+  usage,
+  startedAt,
+  endedAt,
+  error,
+}: {
+  usage?: SessionUsage;
+  startedAt?: string;
+  endedAt?: string;
+  error?: string;
+}) {
+  if (!usage && !error) return null;
+  return (
+    <>
+      {error && <div className="error-banner">session error: {error}</div>}
+      {usage && (
+        <div className="session-footer">
+          <span>{fmtCount(usage.totalTokens)} tokens</span>
+          <span>{fmtCost(usage.cost)}</span>
+          <span>{usage.toolCalls ?? 0} tool calls</span>
+          <span>
+            {fmtClock(startedAt)} → {fmtClock(endedAt)}
+          </span>
         </div>
       )}
-      {transcript.error && (
-        <div className="error-banner" style={{ marginBottom: 0 }}>session error: {transcript.error}</div>
-      )}
-    </div>
+    </>
   );
 }
 
@@ -54,7 +118,7 @@ function TranscriptItem({ item }: { item: RenderItem }) {
         />
       );
     case "user":
-      return <UserPromptBlock prompt={item.text} />;
+      return <UserBubble text={item.text} />;
     case "raw":
       return <RawBlock label={item.label} value={item.value} />;
   }
@@ -127,16 +191,23 @@ export function buildItems(messages: SessionMessage[]): RenderItem[] {
   return items;
 }
 
+/** Consecutive assistant items form one turn; user items stand alone. */
+function groupTurns(items: RenderItem[]): Turn[] {
+  const turns: Turn[] = [];
+  for (const item of items) {
+    if (item.type === "user") {
+      turns.push({ kind: "user", text: item.text });
+      continue;
+    }
+    const last = turns[turns.length - 1];
+    if (last && last.kind === "assistant") last.items.push(item);
+    else turns.push({ kind: "assistant", items: [item] });
+  }
+  return turns;
+}
+
 function userText(message: UserMessage): string {
   if (typeof message.content === "string") return message.content;
   const content = Array.isArray(message.content) ? message.content : [];
   return content.map((block) => (block.type === "text" ? block.text ?? "" : `[${block.type}]`)).join("\n");
-}
-
-export function TranscriptFallback({ file }: { file: string }) {
-  return (
-    <div className="empty-state" style={{ padding: 20 }}>
-      <CodeBlock code={`transcript unavailable: ${file}`} language="text" />
-    </div>
-  );
 }
