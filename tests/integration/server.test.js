@@ -117,6 +117,10 @@ test("server: cwd guard rejects escapes and injects the workspace default", asyn
 test("remote CLI: repo-context commands ship as a bundle and relay output", async (t) => {
   const { base, repo } = await withServer(t);
   const env = { ...process.env, PIR_NO_WIZARD: "1" };
+  // The standard client setup anchors project identity on an origin remote;
+  // a fixture without one coincides local and remote ids and would mask an
+  // identity divergence in the materialized worktree (dogfood F-26).
+  await execFileAsync("git", ["-C", repo.dir, "remote", "add", "origin", "https://github.com/example/pir-relay.git"]);
   // The server (this process) materializes the shipped bundle: keep its
   // repos/state roots out of the real user directories.
   const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-relay-repos-"));
@@ -289,6 +293,55 @@ test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree
     // The materialized repo has no remote-tracking refs — exactly why the
     // client must pin named refs to SHAs before forwarding.
     await assert.rejects(buildChangeSet(review.worktree, "origin/main", headCommit));
+  } finally {
+    await review.cleanup();
+  }
+});
+
+test("materializeFromBundle anchors the worktree identity on the client's origin remote", async (t) => {
+  // A bundle carries no remotes and the cache repo is built by init+fetch, so
+  // without an explicit origin the worktree-derived identity (which scopes
+  // every memory row) falls back to the "local" id while the project dir and
+  // the memory db are keyed by the remote-derived id — remote remember/
+  // feedback writes would silently never sync back (dogfood F-26).
+  const repo = createTempGitRepo("pir-identity-");
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-identity-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-identity-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  });
+
+  // The standard client setup the identity design anchors on: an origin remote.
+  const remoteUrl = "https://github.com/example/pir-identity.git";
+  await execFileAsync("git", ["-C", repo.dir, "remote", "add", "origin", remoteUrl]);
+  repo.write("src/a.ts", "export const a = 1;\n");
+  const headCommit = repo.commit("head change");
+
+  const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+  const { getRootCommit } = await import("../../dist/changes/git.js");
+  const { computeProjectIdentity } = await import("../../dist/memory/identity.js");
+  const rootCommit = await getRootCommit(repo.dir);
+
+  const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+  const { review } = await materializeFromBundle(bundle, {
+    remoteUrl,
+    rootCommit,
+    base: null,
+    head: headCommit,
+  });
+  try {
+    // What Memory.open derives inside the materialized worktree must be the
+    // exact id that keyed the project dir and the db file.
+    const identity = await computeProjectIdentity(review.worktree);
+    assert.equal(identity.remote, remoteUrl);
+    assert.equal(identity.projectId, projectIdFor(remoteUrl, rootCommit));
+    assert.notEqual(identity.projectId, projectIdFor(null, rootCommit), "must not fall back to the local id");
   } finally {
     await review.cleanup();
   }
