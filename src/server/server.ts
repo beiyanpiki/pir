@@ -9,6 +9,7 @@ import { sha256 } from "../core/types.js";
 import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
 import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
+import { isGitRepo } from "../changes/git.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +35,15 @@ const MAX_SYNC_BYTES = 64 * 1024 * 1024;
  * models/config/skill/serve have no business running against a worktree.
  */
 const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
+
+/**
+ * Commands the executor runs inside a repo context (runInContext →
+ * createAppContext). Keep in sync with that dispatch: /v1/exec requests for
+ * these against a non-git cwd fail with guidance instead of the raw
+ * createAppContext error — a stock serve workspace is an empty mount point,
+ * never a checkout, so they can never run there directly.
+ */
+const REPO_CONTEXT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
@@ -312,25 +322,47 @@ export async function startServer(input: {
   }
 
   async function handleExec(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    let argv: string[] | undefined;
     try {
       const body = await readBody(req);
       const parsed = JSON.parse(body) as { argv?: unknown };
       if (!Array.isArray(parsed.argv) || parsed.argv.some((a) => typeof a !== "string")) {
         throw new Error('body must be {"argv": [string, ...]}');
       }
-      const argv = parsed.argv as string[];
+      argv = parsed.argv as string[];
       if (argv.includes("serve")) {
         throw new Error("refusing to execute serve recursively");
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
+      // A repo-context command whose cwd is not a git repository cannot run
+      // (a stock serve workspace is an empty directory). --repo requests
+      // materialize a registered clone instead, so they are exempt, and
+      // `memory sync` is refused by the executor with its own (correct)
+      // client-side message. Paths escaping the workspace are left to the
+      // executor's cwdGuard, whose error is the more precise diagnosis.
+      const { positional, flags } = parseArgs(argv);
+      const command = positional[0];
+      const isMemorySync = command === "memory" && positional[1] === "sync";
+      if (command !== undefined && !isMemorySync && !flags.has("--repo") && REPO_CONTEXT_COMMANDS.has(command)) {
+        const cwd = path.resolve(parseArgs(effectiveArgv).flags.get("--cwd") as string);
+        const guard = path.resolve(input.workspace);
+        const insideWorkspace = cwd === guard || cwd.startsWith(guard + path.sep);
+        if (insideWorkspace && !(await isGitRepo(cwd))) {
+          throw new UsageError(
+            `not a git repository: ${cwd} — ${command} needs a repo context. ` +
+              "Run it from a checkout (a current remote client ships it to /v1/review " +
+              "automatically), or register one with `repos add` and pass --repo <name>",
+          );
+        }
+      }
       const logLines: string[] = [];
       const result = await enqueue(() =>
         executePirCommand(effectiveArgv, {
           cwdGuard: input.workspace,
           onLog: (message) => {
             logLines.push(message);
-            log(`${argv.join(" ")} :: ${message}`);
+            log(`${argv!.join(" ")} :: ${message}`);
           },
         }),
       );
@@ -345,7 +377,9 @@ export async function startServer(input: {
         res.end(JSON.stringify({ code: 2, output: "", log: [`pir: ${message}`, USAGE] }));
         return;
       }
-      log(`error: ${message}`);
+      // Failures log their argv too — the request is otherwise unrecoverable
+      // from the server log alone (body already consumed).
+      log(`error: ${argv ? `${argv.join(" ")} :: ` : ""}${message}`);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     }

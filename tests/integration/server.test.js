@@ -114,17 +114,33 @@ test("server: cwd guard rejects escapes and injects the workspace default", asyn
   delete process.env.PIR_STATE_IN_PROJECT;
 });
 
-test("remote CLI: pir --server relays argv, output and exit code", async (t) => {
+test("remote CLI: repo-context commands ship as a bundle and relay output", async (t) => {
   const { base, repo } = await withServer(t);
   const env = { ...process.env, PIR_NO_WIZARD: "1" };
+  // The server (this process) materializes the shipped bundle: keep its
+  // repos/state roots out of the real user directories.
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-relay-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-relay-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
 
-  // version/config/skill are client-side; memory status relays through /v1/exec.
+  // version/config/skill are client-side; memory status ships the caller's
+  // checkout to /v1/review (a stock /v1/exec workspace has no repo context)
+  // and runs against the project's central db.
   const { stdout } = await execFileAsync(
     process.execPath,
     [CLI, "--server", base, "--token", TOKEN, "--insecure", "memory", "status", "--json", "--cwd", repo.dir],
     { env, encoding: "utf8" },
   );
-  assert.equal(JSON.parse(stdout).command, "memory.status");
+  const envelope = JSON.parse(stdout);
+  assert.equal(envelope.command, "memory.status");
+  assert.match(envelope.data.dbPath, new RegExp(`^${stateRoot}/[0-9a-f]{64}/memory\\.sqlite$`));
 
   // Wrong token -> exit 3 with a clear message.
   await assert.rejects(
@@ -133,6 +149,46 @@ test("remote CLI: pir --server relays argv, output and exit code", async (t) => 
     ], { env, encoding: "utf8" }),
     (err) => err.code === 3,
   );
+});
+
+test("/v1/exec: repo-context commands on a non-git workspace fail with guidance, not an opaque 400", async (t) => {
+  // A stock serve deployment points the workspace at an empty directory.
+  const workspace = mkdtempSync(path.join(tmpdir(), "pir-empty-ws-"));
+  t.after(() => rmSync(workspace, { recursive: true, force: true }));
+  const handle = await startServer({
+    host: "127.0.0.1",
+    port: 0,
+    token: TOKEN,
+    workspace,
+    tls: null,
+  });
+  t.after(() => handle.close());
+  const base = handle.url;
+
+  const post = async (argv) =>
+    (
+      await fetch(`${base}/v1/exec`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({ argv }),
+      })
+    ).json();
+
+  // Usage-error semantics (code 2) plus actionable guidance — before the fix
+  // this was an HTTP 400 {"error":"not a git repository: <workspace>"}.
+  const guidance = await post(["memory", "status"]);
+  assert.equal(guidance.code, 2);
+  assert.ok(guidance.log.some((l) => l.includes("not a git repository") && l.includes("--repo")));
+
+  // Same for the rest of the repo-context family.
+  for (const argv of [["find"], ["findings", "list"], ["feedback", "F-1", "expected"], ["verify-fix", "F-1"]]) {
+    const body = await post(argv);
+    assert.equal(body.code, 2, `${argv.join(" ")} must be refused with guidance`);
+  }
+
+  // Commands that need no repo context still run on the empty workspace.
+  const repos = await post(["repos", "list"]);
+  assert.equal(repos.code, 0);
 });
 
 test("/v1/review rejects non-review commands before touching any bundle", async (t) => {

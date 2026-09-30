@@ -106,8 +106,21 @@ test("remote config forwards commands; version/config/skill stay client-side", a
     mode: "remote",
     server: { url: base, token: TOKEN },
   });
+  // The forwarded memory status ships a bundle; the server (this process)
+  // materializes it — keep its repos/state roots out of the real user dirs.
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-cfgcli-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-cfgcli-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
 
-  // memory status goes through /v1/exec on the server's workspace repo.
+  // memory status ships the caller's checkout to /v1/review and runs against
+  // the project's central db.
   const relayed = await pir(["memory", "status", "--json", "--cwd", repo.dir]);
   const parsed = JSON.parse(relayed.stdout);
   assert.equal(parsed.command, "memory.status");

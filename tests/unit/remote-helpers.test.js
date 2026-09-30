@@ -55,23 +55,39 @@ test("pinRefsToShas never touches --base/--head appearing as another flag's valu
   );
 });
 
-test("wantsBundle: a find or audit without --repo (either form) ships a bundle", () => {
+test("wantsBundle: any /v1/review command without --repo (either form) ships a bundle", () => {
   assert.equal(wantsBundle(["find", "--json"]), true);
   assert.equal(wantsBundle(["find"]), true);
   assert.equal(wantsBundle(["audit", "--json", "--path", "src"]), true);
   assert.equal(wantsBundle(["audit"]), true);
+  // The memory family needs the materialized worktree's repo context — a
+  // stock serve workspace has none (issue #28).
+  assert.equal(wantsBundle(["memory", "status"]), true);
+  assert.equal(wantsBundle(["memory", "bootstrap", "--model", "glm"]), true);
+  assert.equal(wantsBundle(["findings", "list", "--status", "open"]), true);
+  assert.equal(wantsBundle(["feedback", "F-1", "expected", "--note", "x"]), true);
+  assert.equal(wantsBundle(["remember", "project", "invariant", "--text", "x"]), true);
+  assert.equal(wantsBundle(["verify-fix", "F-1"]), true);
+  // memory sync always runs in the local process, never over the wire.
+  assert.equal(wantsBundle(["memory", "sync"]), false);
+  assert.equal(wantsBundle(["memory", "sync", "--dry-run"]), false);
+  // --repo selects a server-side registered clone via /v1/exec.
   assert.equal(wantsBundle(["find", "--repo", "demo"]), false);
   assert.equal(wantsBundle(["find", "--repo=demo"]), false);
   assert.equal(wantsBundle(["audit", "--repo", "demo"]), false);
-  assert.equal(wantsBundle(["memory", "status"]), false);
+  assert.equal(wantsBundle(["memory", "status", "--repo", "demo"]), false);
+  // Anything without a repo-context command keeps the /v1/exec route.
   assert.equal(wantsBundle(["--json"]), false);
+  assert.equal(wantsBundle(["repos", "list"]), false);
+  assert.equal(wantsBundle(["models"]), false);
 });
 
-test("wantsBundle: value flags before the command don't hide a find", () => {
+test("wantsBundle: value flags before the command don't hide the command", () => {
   // The old ad-hoc scan took "glm" for the command and misrouted to /v1/exec.
   assert.equal(wantsBundle(["--model", "glm-5.3", "find", "--json"]), true);
   assert.equal(wantsBundle(["--model=glm-5.3", "find"]), true);
-  assert.equal(wantsBundle(["--note", "--head", "feedback"]), false);
+  // "--head" is --note's value here, not a flag; the command is feedback.
+  assert.equal(wantsBundle(["--note", "--head", "feedback"]), true);
 });
 
 test("pinRefsToShas leaves a valueless --base/--head for parseArgs to reject", () => {
