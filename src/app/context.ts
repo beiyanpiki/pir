@@ -20,15 +20,27 @@ export interface AppContextOptions {
   noSyncIndex?: boolean;
   /** Test seam: custom sqlite location. */
   dbPath?: string;
+  /**
+   * Server read lane: open the memory db as a WAL reader (no migrations,
+   * no project-row insert) and skip index sync — the context serves pure
+   * reads and may run while a review holds single-writer access. The db
+   * file must already exist.
+   */
+  readOnlyMemory?: boolean;
 }
 
 export async function createAppContext(repoRoot: string, options: AppContextOptions = {}): Promise<AppContext> {
   if (!(await isGitRepo(repoRoot))) {
     throw new Error(`not a git repository: ${repoRoot}`);
   }
-  const memory = await Memory.open(repoRoot, options.dbPath ? { dbPath: options.dbPath } : {});
+  const memory = await Memory.open(repoRoot, {
+    ...(options.dbPath ? { dbPath: options.dbPath } : {}),
+    ...(options.readOnlyMemory ? { readOnly: true } : {}),
+  });
   const codeMapResult = await createCodeMap(repoRoot);
-  if (!codeMapResult.degraded && !options.noSyncIndex) {
+  // A reader must not sync the index either: ensureSynced writes the shared
+  // codegraph index a queued command may be relying on.
+  if (!codeMapResult.degraded && !options.noSyncIndex && !options.readOnlyMemory) {
     try {
       await codeMapResult.provider.ensureSynced();
     } catch {

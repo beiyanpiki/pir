@@ -154,6 +154,13 @@ export interface ExecOptions {
   cwdGuard?: string;
   /** Explicit sqlite location override (bundle/worktree server flows). */
   dbPath?: string;
+  /**
+   * Server read lane: open the memory db as a WAL reader (no migrations,
+   * no project-row insert, no index sync) so pure-read commands can run
+   * while a review holds single-writer access. The db file must already
+   * exist; callers route first contact through a normal (queued) open.
+   */
+  readOnlyMemory?: boolean;
 }
 
 interface ParsedArgs {
@@ -395,7 +402,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, multi, json, out, emit, log, null);
+  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, multi, json, out, emit, log, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
@@ -410,10 +417,12 @@ async function runInContext(
   emit: Emit,
   log: Log,
   materialized: import("../app/repos.js").MaterializedReview | null,
+  readOnlyMemory = false,
 ): Promise<ExecResult> {
   const ctx = await createAppContext(cwd, {
     noSyncIndex: Boolean(flags.get("--no-sync-index")),
     dbPath: ctxOptions.dbPath,
+    ...(readOnlyMemory ? { readOnlyMemory: true } : {}),
   });
 
   let code: number;

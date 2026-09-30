@@ -38,8 +38,11 @@ const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings",
 /**
  * HTTPS wrapper around the shared command executor. One request = one pir
  * invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns
- * {code, output, log}. Commands run serially — review sessions and the
- * sqlite store assume single-writer access per workspace.
+ * {code, output, log}. Mutating commands run serially — review sessions and
+ * the sqlite store assume single-writer access per workspace — but provably
+ * read-only ones (version, models, repos list) skip the queue entirely, and
+ * pure sqlite reads (memory status, findings list/show) run as WAL readers
+ * alongside the writer. See classifyExecLane.
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
@@ -90,17 +93,34 @@ export async function startServer(input: {
   };
 
   let queue: Promise<unknown> = Promise.resolve();
+  // Tasks that have been enqueued but not settled yet, with their arrival
+  // time — the basis for the /health queue observability.
+  const queuedAt = new Map<object, number>();
   const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
+    const id = {};
+    queuedAt.set(id, Date.now());
     const run = queue.then(task, task);
-    queue = run.catch(() => undefined);
+    // The chain tail never rejects and drops the bookkeeping entry on
+    // settle, whichever way the task went.
+    queue = run.then(
+      () => queuedAt.delete(id),
+      () => queuedAt.delete(id),
+    );
     return run;
+  };
+  const executorStats = (): { pending: number; oldestPendingMs: number } => {
+    let oldest: number | null = null;
+    for (const at of queuedAt.values()) if (oldest === null || at < oldest) oldest = at;
+    return { pending: queuedAt.size, oldestPendingMs: oldest === null ? 0 : Date.now() - oldest };
   };
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
     if (req.method === "GET" && url.pathname === "/health") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls) }));
+      res.end(
+        JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls), executor: executorStats() }),
+      );
       return;
     }
     if (
@@ -324,16 +344,21 @@ export async function startServer(input: {
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
+      const lane = await classifyExecLane(effectiveArgv, input.workspace);
       const logLines: string[] = [];
-      const result = await enqueue(() =>
-        executePirCommand(effectiveArgv, {
-          cwdGuard: input.workspace,
-          onLog: (message) => {
-            logLines.push(message);
-            log(`${argv.join(" ")} :: ${message}`);
-          },
-        }),
-      );
+      const execOptions = {
+        cwdGuard: input.workspace,
+        ...(lane === "readonly" ? { readOnlyMemory: true } : {}),
+        onLog: (message: string) => {
+          logLines.push(message);
+          log(`${argv.join(" ")} :: ${message}`);
+        },
+      };
+      // Only the queued lane joins the serial chain; the other two run
+      // alongside whatever the queue is busy with.
+      const result = await (lane === "queued"
+        ? enqueue(() => executePirCommand(effectiveArgv, execOptions))
+        : executePirCommand(effectiveArgv, execOptions));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
     } catch (err) {
@@ -376,6 +401,68 @@ function isAuthorizedRequest(header: unknown, token: string): boolean {
   const received = Buffer.from(header, "utf8");
   if (received.length !== expected.length) return false;
   return timingSafeEqual(received, expected);
+}
+
+type ExecLane = "unqueued" | "readonly" | "queued";
+
+/**
+ * Scheduling decision for a /v1/exec request. The serial queue exists
+ * because review sessions, worktree materialization and the memory db
+ * assume single-writer access — but that assumption only covers commands
+ * that write. Three groups don't need the queue:
+ *
+ * - "unqueued" — commands that touch no review worktree and no memory db:
+ *   version, help, models, and `repos list` (a pure registry read; the
+ *   registry is an atomic-rename file guarded by its own cross-process
+ *   lock). They answer instantly no matter what the queue is running.
+ * - "readonly" — pure sqlite reads (`memory status`, `findings list/show`)
+ *   served as WAL readers alongside the single writer. First contact (no
+ *   db yet, or one missing the current migrations) falls back to "queued"
+ *   so the db is created and migrated under the queue, as before.
+ * - everything else — "queued". That deliberately includes `repos add` /
+ *   `repos remove`: the registry writes are lock-protected, but add/remove
+ *   also clone into, fetch into and rmSync the shared per-project dirs
+ *   under PIR_REPOS_ROOT — the same dirs bundle reviews materialize from —
+ *   so un-queuing them without per-project locks could break an in-flight
+ *   review.
+ *
+ * Exported for tests; the lane only picks a scheduling order, never
+ * validation (usage errors surface from the queued executor path).
+ */
+export async function classifyExecLane(effectiveArgv: string[], workspace: string): Promise<ExecLane> {
+  let parsed;
+  try {
+    parsed = parseArgs(effectiveArgv);
+  } catch {
+    return "queued"; // usage errors surface from the queued executor path
+  }
+  const command = parsed.positional[0];
+  // --repo materializes a worktree under PIR_REPOS_ROOT: queue it.
+  if (parsed.flags.get("--repo")) return "queued";
+  if (command === undefined || command === "help" || command === "version" || command === "models") {
+    return "unqueued";
+  }
+  if (command === "repos") {
+    return (parsed.positional[1] ?? "list") === "list" ? "unqueued" : "queued";
+  }
+  const isReadCommand =
+    (command === "memory" && (parsed.positional[1] ?? "status") === "status") ||
+    (command === "findings" && ["list", "show"].includes(parsed.positional[1] ?? "list"));
+  if (!isReadCommand) return "queued";
+  // A read stays off the queue only when its db is already there to be
+  // read; anything else (missing db, --cwd escaping the workspace, identity
+  // trouble) goes through the queued path, which reports or creates as
+  // before.
+  try {
+    const cwd = typeof parsed.flags.get("--cwd") === "string" ? (parsed.flags.get("--cwd") as string) : workspace;
+    const resolved = path.resolve(cwd);
+    const guard = path.resolve(workspace);
+    if (resolved !== guard && !resolved.startsWith(guard + path.sep)) return "queued";
+    const { memoryDbReadyForRead } = await import("../memory/index.js");
+    return (await memoryDbReadyForRead(resolved)) ? "readonly" : "queued";
+  } catch {
+    return "queued";
+  }
 }
 
 function parseServeArgs(argv: string[]): ServeOptions {

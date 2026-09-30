@@ -198,16 +198,31 @@ When transport resolves to remote:
 
 | Route | Body | Behavior |
 |---|---|---|
-| `GET /health` | — | `{ok, version, tls}` |
+| `GET /health` | — | `{ok, version, tls, executor: {pending, oldestPendingMs}}` |
 | `POST /v1/exec` | `{argv}` | Runs `executePirCommand` under `cwdGuard: workspace`; refuses recursive `serve`; `UsageError` → HTTP 200 with `code:2` |
 | `POST /v1/review` | `{rootCommit, base?, head, bundleBase64, argv?}` | Whitelisted commands (`find memory findings feedback remember verify-fix`); materializes the bundle and reviews it in a throwaway worktree; thin-bundle miss → `{needFull:true}` |
 | `POST /v1/memory/sync` | `{projectId, snapshot, dryRun?}` | Re-derives `projectId` from `normalizedRemote+rootCommit` (a token holder cannot clobber another project); merges snapshots server-side |
 
 - **Auth**: bearer token, `timingSafeEqual`. No token configured = open
   endpoint (warned at startup).
-- **Serialization**: every POST runs through one promise queue — review
-  sessions and the SQLite store assume single-writer access. A `/v1/review`
-  holds its queue slot across materialize + execute + cleanup.
+- **Serialization**: commands that write run through one promise queue —
+  review sessions and the SQLite store assume single-writer access. A
+  `/v1/review` holds its queue slot across materialize + execute + cleanup.
+  `/v1/exec` classifies into three lanes (`classifyExecLane` in
+  `src/server/server.ts`):
+  - **unqueued** — commands touching no worktree and no memory db
+    (`version`, `help`, `models`, `repos list`): answer immediately while
+    the queue is busy;
+  - **readonly** — pure sqlite reads (`memory status`,
+    `findings list|show`) served as WAL readers alongside the writer;
+    first contact (no db, or stale migrations) falls back to the queued
+    lane so the db is created under the queue;
+  - **queued** — everything else, including `repos add/remove` (their
+    clone/fetch/purge operations share the per-project dirs under
+    `PIR_REPOS_ROOT` with bundle reviews).
+- **Observability**: `/health` reports `executor.pending` (queued + running
+  tasks) and `executor.oldestPendingMs` (age of the oldest unsettled task),
+  so "hung behind a review" is visible from the outside.
 - **Limits**: body 1 MB, bundle 256 MB, sync payload 64 MB.
 - **TLS**: `--cert/--key` > `PIR_TLS_CERT`/`PIR_TLS_KEY` > self-signed pair
   generated with openssl (persisted, 3650 days) > plain HTTP only when
