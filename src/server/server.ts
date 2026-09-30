@@ -42,7 +42,8 @@ const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings",
  * the sqlite store assume single-writer access per workspace — but provably
  * read-only ones (version, models, repos list) skip the queue entirely, and
  * pure sqlite reads (memory status, findings list/show) run as WAL readers
- * alongside the writer. See classifyExecLane.
+ * alongside the writer. Both fast lanes share a small concurrency cap. See
+ * classifyExecLane.
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
@@ -113,6 +114,13 @@ export async function startServer(input: {
     for (const at of queuedAt.values()) if (oldest === null || at < oldest) oldest = at;
     return { pending: queuedAt.size, oldestPendingMs: oldest === null ? 0 : Date.now() - oldest };
   };
+
+  // Fast-lane requests (unqueued + readonly) run outside the serial queue,
+  // so they need their own bound: each one spawns git/codegraph subprocesses
+  // and opens sqlite, and an unbounded flood would exhaust process/file
+  // descriptors and starve the queued reviews (F-19). FIFO, so bursts drain
+  // in arrival order.
+  const fastLane = createFastLaneLimiter(FAST_LANE_CONCURRENCY);
 
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
@@ -344,7 +352,18 @@ export async function startServer(input: {
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
-      const lane = await classifyExecLane(effectiveArgv, input.workspace);
+      // Two-step scheduling: the cheap classification is pure; only the
+      // readonly candidate needs the (subprocess-spawning) db probe, which
+      // runs under the fast-lane cap. Probe and execution take the cap as
+      // two separate slots so a candidate that degrades to "queued" never
+      // holds a fast slot while waiting behind a long review.
+      const cheap = cheapExecLane(effectiveArgv);
+      const lane: ExecLane =
+        cheap === "readonly-candidate"
+          ? (await fastLane.run(() => readonlyLaneReady(effectiveArgv, input.workspace)))
+            ? "readonly"
+            : "queued"
+          : cheap;
       const logLines: string[] = [];
       const execOptions = {
         cwdGuard: input.workspace,
@@ -355,10 +374,10 @@ export async function startServer(input: {
         },
       };
       // Only the queued lane joins the serial chain; the other two run
-      // alongside whatever the queue is busy with.
+      // alongside whatever the queue is busy with, under the fast-lane cap.
       const result = await (lane === "queued"
         ? enqueue(() => executePirCommand(effectiveArgv, execOptions))
-        : executePirCommand(effectiveArgv, execOptions));
+        : fastLane.run(() => executePirCommand(effectiveArgv, execOptions)));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
     } catch (err) {
@@ -405,6 +424,33 @@ function isAuthorizedRequest(header: unknown, token: string): boolean {
 
 type ExecLane = "unqueued" | "readonly" | "queued";
 
+/** Max concurrent fast-lane (unqueued + readonly) executions per server. */
+const FAST_LANE_CONCURRENCY = 16;
+
+/**
+ * FIFO counting semaphore bounding concurrent fast-lane work. Exported for
+ * tests.
+ */
+export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Promise<T>): Promise<T> } {
+  if (!Number.isInteger(capacity) || capacity < 1) {
+    throw new RangeError(`fast-lane capacity must be a positive integer, got ${capacity}`);
+  }
+  let active = 0;
+  const waiters: Array<() => void> = [];
+  return {
+    async run<T>(task: () => Promise<T>): Promise<T> {
+      if (active >= capacity) await new Promise<void>((resolve) => waiters.push(resolve));
+      active++;
+      try {
+        return await task();
+      } finally {
+        active--;
+        waiters.shift()?.();
+      }
+    },
+  };
+}
+
 /**
  * Scheduling decision for a /v1/exec request. The serial queue exists
  * because review sessions, worktree materialization and the memory db
@@ -430,6 +476,17 @@ type ExecLane = "unqueued" | "readonly" | "queued";
  * validation (usage errors surface from the queued executor path).
  */
 export async function classifyExecLane(effectiveArgv: string[], workspace: string): Promise<ExecLane> {
+  const cheap = cheapExecLane(effectiveArgv);
+  if (cheap !== "readonly-candidate") return cheap;
+  return (await readonlyLaneReady(effectiveArgv, workspace)) ? "readonly" : "queued";
+}
+
+/**
+ * The subprocess-free half of the classification. "readonly-candidate"
+ * marks a read command whose db still has to be probed (the probe spawns
+ * git) before it may run off-queue.
+ */
+function cheapExecLane(effectiveArgv: string[]): ExecLane | "readonly-candidate" {
   let parsed;
   try {
     parsed = parseArgs(effectiveArgv);
@@ -448,20 +505,27 @@ export async function classifyExecLane(effectiveArgv: string[], workspace: strin
   const isReadCommand =
     (command === "memory" && (parsed.positional[1] ?? "status") === "status") ||
     (command === "findings" && ["list", "show"].includes(parsed.positional[1] ?? "list"));
-  if (!isReadCommand) return "queued";
-  // A read stays off the queue only when its db is already there to be
-  // read; anything else (missing db, --cwd escaping the workspace, identity
-  // trouble) goes through the queued path, which reports or creates as
-  // before.
+  return isReadCommand ? "readonly-candidate" : "queued";
+}
+
+/**
+ * The db probe that upgrades a readonly candidate to the readonly lane: a
+ * read stays off the queue only when its db is already there to be read.
+ * Anything else (missing db, --cwd escaping the workspace, identity
+ * trouble) goes through the queued path, which reports or creates as
+ * before.
+ */
+async function readonlyLaneReady(effectiveArgv: string[], workspace: string): Promise<boolean> {
   try {
+    const parsed = parseArgs(effectiveArgv);
     const cwd = typeof parsed.flags.get("--cwd") === "string" ? (parsed.flags.get("--cwd") as string) : workspace;
     const resolved = path.resolve(cwd);
     const guard = path.resolve(workspace);
-    if (resolved !== guard && !resolved.startsWith(guard + path.sep)) return "queued";
+    if (resolved !== guard && !resolved.startsWith(guard + path.sep)) return false;
     const { memoryDbReadyForRead } = await import("../memory/index.js");
-    return (await memoryDbReadyForRead(resolved)) ? "readonly" : "queued";
+    return await memoryDbReadyForRead(resolved);
   } catch {
-    return "queued";
+    return false; // identity/git problems: let the queued path report them
   }
 }
 

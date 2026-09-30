@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { classifyExecLane } from "../../dist/server/server.js";
+import { classifyExecLane, createFastLaneLimiter } from "../../dist/server/server.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 
 const DEFAULT_WS = "/srv/workspace";
@@ -107,4 +107,42 @@ test("lane: --cwd escaping the workspace stays queued (executor reports it)", as
   const memory = await Memory.open(repo.dir);
   memory.close();
   assert.equal(await lane(["memory", "status", "--cwd", "/etc"], repo.dir), "queued");
+});
+
+test("fast-lane limiter caps concurrency and drains FIFO (F-19)", async () => {
+  const limiter = createFastLaneLimiter(2);
+  let active = 0;
+  let peak = 0;
+  const started = [];
+  const task = (id) =>
+    limiter.run(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      started.push(id);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      active--;
+      return id;
+    });
+  const results = await Promise.all([task(1), task(2), task(3), task(4), task(5)]);
+  assert.deepEqual(results, [1, 2, 3, 4, 5]);
+  assert.ok(peak <= 2, `concurrency peaked at ${peak}, cap is 2`);
+  assert.deepEqual(started, [1, 2, 3, 4, 5], "waiters start in arrival order");
+});
+
+test("fast-lane limiter releases the slot when a task rejects", async () => {
+  const limiter = createFastLaneLimiter(1);
+  await assert.rejects(limiter.run(async () => {
+    throw new Error("boom");
+  }), /boom/);
+  // The slot must be free: a follow-up task runs without waiting.
+  const value = await Promise.race([
+    limiter.run(() => Promise.resolve("ok")),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("slot not released")), 500)),
+  ]);
+  assert.equal(value, "ok");
+});
+
+test("fast-lane limiter rejects non-positive capacity", () => {
+  assert.throws(() => createFastLaneLimiter(0), RangeError);
+  assert.throws(() => createFastLaneLimiter(1.5), RangeError);
 });

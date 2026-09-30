@@ -220,6 +220,10 @@ When transport resolves to remote:
   - **queued** — everything else, including `repos add/remove` (their
     clone/fetch/purge operations share the per-project dirs under
     `PIR_REPOS_ROOT` with bundle reviews).
+  Both fast lanes share a small FIFO concurrency cap (16 per server):
+  each fast request spawns git/codegraph subprocesses and opens sqlite,
+  so an unbounded flood must not be able to exhaust process/file
+  descriptors and starve the queued reviews.
 - **Observability**: `/health` reports `executor.pending` (queued + running
   tasks) and `executor.oldestPendingMs` (age of the oldest unsettled task),
   so "hung behind a review" is visible from the outside.
