@@ -58,3 +58,19 @@ test("remote: a slow-headers server within PIR_REMOTE_TIMEOUT completes instead 
   });
   assert.equal(stdout, "");
 });
+
+test("remote: a malformed PIR_REMOTE_TIMEOUT is a usage error, not an unreachable server (dogfood F-20)", async (t) => {
+  // No server needed: the failure happens in dispatcher construction, before
+  // any connection attempt. It must exit 2 with the usage block — the
+  // transport catches used to swallow the UsageError and print
+  // "pir: cannot reach <origin>: PIR_REMOTE_TIMEOUT must be ..." with exit 3.
+  const failure = await execFileAsync(process.execPath, [CLI, "models", "--ids", "--server", "http://127.0.0.1:1"], {
+    env: { ...process.env, PIR_REMOTE_TIMEOUT: "18O" },
+  }).then(
+    () => assert.fail("expected the CLI to fail"),
+    (err) => err,
+  );
+  assert.equal(failure.code, 2);
+  assert.match(failure.stderr, /pir: PIR_REMOTE_TIMEOUT must be a non-negative integer number of seconds/);
+  assert.doesNotMatch(failure.stderr, /cannot reach/);
+});

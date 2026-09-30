@@ -20,6 +20,11 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
     // short-lived so the blast radius is this invocation only.
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
+  // Build the dispatcher up front: an invalid PIR_REMOTE_TIMEOUT must surface
+  // as a UsageError here (exit 2 + usage text in cli.ts), not be swallowed by
+  // the transport-error catches below and misreported as an unreachable
+  // server (dogfood F-20).
+  remoteDispatcher();
   const url = new URL(serverUrl);
   const cleaned = stripClientFlags(argv);
 
