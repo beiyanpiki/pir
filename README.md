@@ -103,6 +103,13 @@ pir --local find --json                           # one-off override, either dir
 pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
 ```
 
+**Long remote tasks:** the server runs commands serially, and a remote find or
+audit can legitimately take many minutes — the client waits up to 30 minutes
+for an answer, overriding Node/undici's 5-minute default that used to abort
+longer tasks with a bare `fetch failed`. Raise, lower or disable the wait with
+`PIR_REMOTE_TIMEOUT` (seconds; `0` = no limit), e.g. `PIR_REMOTE_TIMEOUT=7200`
+for hour-scale audits.
+
 **Memory sync (local ⇄ server):** memories accumulated on your machine and on
 a `pir serve` instance are separate SQLite DBs keyed by the same projectId.
 `pir memory sync` merges them bidirectionally — both sides converge, and rows

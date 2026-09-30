@@ -59,20 +59,25 @@ function execCodegraph(args: string[], options: { stdin?: string; timeoutMs?: nu
   });
 }
 
+// Known "no index here" wordings from codegraph 1.6.0: `CodeGraph not
+// initialized in …`, `no .codegraph/ index exists in …`, and the quoted
+// `Run "codegraph init" …` advice. Matched by shape, not by bare substring —
+// an unquoted `codegraph init` also shows up in hard-failure hints (e.g.
+// index-corruption suggesting `codegraph init --force`) that a re-init will
+// not fix and must stay classified as `failed`.
+const NOT_INITIALIZED_RE = /not initialized|no \.codegraph[/-] index exists|run ["']codegraph init["']/i;
+
+function classifyExit(args: string[], result: ExecResult): void {
+  if (result.code === 0) return;
+  if (NOT_INITIALIZED_RE.test(result.stderr)) {
+    throw new CodeMapError("codegraph index not initialized for this project", "not_initialized");
+  }
+  throw new CodeMapError(`codegraph ${args[0]} exited ${result.code}: ${result.stderr.trim()}`, "failed");
+}
+
 async function runJson<T>(args: string[], options: { stdin?: string; timeoutMs?: number } = {}): Promise<T> {
-  let result: ExecResult;
-  try {
-    result = await execCodegraph(args, options);
-  } catch (err) {
-    throw err;
-  }
-  if (result.code !== 0) {
-    const lower = result.stderr.toLowerCase();
-    if (lower.includes("not initialized") || lower.includes("run 'codegraph init'")) {
-      throw new CodeMapError("codegraph index not initialized for this project", "not_initialized");
-    }
-    throw new CodeMapError(`codegraph ${args[0]} exited ${result.code}: ${result.stderr.trim()}`, "failed");
-  }
+  const result = await execCodegraph(args, options);
+  classifyExit(args, result);
   try {
     return JSON.parse(result.stdout) as T;
   } catch {
@@ -148,7 +153,8 @@ export class CodeGraphCliAdapter implements CodeMapProvider {
   constructor(private readonly repoRoot: string) {}
 
   async status(): Promise<IndexStatus> {
-    const payload = await runJson<StatusPayload>(["status", "-j", "-p", this.repoRoot]);
+    // codegraph 1.6.0 `status` takes only -j plus a positional path — no -p.
+    const payload = await runJson<StatusPayload>(["status", "-j", this.repoRoot]);
     return {
       initialized: payload.initialized === true,
       available: true,
@@ -165,7 +171,9 @@ export class CodeGraphCliAdapter implements CodeMapProvider {
     const current = await this.status();
     if (!current.initialized) return current;
     if (current.pendingChanges > 0) {
-      await runJson<unknown>(["sync", "-p", this.repoRoot], { timeoutMs: SYNC_TIMEOUT_MS });
+      // `sync` has no -p and never emits JSON: -q + positional path, judge by exit code.
+      const result = await execCodegraph(["sync", "-q", this.repoRoot], { timeoutMs: SYNC_TIMEOUT_MS });
+      classifyExit(["sync"], result);
       return this.status();
     }
     return current;

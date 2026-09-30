@@ -584,3 +584,126 @@ test("/v1/review materializes a client bundle into a worktree (unpushed code pat
   assert.ok(existsSync(envelopeBody.data.dbPath));
   repo.cleanup();
 });
+
+// ---------------------------------------------------------------------------
+// Executor scheduling lanes (issue #31): a long review must not hang light
+// commands; /health makes the queue visible.
+// ---------------------------------------------------------------------------
+
+async function postExec(base, argv) {
+  const response = await fetch(`${base}/v1/exec`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ argv }),
+  });
+  assert.equal(response.status, 200);
+  return await response.json();
+}
+
+test("/health reports executor queue stats (issue #31)", async (t) => {
+  const { base } = await withServer(t);
+  const health = await (await fetch(`${base}/health`)).json();
+  assert.equal(health.ok, true);
+  // Nothing in flight: the queue is observable and empty.
+  assert.deepEqual(health.executor, { pending: 0, oldestPendingMs: 0 });
+});
+
+test("light commands answer while a /v1/review holds the queue (issue #31)", async (t) => {
+  const { base } = await withServer(t);
+  const reposRoot = mkdtempSync(path.join(tmpdir(), "pir-lane-repos-"));
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-lane-state-"));
+  process.env.PIR_REPOS_ROOT = reposRoot;
+  process.env.PIR_STATE_ROOT = stateRoot;
+  t.after(() => {
+    delete process.env.PIR_REPOS_ROOT;
+    delete process.env.PIR_STATE_ROOT;
+    rmSync(reposRoot, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  });
+
+  // First contact: the workspace has no memory db yet, so memory status
+  // takes the queued lane, creates the db, and reports it.
+  const first = await postExec(base, ["memory", "status", "--json"]);
+  assert.equal(first.code, 0, JSON.stringify(first));
+  const firstStatus = JSON.parse(first.output).data;
+  assert.ok(existsSync(firstStatus.dbPath), "first memory status creates the workspace db");
+
+  // A review with real git work: 80 commits of distinct content, so
+  // materialize + status + worktree cleanup hold the queue for a while.
+  const reviewRepo = createTempGitRepo("pir-lane-review-");
+  for (let i = 0; i < 80; i++) {
+    reviewRepo.write(`src/mod${i}.ts`, `// module ${i}\n` + `export const v${i} = ${i};\n`.repeat(30));
+    reviewRepo.commit(`commit ${i}`);
+  }
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const { getHeadCommit, getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+  const [head, rootCommit, remoteUrl] = await Promise.all([
+    getHeadCommit(reviewRepo.dir),
+    getRootCommit(reviewRepo.dir),
+    getRemoteUrl(reviewRepo.dir),
+  ]);
+  const bundle = await createBundle(reviewRepo.dir, { base: null, head });
+  const postReview = () =>
+    fetch(`${base}/v1/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        remoteUrl,
+        rootCommit,
+        base: null,
+        head,
+        bundleBase64: bundle.toString("base64"),
+        argv: ["memory", "status", "--json"],
+      }),
+    }).then((response) => response.json());
+
+  // Two back-to-back reviews keep the queue busy long enough to observe.
+  // The no-op catch keeps an early assertion failure from also producing an
+  // unhandled rejection when the server closes under the in-flight reviews.
+  const reviews = Promise.all([postReview(), postReview()]);
+  reviews.catch(() => {});
+
+  // Wait until a review actually occupies the queue — /health sees it.
+  const deadline = Date.now() + 15_000;
+  let occupied = false;
+  while (Date.now() < deadline) {
+    const health = await (await fetch(`${base}/health`)).json();
+    if (health.executor.pending >= 1) {
+      occupied = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(occupied, "the review should occupy the executor queue (health.executor.pending)");
+
+  // The commands from the issue: all of them answer while the reviews are
+  // still holding the queue...
+  const fast = await Promise.all([
+    postExec(base, ["version", "--json"]),
+    postExec(base, ["repos", "list"]),
+    postExec(base, ["memory", "status", "--json"]),
+    postExec(base, ["findings", "list", "--json"]),
+  ]);
+
+  // ...and the queue is still busy afterwards — proof the fast commands
+  // did not wait behind the reviews.
+  const healthAfter = await (await fetch(`${base}/health`)).json();
+  assert.ok(
+    healthAfter.executor.pending >= 1,
+    "reviews must still be in the queue after the light commands answered",
+  );
+  for (const result of fast) {
+    assert.equal(result.code, 0, JSON.stringify(result));
+  }
+
+  // The off-queue memory status read the same db the first (queued) one created.
+  const fastStatus = JSON.parse(fast[2].output).data;
+  assert.equal(fastStatus.projectId, firstStatus.projectId);
+  assert.equal(fastStatus.dbPath, firstStatus.dbPath);
+
+  const payloads = await reviews;
+  for (const payload of payloads) {
+    assert.equal(payload.code, 0, JSON.stringify(payload));
+  }
+  reviewRepo.cleanup();
+});
