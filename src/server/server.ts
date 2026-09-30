@@ -9,6 +9,9 @@ import { sha256 } from "../core/types.js";
 import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
 import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
+import { createWebUi, defaultWebRoot } from "./web.js";
+import { LiveRegistry } from "./live-registry.js";
+import { pirStateBase } from "./web-store.js";
 import { isGitRepo } from "../changes/git.js";
 
 const execFileAsync = promisify(execFile);
@@ -21,6 +24,8 @@ export interface ServeOptions {
   token?: string;
   /** Requests' --cwd must resolve under this directory. */
   workspace?: string;
+  /** Serve the read-only web UI (same as PIR_WEB_UI=1). */
+  web?: boolean;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -61,12 +66,32 @@ export async function runServe(argv: string[]): Promise<void> {
   const port = options.port ?? 8790;
   const token = options.token ?? process.env.PIR_SERVER_TOKEN;
   const workspace = path.resolve(options.workspace ?? process.env.PIR_WORKSPACE ?? process.cwd());
-  const handle = await startServer({ host, port, token, workspace, tls: await resolveTls(options) });
+  // Optional read-only web UI: PIR_WEB_UI=1 or --web. A dedicated token keeps
+  // view access decoupled from executor access; without one the UI only opens
+  // on loopback binds.
+  const webEnabled = options.web ?? ["1", "true"].includes(process.env.PIR_WEB_UI ?? "");
+  let webUi: { token?: string; stateRoot: string; webRoot: string } | undefined;
+  if (webEnabled) {
+    process.env.PIR_TRANSCRIPTS ??= "1";
+    const loopback = ["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"].includes(host);
+    const webToken = process.env.PIR_WEB_UI_TOKEN;
+    if (webToken || loopback) {
+      webUi = { ...(webToken ? { token: webToken } : {}), stateRoot: pirStateBase(), webRoot: defaultWebRoot() };
+    }
+  }
+  const handle = await startServer({ host, port, token, workspace, tls: await resolveTls(options), ...(webUi ? { webUi } : {}) });
   const log = handle.log;
 
   log(
     `listening on ${handle.url} | workspace ${workspace} | auth ${token ? "bearer" : "NONE"} | tls ${handle.tls ? "on" : "OFF"}`,
   );
+  if (webEnabled) {
+    if (webUi) {
+      log(`web ui on at / (auth ${webUi.token ? "PIR_WEB_UI_TOKEN" : "loopback open — set PIR_WEB_UI_TOKEN to require a token"}) | transcripts default on`);
+    } else {
+      log("WARNING: web ui disabled — PIR_WEB_UI_TOKEN is not set and the bind address is not loopback");
+    }
+  }
   if (!handle.tls) {
     log("WARNING: serving plain HTTP (no cert/key and no openssl available)");
   }
@@ -98,6 +123,8 @@ export async function startServer(input: {
   token?: string;
   workspace: string;
   tls: TlsMaterial | null;
+  /** Read-only web UI configuration; absent keeps the classic JSON-only server. */
+  webUi?: { token?: string; stateRoot: string; webRoot: string };
 }): Promise<ServerHandle> {
   const log = (message: string): void => {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] ${message}\n`);
@@ -132,6 +159,15 @@ export async function startServer(input: {
   // in arrival order.
   const fastLane = createFastLaneLimiter(FAST_LANE_CONCURRENCY);
 
+  // The web tier observes runs; it never joins the executor's serialization
+  // queue — its sqlite reads are read-only WAL readers, not writers.
+  let webRegistry: LiveRegistry | undefined;
+  let webHandler: ReturnType<typeof createWebUi> | undefined;
+  if (input.webUi) {
+    webRegistry = new LiveRegistry();
+    webHandler = createWebUi({ ...input.webUi, registry: webRegistry });
+  }
+
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
     if (req.method === "GET" && url.pathname === "/health") {
@@ -158,6 +194,24 @@ export async function startServer(input: {
         void handleExec(req, res);
       }
       return;
+    }
+    // /v1/* and /health stay JSON-only; everything else GET falls through to
+    // the web UI when it is mounted. The guard is load-bearing: an exception
+    // thrown synchronously by a request handler would take down the whole
+    // serve process (executor included), so the web tier answers 500 instead.
+    if (webHandler && !url.pathname.startsWith("/v1/") && url.pathname !== "/health") {
+      try {
+        if (webHandler.handle(req, res, url, req.method ?? "GET")) return;
+      } catch (err) {
+        log(`web error: ${err instanceof Error ? err.message : String(err)}`);
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "internal error" }));
+        } else {
+          res.end();
+        }
+        return;
+      }
     }
     res.writeHead(404, { "content-type": "application/json" });
     res.end(
@@ -439,7 +493,10 @@ export async function startServer(input: {
     url: `${input.tls ? "https" : "http"}://${input.host}:${actualPort}`,
     tls: Boolean(input.tls),
     log,
-    close: () => server.close(),
+    close: () => {
+      server.close();
+      webRegistry?.dispose();
+    },
   };
 }
 
@@ -573,13 +630,14 @@ function parseServeArgs(argv: string[]): ServeOptions {
       i += 1;
       return v;
     };
-    if (token === "--host") options.host = value();
-    else if (token === "--port") options.port = Number(value());
-    else if (token === "--cert") options.cert = value();
-    else if (token === "--key") options.key = value();
-    else if (token === "--token") options.token = value();
-    else if (token === "--workspace") options.workspace = value();
-    else throw new UsageError(`unknown serve option: ${token}`);
+      if (token === "--host") options.host = value();
+      else if (token === "--port") options.port = Number(value());
+      else if (token === "--cert") options.cert = value();
+      else if (token === "--key") options.key = value();
+      else if (token === "--token") options.token = value();
+      else if (token === "--workspace") options.workspace = value();
+      else if (token === "--web") options.web = true;
+      else throw new UsageError(`unknown serve option: ${token}`);
   }
   return options;
 }

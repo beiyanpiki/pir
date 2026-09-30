@@ -35,6 +35,11 @@ A `head` that is a well-formed commit id but missing from the shipped bundle
 fails the request with 400 — a client/bundle mismatch is never silently
 reviewed away. `argv` must be an array of strings when present.
 
+Optional: `PIR_WEB_UI=1` + `PIR_WEB_UI_TOKEN` (or `--web`) hosts a strictly
+read-only browser explorer at `/` (projects → runs → full session timelines
+with live SSE for in-flight runs). It never reaches the executor; viewer
+auth is decoupled from `PIR_SERVER_TOKEN`.
+
 ---
 
 ## Part 1 — QA before deploying

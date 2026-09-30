@@ -172,6 +172,39 @@ review/verify sessions: `--model <provider>/<model>` flag (fuzzy ids work) >
 instead: `-e PI_API_KEY__deepseek=sk-...` (or `PI_AUTH_JSON` with the full
 map) plus `PI_DEFAULT_PROVIDER`/`PI_DEFAULT_MODEL` for the default.
 
+## Web UI (read-only run explorer)
+
+`pir serve` can host a browser UI that visualizes every review run: projects
+in the sidebar, one run per review request, and the full execution timeline —
+each reviewer round and per-candidate verifier session with prompts,
+thinking, markdown output, and every tool call (arguments + results). It is
+strictly read-only: there is no way to start a review from the browser.
+
+```bash
+PIR_WEB_UI=1 PIR_WEB_UI_TOKEN=<viewer-token> pir serve --web   # https://<host>:8790/
+```
+
+- **Off by default.** `PIR_WEB_UI=1` (or `--web`) mounts the UI at `/`;
+  the JSON API (`/v1/*`, `/health`) is untouched and `/api/*` never reaches
+  the executor. Mutating verbs on `/api` answer 405.
+- **Separate viewer token.** The UI uses `PIR_WEB_UI_TOKEN`, independent of
+  `PIR_SERVER_TOKEN`, so view access can be handed out without executor
+  access. Without a token the UI only opens on loopback binds.
+- **Live + historical.** Runs executing in the serve process stream live
+  (thinking/tool calls over SSE); finished runs are replayed from their
+  transcripts. Runs from before `PIR_TRANSCRIPTS` still show findings from
+  repository memory, with a note that no timeline exists. Local CLI runs
+  (other processes) appear after they finish — live view covers serve-executed
+  runs only.
+- **Transcripts auto-enable.** With the UI on, `PIR_TRANSCRIPTS` defaults to
+  `1` (set `0` to opt out); each run also records a `run.json` manifest
+  (rounds, plugins, usage, coverage) next to its transcripts.
+- In docker-compose: set `PIR_WEB_UI=1` and `PIR_WEB_UI_TOKEN` in `.env`.
+
+The SPA builds from `web/` (React + Vite, no runtime dependencies) into
+`dist/web`; see [web/README.md](web/README.md) for the dev workflow
+(`npm run dev:web` proxies `/api` to a local `pir serve`).
+
 ## For LLMs
 
 Deploying or operating pir on a user's behalf? Read

@@ -269,7 +269,10 @@ export class PiSessionFactory implements AgentSessionFactory {
       // serializes builtins; custom collector tools have sequential overrides.
       activeSession.agent.toolExecution = "sequential";
       const calls = createToolCallTracker();
-      unsubscribe = activeSession.subscribe((event) => calls.observe(event));
+      unsubscribe = activeSession.subscribe((event) => {
+        calls.observe(event);
+        config.onEvent?.(event);
+      });
       let settledAt: number | undefined;
       let disposed = false;
       let finalUsage: SessionUsage | undefined;

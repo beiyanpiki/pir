@@ -50,7 +50,9 @@ Usage:
   pir findings show <id>                 show one finding
   pir models [search] [--all] [--ids] [--provider <p>]   list pi models
   pir verify-fix <id>                    verify a reported fix
-  pir serve [--host H --port P] [--cert C --key K] [--token T]   HTTPS service
+  pir serve [--host H --port P] [--cert C --key K] [--token T] [--web]   HTTPS service
+      --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
+             viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
   pir skill [path|install|print]         locate / install the LLM skill for pir
   pir plugins list                      list language packs and what this repo activates
@@ -112,6 +114,9 @@ Serve options:
                       PIR_TLS_KEY; otherwise a self-signed pair is generated
                       with openssl when available.
   --token <t>         require "Authorization: Bearer <t>" (default PIR_SERVER_TOKEN)
+  --web               also serve the read-only run explorer at / (env
+                      PIR_WEB_UI=1; viewer token PIR_WEB_UI_TOKEN, required
+                      off loopback; transcripts default on)
 
 Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
