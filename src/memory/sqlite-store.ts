@@ -3,6 +3,16 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS } from "./migrations.js";
 
+export interface OpenStoreOptions {
+  /**
+   * Open an existing db as a WAL reader: no directory creation, no
+   * migrations, nothing that takes the write lock — safe to run alongside
+   * the single writer the review flow holds. The file must already exist;
+   * callers fall back to a creating open on first contact.
+   */
+  readOnly?: boolean;
+}
+
 /**
  * Thin wrapper around node:sqlite DatabaseSync: WAL mode, ordered migrations
  * tracked in _migrations, and a transaction helper. No external dependencies.
@@ -13,7 +23,8 @@ export class SqliteStore {
     readonly dbPath: string,
   ) {}
 
-  static open(dbPath: string): SqliteStore {
+  static open(dbPath: string, options: OpenStoreOptions = {}): SqliteStore {
+    if (options.readOnly) return SqliteStore.openReadOnly(dbPath);
     const dir = path.dirname(dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const db = new DatabaseSync(dbPath);
@@ -26,6 +37,23 @@ export class SqliteStore {
     const store = new SqliteStore(db, dbPath);
     store.migrate();
     return store;
+  }
+
+  private static openReadOnly(dbPath: string): SqliteStore {
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(dbPath, { readOnly: true });
+    } catch {
+      // Older node patch levels lack the readOnly option; a plain handle
+      // used strictly for SELECTs keeps the same guarantee.
+      db = new DatabaseSync(dbPath);
+      db.exec("PRAGMA query_only = ON");
+    }
+    // A reader never switches the journal mode — the file is already WAL
+    // (every creating open set it), and the pragma itself needs a write
+    // lock on a handle that must not take one.
+    db.exec("PRAGMA busy_timeout = 5000");
+    return new SqliteStore(db, dbPath);
   }
 
   private migrate(): void {
