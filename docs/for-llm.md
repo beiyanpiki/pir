@@ -234,6 +234,7 @@ Use `--fail-on P1` + exit code `1` for gating decisions.
 | `pir: no config at ~/.pir/…` on stderr | first run, non-interactive | informational; `pir config wizard` to set up, or `PIR_NO_WIZARD=1` to silence |
 | `401` on API calls | wrong/missing token | pass `--token` / fix `PIR_SERVER_TOKEN` |
 | TLS handshake error | self-signed cert | add `--insecure` (client) |
+| `pir: cannot reach …: fetch failed (UND_ERR_HEADERS_TIMEOUT…)` | server took longer than the client wait (long task queued server-side) | raise `PIR_REMOTE_TIMEOUT` (seconds, default 1800; `0` = unlimited); check whether an earlier task still holds the server's serial queue |
 | `reviewer session failed: ...` | model endpoint/auth broken | re-check `PI_AUTH_JSON` / `PI_API_KEY__<provider>`; `docker compose logs` |
 | `could not resolve model: <id>` | unknown or ambiguous model id | `pir models --all` to find the exact id; pass `<provider>/<model>` |
 | `codegraph` warnings | no structural index | harmless (file-level review); optional `codegraph init` in the project |

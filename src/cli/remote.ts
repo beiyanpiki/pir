@@ -1,5 +1,6 @@
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
+import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
 
 export interface RemoteOptions {
   token?: string;
@@ -104,6 +105,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     const bundle = await createBundle(cwd, { base: withBase ? base : null, head });
     return fetch(new URL("/v1/review", url), {
       method: "POST",
+      // undici's default 300 s headersTimeout would kill any review queued
+      // behind a long task (#32); the dispatcher sizes the wait from
+      // PIR_REMOTE_TIMEOUT.
+      dispatcher: remoteDispatcher(),
       headers: {
         "content-type": "application/json",
         ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -126,7 +131,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   try {
     response = await send(!isAudit && base !== null);
   } catch (err) {
-    process.stderr.write(`pir: cannot reach ${url.origin}: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(reportUnreachable(url.origin, err));
     return 3;
   }
   if (!response.ok) {
@@ -137,9 +142,15 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   let payload = (await response.json()) as { needFull?: boolean } & RelayResult;
   if (payload.needFull) {
     process.stderr.write("pir: server needs full history, resending\n");
-    response = await send(false);
+    try {
+      response = await send(false);
+    } catch (err) {
+      process.stderr.write(reportUnreachable(url.origin, err));
+      return 3;
+    }
     if (!response.ok) {
-      process.stderr.write(`pir: server error ${response.status}\n`);
+      const text = await response.text().catch(() => "");
+      process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);
       return 3;
     }
     payload = (await response.json()) as RelayResult;
@@ -152,6 +163,9 @@ async function forwardExec(url: URL, argv: string[], options: RemoteOptions): Pr
   try {
     response = await fetch(new URL("/v1/exec", url), {
       method: "POST",
+      // Same #32 dispatcher as the review path: forwarded commands queue
+      // server-side behind whatever task is already running.
+      dispatcher: remoteDispatcher(),
       headers: {
         "content-type": "application/json",
         ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
@@ -159,7 +173,7 @@ async function forwardExec(url: URL, argv: string[], options: RemoteOptions): Pr
       body: JSON.stringify({ argv }),
     });
   } catch (err) {
-    process.stderr.write(`pir: cannot reach ${url.origin}: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.stderr.write(reportUnreachable(url.origin, err));
     return 3;
   }
 
