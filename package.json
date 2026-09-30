@@ -1,6 +1,6 @@
 {
   "name": "pir",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Pi-based code review engine with Repository Memory — local CLI, Pi extension (/review-* commands), and an agent-friendly HTTPS service (pir serve) that reviews even unpushed code via git bundles",
   "type": "module",
   "bin": {
