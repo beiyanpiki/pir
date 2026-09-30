@@ -4,6 +4,7 @@ import { bootstrapProjectMemory, refreshMemory, type BootstrapOptions, type Boot
 import { applyFeedback, applyPriority, type FeedbackResult } from "../memory/feedback.js";
 import { rememberKnowledge, type RememberResult, type RememberScope, type RememberKind } from "../memory/remember.js";
 import { applySnapshot, exportSnapshot, type MemorySnapshot, type SyncStats } from "../memory/sync.js";
+import { describeTransportError } from "../cli/remote-fetch.js";
 import { toFindingView, type FindingView } from "./find.js";
 import type { AppContext } from "./context.js";
 import { runVerifier } from "../agents/verifier.js";
@@ -126,7 +127,8 @@ export async function memorySync(
       }),
     });
   } catch (err) {
-    throw new Error(`cannot reach ${input.url}: ${err instanceof Error ? err.message : String(err)}`);
+    // Undici failures say only "fetch failed"; keep the real cause (#32).
+    throw new Error(`cannot reach ${input.url}: ${describeTransportError(err)}`);
   }
   if (response.status === 401 || response.status === 403) {
     throw new Error(`server rejected the request (${response.status}); check --token`);
