@@ -140,7 +140,9 @@ test("remote CLI: repo-context commands ship as a bundle and relay output", asyn
   );
   const envelope = JSON.parse(stdout);
   assert.equal(envelope.command, "memory.status");
-  assert.match(envelope.data.dbPath, new RegExp(`^${stateRoot}/[0-9a-f]{64}/memory\\.sqlite$`));
+  // Exact equality (not a path regex): the projectId is in the envelope, and
+  // path.join stays correct on platforms where path.sep is not "/".
+  assert.equal(envelope.data.dbPath, path.join(stateRoot, envelope.data.projectId, "memory.sqlite"));
 
   // Wrong token -> exit 3 with a clear message.
   await assert.rejects(
