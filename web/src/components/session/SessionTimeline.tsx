@@ -131,6 +131,11 @@ function sessionTitle(kind: string, meta: { round?: number; unitId?: string; att
   return meta.displayId !== undefined ? `verify ${meta.displayId}` : "verifier session";
 }
 
+export function sessionDomId(session: Pick<SessionRef, "file"> | { sessionId: string }): string {
+  const key = "file" in session ? session.file : session.sessionId;
+  return `session-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
 function SessionDivider({
   kind,
   title,
@@ -143,7 +148,7 @@ function SessionDivider({
   state?: "running" | "error" | "done";
 }) {
   return (
-    <div className="pir-session-sep" style={{ cursor: "default" }}>
+    <div className={`pir-session-sep is-${state ?? "done"}`}>
       <span className="line" />
       <SessionKindBadge kind={kind} />
       <span className="title">{title}</span>
@@ -164,11 +169,11 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
     session.usage ? `${fmtCount(session.usage.totalTokens)} tok · ${fmtCost(session.usage.cost)}` : "",
   ].filter(Boolean).join(" · ");
   return (
-    <section>
+    <section className="session-flow-section" id={sessionDomId(session)} data-session-key={session.sessionId}>
       <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} />
-      <div className="mx-auto flex max-w-3xl flex-col gap-0.5 pb-3">
+      <div className="session-flow">
         <UserGoalCard text={session.prompt} />
-        <div className="mt-4 flex flex-col gap-0.5">
+        <div className="session-flow-items">
           {session.items.map((item, index) => (
             <LiveItemView key={index} item={item} />
           ))}
@@ -243,7 +248,7 @@ function TranscriptSessionSection({
     : session.file;
 
   return (
-    <section ref={sectionRef}>
+    <section className="session-flow-section" ref={sectionRef} id={sessionDomId(session)} data-session-key={session.file}>
       <SessionDivider
         kind={session.sessionKind}
         title={sessionTitle(session.sessionKind, session)}
@@ -251,12 +256,12 @@ function TranscriptSessionSection({
         state={transcript === null ? "error" : "done"}
       />
       {open && (
-        <div className="mx-auto max-w-3xl pb-3">
+        <div className="session-flow">
           {transcript === undefined && (
             <div className="py-6 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading session…</div>
           )}
           {transcript === null && (
-            <div className="pir-empty">Transcript file missing for <code>{session.file}</code>.</div>
+            <div className="empty-state is-compact">Transcript file missing for <code>{session.file}</code>.</div>
           )}
           {transcript !== null && transcript !== undefined && <TranscriptView transcript={transcript} />}
         </div>
@@ -281,7 +286,7 @@ export function SessionTimeline({
 
   if (useLive) {
     return (
-      <div className="flex flex-col">
+      <div className="session-timeline">
         {liveSessions.map((session) => (
           <LiveSessionSection key={session.sessionId} session={session} />
         ))}
@@ -291,7 +296,7 @@ export function SessionTimeline({
 
   if (sessions.length === 0) {
     return (
-      <div className="pir-empty">
+      <div className="empty-state">
         No session transcripts for this run — it predates <code>PIR_TRANSCRIPTS=1</code>, or the
         session dump failed. Findings below are reconstructed from the repository memory.
       </div>
@@ -299,7 +304,7 @@ export function SessionTimeline({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="session-timeline">
       {sessions.map((session) => (
         <TranscriptSessionSection key={session.file} projectId={projectId} runId={runId} session={session} />
       ))}

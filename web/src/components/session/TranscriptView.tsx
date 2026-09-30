@@ -27,9 +27,9 @@ export function TranscriptView({ transcript }: { transcript: SessionTranscript }
   const items = useMemo(() => buildItems(transcript.messages), [transcript]);
 
   return (
-    <div className="flex flex-col">
+    <div className="session-transcript">
       <UserGoalCard text={transcript.prompt} />
-      <div className="mt-4 flex flex-col gap-0.5">
+      <div className="session-flow-items">
         {items.map((item, index) => (
           <TranscriptItem key={index} item={item} />
         ))}
@@ -57,10 +57,10 @@ function SessionFooter({
 }) {
   if (!usage && !error) return null;
   return (
-    <>
+    <div className="session-footer">
       {error && <div className="my-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{error}</div>}
       {usage && (
-        <div className="mt-3 flex flex-wrap gap-4 border-t border-border/60 pt-2 text-[11px] font-mono text-muted-foreground/60">
+        <div className="session-usage">
           <span>{fmtCount(usage.totalTokens)} tokens</span>
           <span>{fmtCost(usage.cost)}</span>
           <span>{usage.toolCalls ?? 0} tool calls</span>
@@ -69,7 +69,7 @@ function SessionFooter({
           </span>
         </div>
       )}
-    </>
+    </div>
   );
 }
 

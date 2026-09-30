@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from "react-router-dom";
-import { Sidebar } from "./layout/Sidebar";
+import { WorkspaceShell } from "./layout/WorkspaceShell";
 import { LoginPage } from "./pages/LoginPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { RunsPage } from "./pages/RunsPage";
@@ -12,18 +12,15 @@ export function App() {
       <Route
         path="/*"
         element={
-          <div className="app-shell flex h-screen overflow-hidden">
-            <Sidebar />
-            <main className="min-w-0 flex-1 overflow-y-auto px-7 py-6">
-              <Routes>
-                <Route path="/" element={<Navigate to="/projects" replace />} />
-                <Route path="/projects" element={<ProjectsPage />} />
-                <Route path="/projects/:projectId" element={<RunsPage />} />
-                <Route path="/runs/:projectId/:runId" element={<RunDetailPage />} />
-                <Route path="*" element={<div className="pir-empty">Nothing here.</div>} />
-              </Routes>
-            </main>
-          </div>
+          <WorkspaceShell>
+            <Routes>
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/projects" element={<ProjectsPage />} />
+              <Route path="/projects/:projectId" element={<RunsPage />} />
+              <Route path="/runs/:projectId/:runId" element={<RunDetailPage />} />
+              <Route path="*" element={<div className="empty-state">Page not found.</div>} />
+            </Routes>
+          </WorkspaceShell>
         }
       />
     </Routes>

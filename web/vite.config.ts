@@ -21,7 +21,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: "http://127.0.0.1:8790", changeOrigin: false },
+      "/api": {
+        target: process.env.PIR_DEV_API ?? "http://127.0.0.1:8790",
+        changeOrigin: false,
+      },
     },
   },
 });

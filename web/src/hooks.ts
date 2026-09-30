@@ -79,51 +79,77 @@ export function useRunEvents(
     }
     const controller = new AbortController();
     let active = true;
-    setStatus("connecting");
+    let attempts = 0;
 
-    (async () => {
-      try {
-        const token = getToken();
-        const response = await fetch(`/api/events?runId=${encodeURIComponent(runId)}`, {
-          headers: token ? { authorization: `Bearer ${token}` } : {},
-          signal: controller.signal,
-        });
-        if (!response.ok || !response.body) {
-          if (active) setStatus(response.status === 401 ? "error" : "unavailable");
-          return;
-        }
-        const { EventSourceParserStream } = await import("eventsource-parser/stream");
-        const reader = response.body
-          .pipeThrough(new TextDecoderStream())
-          .pipeThrough(new EventSourceParserStream())
-          .getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (!active) return;
-          const frame = value as { type?: string; data?: string };
-          if (frame?.type !== "event" || !frame.data) continue;
-          try {
-            const event = JSON.parse(frame.data) as RunEvent;
-            if (event.kind === "ready") {
-              setStatus("open");
-            } else if (event.kind === "unavailable") {
-              setStatus("unavailable");
+    const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => {
+      const timer = setTimeout(resolve, milliseconds);
+      controller.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+
+    const connect = async (): Promise<void> => {
+      while (active) {
+        setStatus("connecting");
+        try {
+          const token = getToken();
+          const response = await fetch(`/api/events?runId=${encodeURIComponent(runId)}`, {
+            headers: token ? { authorization: `Bearer ${token}` } : {},
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) {
+            if (response.status === 401) {
+              if (active) setStatus("error");
               return;
-            } else {
-              onEventRef.current(event);
             }
-          } catch {
-            // Ignore malformed frames; the next event resynchronizes.
+            if (active) setStatus("unavailable");
+            return;
           }
-        }
-        if (active) setStatus("closed");
-      } catch (cause) {
-        if (active && !(cause instanceof DOMException && cause.name === "AbortError")) {
+
+          const { EventSourceParserStream } = await import("eventsource-parser/stream");
+          const reader = response.body
+            .pipeThrough(new TextDecoderStream())
+            .pipeThrough(new EventSourceParserStream())
+            .getReader();
+          attempts = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!active) return;
+
+            // eventsource-parser emits SSE event objects as { id, event, data }.
+            // Older versions also expose stream-control objects with a type.
+            const frame = value as { type?: string; data?: unknown };
+            if (frame?.type !== undefined && frame.type !== "event") continue;
+            if (typeof frame?.data !== "string" || frame.data.length === 0) continue;
+            try {
+              const event = JSON.parse(frame.data) as RunEvent;
+              if (event.kind === "ready") {
+                setStatus("open");
+              } else if (event.kind === "unavailable") {
+                setStatus("unavailable");
+                return;
+              } else {
+                onEventRef.current(event);
+              }
+            } catch {
+              // Ignore malformed frames; the next event resynchronizes.
+            }
+          }
+          if (!active) return;
+          setStatus("closed");
+        } catch (cause) {
+          if (!active || (cause instanceof DOMException && cause.name === "AbortError")) return;
           setStatus("error");
         }
+
+        attempts += 1;
+        await wait(Math.min(1_000 * 2 ** Math.min(attempts - 1, 4), 10_000));
       }
-    })();
+    };
+
+    void connect();
 
     return () => {
       active = false;

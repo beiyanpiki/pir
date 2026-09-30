@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { ChevronRight, FolderOpen } from "lucide-react";
-import { apiGet, getToken, setToken } from "../api";
-import { fmtTime, relTime, shortSha } from "../format";
+import {
+  Activity,
+  ChevronDown,
+  ChevronRight,
+  CircleDot,
+  FolderGit2,
+  Gauge,
+  Layers3,
+  Search,
+  ShieldCheck,
+  X,
+} from "lucide-react";
+import { apiGet } from "../api";
+import { fmtCount, relTime, shortSha } from "../format";
 import { useApi } from "../hooks";
-import { LiveBadge } from "../components/badges";
 import type { ActiveRunView, ProjectSummary, RunSummary } from "../types";
 
 interface Overview {
@@ -19,7 +29,36 @@ function usePollingReload(reload: () => void, intervalMs: number): void {
   }, [reload, intervalMs]);
 }
 
-/** Recent runs of one expanded project, fetched on first expand. */
+function RunLink({
+  projectId,
+  run,
+  activeRunId,
+  compact = false,
+}: {
+  projectId: string;
+  run: Pick<RunSummary, "runId" | "head" | "startedAt" | "mode"> & {
+    base?: string | null;
+    status: string;
+  };
+  activeRunId?: string;
+  compact?: boolean;
+}) {
+  const active = run.runId === activeRunId;
+  return (
+    <Link
+      to={`/runs/${projectId}/${run.runId}`}
+      className={`sidebar-run ${active ? "is-active" : ""} ${compact ? "is-compact" : ""}`}
+      title={`${run.mode} review · ${run.status}`}
+    >
+      <span className={`run-state-dot ${run.status === "running" ? "is-running" : ""}`} />
+      <span className="sidebar-run-title">
+        {run.base ? `${shortSha(run.base, 6)}…${shortSha(run.head, 6)}` : shortSha(run.head, 8)}
+      </span>
+      <span className="sidebar-run-time">{relTime(run.startedAt)}</span>
+    </Link>
+  );
+}
+
 function ProjectRuns({
   projectId,
   activeRunId,
@@ -29,8 +68,11 @@ function ProjectRuns({
 }) {
   const [runs, setRuns] = useState<RunSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     let cancelled = false;
+    setRuns(null);
+    setError(null);
     apiGet<{ runs: RunSummary[] }>(`/api/projects/${projectId}/runs?limit=6`)
       .then((data) => {
         if (!cancelled) setRuns(data.runs);
@@ -43,31 +85,15 @@ function ProjectRuns({
     };
   }, [projectId]);
 
-  if (error) return <div className="px-3 py-1 text-xs text-red-400/80">{error}</div>;
-  if (runs === null) return <div className="px-4 py-1 text-[11px] text-muted-foreground/50">loading…</div>;
-  if (runs.length === 0) return <div className="px-4 py-1 text-[11px] text-muted-foreground/50">no runs yet</div>;
+  if (error) return <div className="sidebar-error">{error}</div>;
+  if (runs === null) return <div className="sidebar-loading">Loading runs…</div>;
+  if (runs.length === 0) return <div className="sidebar-empty">No runs</div>;
+
   return (
-    <div className="flex flex-col gap-0.5">
-      {runs.map((run) => {
-        const isActive = run.runId === activeRunId;
-        return (
-          <Link
-            key={run.runId}
-            to={`/runs/${projectId}/${run.runId}`}
-            title={`${run.mode} · ${fmtTime(run.startedAt)}`}
-            className={`ml-4 flex items-center gap-2 overflow-hidden rounded-md border-l border-transparent py-1 pl-3 pr-2 text-[12.5px] transition-colors ${
-              isActive
-                ? "border-primary/70 bg-primary/12 text-foreground"
-                : "border-border/60 text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground"
-            }`}
-          >
-            <span className="shrink-0 truncate">
-              {run.base ? `${shortSha(run.base, 6)}…${shortSha(run.head, 6)}` : `snapshot ${shortSha(run.head, 6)}`}
-            </span>
-            <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground/60">{relTime(run.startedAt)}</span>
-          </Link>
-        );
-      })}
+    <div className="sidebar-runs">
+      {runs.map((run) => (
+        <RunLink key={run.runId} projectId={projectId} run={run} activeRunId={activeRunId} />
+      ))}
     </div>
   );
 }
@@ -76,152 +102,151 @@ function ProjectNode({
   project,
   activeRunId,
   activeProjectId,
+  initiallyExpanded,
 }: {
   project: ProjectSummary;
   activeRunId: string | undefined;
   activeProjectId: string | undefined;
+  initiallyExpanded: boolean;
 }) {
-  const containsActive = activeProjectId === project.projectId;
-  const [expanded, setExpanded] = useState(containsActive);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
+  const active = activeProjectId === project.projectId;
+
+  useEffect(() => {
+    if (active) setExpanded(true);
+  }, [active]);
+
   return (
-    <div>
-      <div
-        className={`group flex items-center gap-1.5 overflow-hidden rounded-md px-2 py-1.5 transition-colors ${
-          containsActive ? "text-foreground" : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-        }`}
-      >
+    <div className={`sidebar-project ${active ? "is-active" : ""}`}>
+      <div className="sidebar-project-row">
         <button
-          className="shrink-0 rounded p-0.5 transition-transform hover:bg-muted"
-          style={{ transform: expanded ? "rotate(90deg)" : "none" }}
-          onClick={() => setExpanded(!expanded)}
-          aria-label={expanded ? "collapse" : "expand"}
+          className="sidebar-chevron"
+          type="button"
+          aria-label={expanded ? `Collapse ${project.name}` : `Expand ${project.name}`}
+          title={expanded ? "Collapse project" : "Expand project"}
+          onClick={() => setExpanded((value) => !value)}
         >
-          <ChevronRight size={13} />
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
-        <button
-          className="min-w-0 flex-1 truncate text-left text-[13px]"
-          title={project.remote ?? project.projectId}
-          onClick={() => setExpanded(!expanded)}
-        >
-          {project.name}
-        </button>
-        <Link
-          to={`/projects/${project.projectId}`}
-          className="shrink-0 rounded p-0.5 text-muted-foreground/50 opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-          title="open project"
-        >
-          <FolderOpen size={13} />
+        <Link className="sidebar-project-link" to={`/projects/${project.projectId}`} title={project.remote ?? project.projectId}>
+          <FolderGit2 size={14} />
+          <span>{project.name}</span>
         </Link>
-        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">{project.runsTotal}</span>
+        <span className="sidebar-count">{fmtCount(project.runsTotal)}</span>
       </div>
-      {expanded && (
-        <div className="mt-0.5">
-          <ProjectRuns projectId={project.projectId} activeRunId={activeRunId} />
-        </div>
-      )}
+      {expanded && <ProjectRuns projectId={project.projectId} activeRunId={activeRunId} />}
     </div>
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const location = useLocation();
   const params = useParams();
+  const [query, setQuery] = useState("");
   const overview = useApi<Overview>(() => apiGet<Overview>("/api/overview"), []);
   usePollingReload(overview.reload, 15_000);
 
-  // /runs/:projectId/:runId tells us which tree node should be open.
   const runMatch = /^\/runs\/([0-9a-f]{64})\/([\w-]+)$/.exec(location.pathname);
   const activeProjectId = runMatch?.[1] ?? params.projectId;
   const activeRunId = runMatch?.[2];
 
-  const active = overview.data?.active ?? [];
-  const projects = useMemo(() => {
-    const list = overview.data?.projects ?? [];
-    // The project of the open run always stays in the list.
-    return list.slice(0, 40);
-  }, [overview.data]);
+  const projects = overview.data?.projects ?? [];
+  const activeRuns = overview.data?.active ?? [];
+  const filteredProjects = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return projects.slice(0, 50);
+    return projects
+      .filter((project) =>
+        [project.name, project.remote ?? "", project.projectId].some((value) => value.toLowerCase().includes(needle)),
+      )
+      .slice(0, 50);
+  }, [projects, query]);
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-r border-border bg-sidebar">
-      <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/15 text-[15px] font-bold text-primary">
-          ⌄
-        </span>
-        <span className="text-sm font-semibold leading-tight">
-          pir review
-          <span className="block text-[10.5px] font-normal tracking-wide text-muted-foreground">
-            read-only run explorer
-          </span>
-        </span>
+    <aside className={`workspace-sidebar ${open ? "is-open" : ""}`} aria-label="Projects and review runs">
+      <div className="sidebar-head">
+        <div>
+          <div className="sidebar-eyebrow">Workspace</div>
+          <div className="sidebar-title">Review runs</div>
+        </div>
+        <button
+          className="icon-button mobile-only"
+          type="button"
+          aria-label="Close project navigation"
+          title="Close project navigation"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
       </div>
 
-      {active.length > 0 && (
-        <>
-          <div className="flex items-center justify-between px-3 pb-1.5 pt-4">
-            <span className="text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground">Active now</span>
-            <LiveBadge label={String(active.length)} />
-          </div>
-          <nav className="flex flex-col gap-0.5 px-2">
-            {active.map((run) => (
-              <Link
-                key={run.runId}
-                className="flex items-center gap-2 overflow-hidden rounded-md px-2.5 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-                to={`/runs/${run.projectId}/${run.runId}`}
-              >
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400" />
-                <span className="flex-1 truncate">
-                  {run.mode} · {run.sessions} session{run.sessions === 1 ? "" : "s"}
-                </span>
-                <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground/70">{relTime(run.startedAt)}</span>
-              </Link>
-            ))}
-          </nav>
-        </>
-      )}
-
-      <div className="flex items-center justify-between px-3 pb-1.5 pt-4">
-        <span className="text-[10.5px] uppercase tracking-[0.1em] text-muted-foreground">
-          项目 {overview.data ? `· ${overview.data.projects.length}` : ""}
-        </span>
-        <Link to="/projects" className="text-[10.5px] text-muted-foreground/60 transition-colors hover:text-foreground">
-          全部 →
+      <nav className="sidebar-nav" aria-label="Primary navigation">
+        <Link className={`sidebar-nav-link ${location.pathname === "/projects" ? "is-active" : ""}`} to="/projects">
+          <Gauge size={15} />
+          <span>Projects</span>
         </Link>
-      </div>
-      <nav className="flex flex-col gap-0.5 px-2 pb-4">
-        {overview.loading && projects.length === 0 && (
-          <div className="py-4 text-center"><span className="pir-mini-spinner" /></div>
-        )}
-        {overview.error && <div className="px-1.5 py-1 text-xs text-red-400">{overview.error}</div>}
-        {projects.map((project) => (
-          <ProjectNode
-            key={project.projectId}
-            project={project}
-            activeRunId={activeRunId}
-            activeProjectId={activeProjectId}
-          />
-        ))}
-        {!overview.loading && projects.length === 0 && (
-          <div className="px-1.5 py-1 text-xs text-muted-foreground/70">
-            没有项目 — run a review with transcripts on
-          </div>
-        )}
+        <div className="sidebar-nav-link is-static">
+          <ShieldCheck size={15} />
+          <span>Read-only mode</span>
+        </div>
       </nav>
 
-      <div className="mt-auto flex items-center justify-between border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
-        <span className="font-mono">read-only</span>
-        {getToken() !== null && (
-          <a
-            href="/login"
-            className="transition-colors hover:text-foreground"
-            onClick={(event) => {
-              event.preventDefault();
-              setToken(null);
-              window.location.href = "/login";
-            }}
-          >
-            sign out
-          </a>
-        )}
+      {activeRuns.length > 0 && (
+        <section className="sidebar-section">
+          <div className="sidebar-section-title">
+            <span><Activity size={13} /> Active</span>
+            <span className="sidebar-count">{activeRuns.length}</span>
+          </div>
+          <div className="sidebar-runs">
+            {activeRuns.map((run) => (
+              <RunLink key={run.runId} projectId={run.projectId} run={{ ...run, status: "running" }} activeRunId={activeRunId} compact />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="sidebar-section sidebar-projects-section">
+        <div className="sidebar-section-title">
+          <span><Layers3 size={13} /> Projects</span>
+          <span className="sidebar-count">{projects.length}</span>
+        </div>
+
+        <label className="sidebar-search">
+          <Search size={14} />
+          <input
+            type="search"
+            value={query}
+            placeholder="Filter projects"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {query && (
+            <button type="button" aria-label="Clear project filter" title="Clear project filter" onClick={() => setQuery("")}>
+              <X size={13} />
+            </button>
+          )}
+        </label>
+
+        <div className="sidebar-project-list">
+          {overview.loading && projects.length === 0 && <div className="sidebar-loading">Loading projects…</div>}
+          {overview.error && <div className="sidebar-error">{overview.error}</div>}
+          {filteredProjects.map((project) => (
+            <ProjectNode
+              key={project.projectId}
+              project={project}
+              activeRunId={activeRunId}
+              activeProjectId={activeProjectId}
+              initiallyExpanded={project.projectId === activeProjectId}
+            />
+          ))}
+          {!overview.loading && filteredProjects.length === 0 && (
+            <div className="sidebar-empty">No matching projects</div>
+          )}
+        </div>
+      </section>
+
+      <div className="sidebar-footer">
+        <CircleDot size={12} />
+        <span>Local review state</span>
       </div>
     </aside>
   );

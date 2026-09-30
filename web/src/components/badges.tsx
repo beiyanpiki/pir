@@ -43,9 +43,11 @@ export function SeverityBadge({ severity }: { severity: string }) {
 
 export function VerdictBadge({ status }: { status: string }) {
   const tone: BadgeColor =
-    status === "confirmed" ? "success"
+    status === "confirmed" || status === "fixed" ? "success"
     : status === "rejected" ? "destructive"
-    : status === "uncertain" ? "warning"
+    : status === "uncertain" || status === "candidate" ? "warning"
+    : status === "false_positive" ? "destructive"
+    : status === "expected" ? "accent"
     : "muted";
   return <Chip tone={tone}>{status}</Chip>;
 }

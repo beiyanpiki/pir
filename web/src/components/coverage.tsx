@@ -1,15 +1,15 @@
-import { Chip } from "./badges";
+import { CheckCircle2, CircleDashed, Files, Gauge, Layers3 } from "lucide-react";
 import type { RunManifest } from "../types";
 
 const COVERAGE_KEYS: Array<[string, string]> = [
-  ["filesInScope", "in scope"],
-  ["filesReviewed", "reviewed"],
-  ["filesPartial", "partial"],
-  ["filesUnreviewed", "unreviewed"],
-  ["filesBlocked", "blocked"],
-  ["filesFailed", "failed"],
-  ["unitsTotal", "units"],
-  ["unitsReviewed", "units reviewed"],
+  ["filesInScope", "In scope"],
+  ["filesReviewed", "Reviewed"],
+  ["filesPartial", "Partial"],
+  ["filesUnreviewed", "Unreviewed"],
+  ["filesBlocked", "Blocked"],
+  ["filesFailed", "Failed"],
+  ["unitsTotal", "Units"],
+  ["unitsReviewed", "Units reviewed"],
 ];
 
 export function CoverageTab({ manifest }: { manifest: RunManifest }) {
@@ -21,55 +21,57 @@ export function CoverageTab({ manifest }: { manifest: RunManifest }) {
   const units = manifest.units ?? [];
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="pir-panel px-4 py-3.5">
-        <div className="mb-2 flex items-baseline justify-between">
-          <strong className="text-sm">Snapshot coverage</strong>
-          <span className="font-mono text-xs text-muted-foreground">
-            {reviewed + partial} / {inScope} files touched ({pct}%)
-          </span>
+    <div className="inspector-stack">
+      <section className="inspector-section coverage-summary">
+        <div className="inspector-section-title"><Gauge size={14} /> Snapshot coverage</div>
+        <div className="coverage-value">
+          <strong>{pct}%</strong>
+          <span>{reviewed + partial} / {inScope} files touched</span>
         </div>
-        <div className="h-2 overflow-hidden rounded-full border border-border bg-muted/50">
-          <div className="h-full bg-emerald-500/80" style={{ width: `${pct}%` }} />
+        <div className="progress-track" aria-label={`${pct}% coverage`}>
+          <span style={{ width: `${pct}%` }} />
         </div>
-        <div className="pir-stat-row mt-3">
+        <div className="coverage-grid">
           {COVERAGE_KEYS.filter(([key]) => coverage[key] !== undefined).map(([key, label]) => (
-            <span key={key} className="stat">{label} <b>{String(coverage[key])}</b></span>
+            <div key={key}><span>{label}</span><strong>{String(coverage[key])}</strong></div>
           ))}
         </div>
-      </div>
+      </section>
 
       {units.length > 0 && (
-        <div className="pir-panel overflow-x-auto">
-          <table className="pir-table">
-            <thead>
-              <tr>
-                <th>Unit</th>
-                <th>Module</th>
-                <th>State</th>
-                <th className="num">Files</th>
-                <th className="num">Attempts</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {units.map((unit) => (
-                <tr key={unit.id}>
-                  <td className="font-mono">{unit.id}</td>
-                  <td className="dim">{unit.module || "—"}</td>
-                  <td>
-                    <Chip tone={unit.state === "reviewed" ? "success" : unit.state === "blocked" || unit.state === "failed" ? "destructive" : "warning"}>
-                      {unit.state}
-                    </Chip>
-                  </td>
-                  <td className="num dim">{unit.files}</td>
-                  <td className="num dim">{unit.attempts}</td>
-                  <td className="dim max-w-[380px] text-xs">{unit.reason ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <section className="inspector-section">
+          <div className="inspector-section-title"><Layers3 size={14} /> Review units</div>
+          <div className="unit-list">
+            {units.map((unit) => (
+              <div className="unit-row" key={unit.id}>
+                <span className={`unit-state is-${unit.state}`}>
+                  {unit.state === "reviewed" ? <CheckCircle2 size={14} /> : <CircleDashed size={14} />}
+                </span>
+                <div>
+                  <strong>{unit.id}</strong>
+                  <small>{unit.module || "No module"} · {unit.files} files · {unit.attempts} attempts</small>
+                  {unit.reason && <p>{unit.reason}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {manifest.files && manifest.files.length > 0 && (
+        <section className="inspector-section">
+          <div className="inspector-section-title"><Files size={14} /> Files in change</div>
+          <div className="compact-file-list">
+            {manifest.files.map((file) => (
+              <div key={file.path}>
+                <span className="file-status">{file.status.slice(0, 1)}</span>
+                <code>{file.path}</code>
+                <span className="metric-success">+{file.additions}</span>
+                <span className="metric-error">−{file.deletions}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );
