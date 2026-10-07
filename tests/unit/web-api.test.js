@@ -174,6 +174,8 @@ test("web api: gzip negotiation, ETag 304, findings split, no live events embed"
     const first = await requestJson(port, transcriptUrl, { "accept-encoding": "gzip" });
     assert.equal(first.status, 200);
     assert.ok(first.headers.etag, "transcript carries an etag");
+    assert.match(first.headers.etag, /-gz$/, "the gzip variant has its own validator");
+    assert.equal(first.headers.vary, "Accept-Encoding", "negotiated responses declare Vary");
     assert.equal(first.headers["cache-control"], "no-cache");
     assert.equal(first.headers["content-encoding"], "gzip");
     assert.equal(JSON.parse(gunzipSync(first.body).toString("utf8")).role, "code reviewer");
@@ -184,6 +186,26 @@ test("web api: gzip negotiation, ETag 304, findings split, no live events embed"
     });
     assert.equal(revalidated.status, 304);
     assert.equal(revalidated.body.length, 0, "304 answers without a body");
+
+    // The identity variant has its own ETag; a gzip ETag does not 304 it.
+    const identity = await requestJson(port, transcriptUrl);
+    assert.equal(identity.headers["content-encoding"], undefined);
+    assert.notEqual(identity.headers.etag, first.headers.etag);
+    assert.equal(identity.headers.vary, "Accept-Encoding");
+    const wrongVariant = await requestJson(port, transcriptUrl, {
+      "if-none-match": first.headers.etag,
+    });
+    assert.equal(wrongVariant.status, 200, "a cross-variant validator revalidates fresh, not 304");
+
+    // An explicit refusal (q=0) is honored — never serve gzip to it.
+    const refused = await requestJson(port, transcriptUrl, { "accept-encoding": "gzip;q=0" });
+    assert.equal(refused.status, 200);
+    assert.equal(refused.headers["content-encoding"], undefined, "gzip;q=0 is a refusal, not consent");
+
+    // Vary rides on plain (identity) negotiated responses too, so shared
+    // caches key them by Accept-Encoding as well.
+    const plainDetail = await requestJson(port, `/api/runs/${projectId}/${runId}`);
+    assert.equal(plainDetail.headers.vary, "Accept-Encoding");
 
     // --- live runs: the REST detail keeps metadata but never the events.
     emitRunEventForTest({

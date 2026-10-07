@@ -64,13 +64,27 @@ The read-only JSON API under <code>/api/</code> is available.</p></div></body></
 /** JSON bodies below this size cost more to negotiate than they save. */
 const COMPRESS_MIN_BYTES = 1024;
 
+/**
+ * True when the client accepts gzip. Honors qvalues: "gzip;q=0" is an
+ * explicit refusal, not an acceptance.
+ */
 function acceptsGzip(req: http.IncomingMessage): boolean {
-  return /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""));
+  for (const part of String(req.headers["accept-encoding"] ?? "").split(",")) {
+    const segments = part.trim().split(";");
+    const name = (segments[0] ?? "").trim();
+    if (name !== "gzip" && name !== "*") continue;
+    const refused = segments.slice(1).some((param) => /^q\s*=\s*0(?:\.0+)?$/i.test(param.trim()));
+    if (!refused) return true;
+  }
+  return false;
 }
 
 /**
  * Send a complete body, gzip-compressed when the client accepts it. Same sync
  * posture the handlers already have; SSE streams bypass this (flush latency).
+ * Every response here is content-negotiated, so it carries
+ * `Vary: Accept-Encoding` — without it a shared cache could hand the gzip
+ * variant to a client that never asked for it.
  */
 function sendBody(
   req: http.IncomingMessage,
@@ -79,14 +93,15 @@ function sendBody(
   body: Buffer | string,
   headers: Record<string, string>,
 ): void {
+  const vary = { vary: "Accept-Encoding" };
   const buffer = typeof body === "string" ? Buffer.from(body, "utf8") : body;
   if (acceptsGzip(req) && buffer.length >= COMPRESS_MIN_BYTES) {
     const compressed = gzipSync(buffer);
-    res.writeHead(code, { ...headers, "content-encoding": "gzip", "content-length": String(compressed.length) });
+    res.writeHead(code, { ...headers, ...vary, "content-encoding": "gzip", "content-length": String(compressed.length) });
     res.end(compressed);
     return;
   }
-  res.writeHead(code, headers);
+  res.writeHead(code, { ...headers, ...vary });
   res.end(buffer);
 }
 
@@ -307,16 +322,19 @@ export function createWebUi(config: WebUiConfig): WebUi {
           return;
         }
         // Transcripts are immutable once written: revalidation is always safe
-        // and a 304 saves the whole body on revisit.
-        if (req.headers["if-none-match"] === transcript.etag) {
-          res.writeHead(304, { etag: transcript.etag, "cache-control": "no-cache" });
+        // and a 304 saves the whole body on revisit. The validator is
+        // per-representation (RFC 9110 §8.8.1): the gzip and identity bodies
+        // are different octet sequences, so they must not share one ETag.
+        const etag = acceptsGzip(req) ? `${transcript.etag}-gz` : transcript.etag;
+        if (req.headers["if-none-match"] === etag) {
+          res.writeHead(304, { etag, vary: "Accept-Encoding", "cache-control": "no-cache" });
           res.end();
           return;
         }
         sendBody(req, res, 200, JSON.stringify(transcript.payload), {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-cache",
-          etag: transcript.etag,
+          etag,
         });
       });
       return true;
