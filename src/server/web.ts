@@ -1,13 +1,17 @@
-import { readFileSync, statSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import {
+  findingById,
+  listFindings,
   listProjects,
   listRuns,
-  recentFeedback,
   readTranscript,
+  recentFeedback,
   runDetail,
 } from "./web-store.js";
 import type { LiveRegistry } from "./live-registry.js";
@@ -57,9 +61,45 @@ div{max-width:32rem;padding:2rem;border:1px solid #2a313c;border-radius:8px}</st
 Run <code>npm run build</code> in the pir package (or set <code>PIR_WEB_ROOT</code> to a built <code>dist/web</code>) and restart <code>pir serve</code>.
 The read-only JSON API under <code>/api/</code> is available.</p></div></body></html>`;
 
-function json(res: http.ServerResponse, code: number, payload: unknown): void {
-  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(JSON.stringify(payload));
+/** JSON bodies below this size cost more to negotiate than they save. */
+const COMPRESS_MIN_BYTES = 1024;
+
+function acceptsGzip(req: http.IncomingMessage): boolean {
+  return /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""));
+}
+
+/**
+ * Send a complete body, gzip-compressed when the client accepts it. Same sync
+ * posture the handlers already have; SSE streams bypass this (flush latency).
+ */
+function sendBody(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  code: number,
+  body: Buffer | string,
+  headers: Record<string, string>,
+): void {
+  const buffer = typeof body === "string" ? Buffer.from(body, "utf8") : body;
+  if (acceptsGzip(req) && buffer.length >= COMPRESS_MIN_BYTES) {
+    const compressed = gzipSync(buffer);
+    res.writeHead(code, { ...headers, "content-encoding": "gzip", "content-length": String(compressed.length) });
+    res.end(compressed);
+    return;
+  }
+  res.writeHead(code, headers);
+  res.end(buffer);
+}
+
+function json(req: http.IncomingMessage, res: http.ServerResponse, code: number, payload: unknown): void {
+  if (code === 304) {
+    res.writeHead(304, { "cache-control": "no-cache" });
+    res.end();
+    return;
+  }
+  sendBody(req, res, code, JSON.stringify(payload), {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
 }
 
 function isAuthorized(headers: http.IncomingMessage["headers"], token: string | undefined): boolean {
@@ -72,7 +112,10 @@ function isAuthorized(headers: http.IncomingMessage["headers"], token: string | 
   return timingSafeEqual(received, expected);
 }
 
-function serveStatic(webRoot: string, pathname: string, res: http.ServerResponse): void {
+/** Textual assets worth compressing; woff2/png/ico are already compact. */
+const COMPRESSIBLE_EXTS = new Set([".html", ".js", ".mjs", ".css", ".json", ".svg", ".txt", ".map"]);
+
+async function serveStatic(webRoot: string, pathname: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   if (!existsSync(webRoot)) {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     res.end(NO_ASSETS_PAGE);
@@ -85,28 +128,46 @@ function serveStatic(webRoot: string, pathname: string, res: http.ServerResponse
     // request listener (an unhandled throw there kills the whole server).
     relative = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
   } catch {
-    json(res, 400, { error: "malformed request path" });
+    json(req, res, 400, { error: "malformed request path" });
     return;
   }
   const resolved = path.resolve(webRoot, relative);
   if (!resolved.startsWith(`${webRoot}${path.sep}`) && resolved !== webRoot) {
-    json(res, 404, { error: "not found" });
+    json(req, res, 404, { error: "not found" });
     return;
   }
-  const stats = statSync(resolved, { throwIfNoEntry: false });
+  let stats: Awaited<ReturnType<typeof stat>> | undefined;
+  try {
+    stats = await stat(resolved);
+  } catch {
+    stats = undefined;
+  }
   if (stats?.isFile()) {
-    const type = CONTENT_TYPES[path.extname(resolved)] ?? "application/octet-stream";
-    res.writeHead(200, { "content-type": type, "cache-control": path.extname(resolved) === ".html" ? "no-store" : "public, max-age=3600" });
-    res.end(readFileSync(resolved));
+    const ext = path.extname(resolved);
+    const type = CONTENT_TYPES[ext] ?? "application/octet-stream";
+    const headers = { "content-type": type, "cache-control": ext === ".html" ? "no-store" : "public, max-age=3600" };
+    try {
+      const content = await readFile(resolved);
+      if (COMPRESSIBLE_EXTS.has(ext)) sendBody(req, res, 200, content, headers);
+      else {
+        res.writeHead(200, headers);
+        res.end(content);
+      }
+    } catch {
+      json(req, res, 404, { error: "not found" });
+    }
     return;
   }
   const indexFile = path.join(webRoot, "index.html");
   if (existsSync(indexFile)) {
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    res.end(readFileSync(indexFile));
+    try {
+      sendBody(req, res, 200, await readFile(indexFile), { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    } catch {
+      json(req, res, 404, { error: "not found" });
+    }
     return;
   }
-  json(res, 404, { error: "not found" });
+  json(req, res, 404, { error: "not found" });
 }
 
 function startSse(
@@ -163,11 +224,11 @@ export function createWebUi(config: WebUiConfig): WebUi {
   const handleApi = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, method: string): boolean => {
     if (!url.pathname.startsWith("/api/")) return false;
     if (method !== "GET" && method !== "HEAD") {
-      json(res, 405, { error: "the web endpoint is read-only" });
+      json(req, res, 405, { error: "the web endpoint is read-only" });
       return true;
     }
     if (!isAuthorized(req.headers, config.token)) {
-      json(res, 401, { error: "missing or invalid bearer token" });
+      json(req, res, 401, { error: "missing or invalid bearer token" });
       return true;
     }
 
@@ -176,7 +237,7 @@ export function createWebUi(config: WebUiConfig): WebUi {
     if (method === "GET" && parts[0] === "events") {
       const runId = url.searchParams.get("runId");
       if (runId !== null && !/^[\w-]+$/.test(runId)) {
-        json(res, 400, { error: "invalid runId" });
+        json(req, res, 400, { error: "invalid runId" });
         return true;
       }
       startSse(req, res, config.registry, runId);
@@ -184,7 +245,7 @@ export function createWebUi(config: WebUiConfig): WebUi {
     }
 
     if (parts[0] === "overview" && parts.length === 1) {
-      json(res, 200, { projects: listProjects(stateRoot), active: config.registry.activeRuns() });
+      json(req, res, 200, { projects: listProjects(stateRoot), active: config.registry.activeRuns() });
       return true;
     }
 
@@ -194,10 +255,10 @@ export function createWebUi(config: WebUiConfig): WebUi {
       const status = url.searchParams.get("status") ?? undefined;
       const result = listRuns(parts[1]!, { limit, offset, ...(status ? { status } : {}) }, stateRoot);
       if (!result) {
-        json(res, 404, { error: "unknown project" });
+        json(req, res, 404, { error: "unknown project" });
         return true;
       }
-      json(res, 200, result);
+      json(req, res, 200, result);
       return true;
     }
 
@@ -205,35 +266,78 @@ export function createWebUi(config: WebUiConfig): WebUi {
       const limit = Number(url.searchParams.get("limit") ?? 20);
       const result = recentFeedback(parts[1]!, limit, stateRoot);
       if (!result) {
-        json(res, 404, { error: "unknown project" });
+        json(req, res, 404, { error: "unknown project" });
         return true;
       }
-      json(res, 200, { events: result });
+      json(req, res, 200, { events: result });
+      return true;
+    }
+
+    if (parts[0] === "runs" && parts.length === 4 && parts[3] === "findings") {
+      // Non-numeric limit/offset would reach sqlite as NaN and throw; treat
+      // them as absent the way missing params behave.
+      const limitParam = Number(url.searchParams.get("limit"));
+      const offsetParam = Number(url.searchParams.get("offset"));
+      const result = listFindings(parts[1]!, parts[2]!, {
+        ...(Number.isFinite(limitParam) && limitParam > 0 ? { limit: limitParam } : {}),
+        ...(Number.isFinite(offsetParam) && offsetParam >= 0 ? { offset: offsetParam } : {}),
+      }, stateRoot);
+      if (!result) {
+        json(req, res, 404, { error: "unknown run" });
+        return true;
+      }
+      json(req, res, 200, { findings: result.items, total: result.total });
+      return true;
+    }
+
+    if (parts[0] === "runs" && parts.length === 5 && parts[3] === "findings") {
+      const finding = findingById(parts[1]!, parts[2]!, parts[4]!, stateRoot);
+      if (!finding) {
+        json(req, res, 404, { error: "unknown finding" });
+        return true;
+      }
+      json(req, res, 200, finding);
       return true;
     }
 
     if (parts[0] === "runs" && parts.length === 5 && parts[3] === "transcript") {
-      const transcript = readTranscript(parts[1]!, parts[2]!, parts[4]!, stateRoot);
-      if (transcript === null) {
-        json(res, 404, { error: "transcript not found" });
-        return true;
-      }
-      json(res, 200, transcript);
+      void readTranscript(parts[1]!, parts[2]!, parts[4]!, stateRoot).then((transcript) => {
+        if (transcript === null) {
+          json(req, res, 404, { error: "transcript not found" });
+          return;
+        }
+        // Transcripts are immutable once written: revalidation is always safe
+        // and a 304 saves the whole body on revisit.
+        if (req.headers["if-none-match"] === transcript.etag) {
+          res.writeHead(304, { etag: transcript.etag, "cache-control": "no-cache" });
+          res.end();
+          return;
+        }
+        sendBody(req, res, 200, JSON.stringify(transcript.payload), {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": "no-cache",
+          etag: transcript.etag,
+        });
+      });
       return true;
     }
 
     if (parts[0] === "runs" && parts.length === 3) {
       const detail = runDetail(parts[1]!, parts[2]!, stateRoot);
       if (!detail) {
-        json(res, 404, { error: "unknown run" });
+        json(req, res, 404, { error: "unknown run" });
         return true;
       }
+      // Live event replay rides the SSE channel alone; the REST snapshot
+      // carries only the metadata (sessions/end/counts) so a mid-run join
+      // does not download the whole buffer twice.
       const live = config.registry.snapshot(parts[2]!);
-      json(res, 200, { ...detail, ...(live ? { live } : {}) });
+      const liveMeta = live === null ? null : (({ events: _replayed, ...meta }) => meta)(live);
+      json(req, res, 200, { ...detail, ...(liveMeta ? { live: liveMeta } : {}) });
       return true;
     }
 
-    json(res, 404, { error: "unknown api endpoint" });
+    json(req, res, 404, { error: "unknown api endpoint" });
     return true;
   };
 
@@ -244,7 +348,7 @@ export function createWebUi(config: WebUiConfig): WebUi {
         return handleApi(req, res, url, method);
       }
       if (method === "GET" || method === "HEAD") {
-        serveStatic(config.webRoot, url.pathname, res);
+        void serveStatic(config.webRoot, url.pathname, req, res);
         return true;
       }
       return false;

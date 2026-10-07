@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useMemo, useState } from "react";
 import {
   Brain,
   CheckCircle2,
@@ -176,31 +176,35 @@ export function toolRow(name: string, args: unknown): ToolVerb {
 }
 
 const MAX_PREVIEW_CHARS = 16 * 1024;
+/** Summaries only read structure near the head of the output; scanning
+ * hundreds of KB per collapsed row per render is the cost being capped. */
+const SUMMARY_SCAN_CHARS = 64 * 1024;
 
 function resultSummary(name: string, text: string, isError: boolean): string {
   if (isError) return "failed";
+  const head = text.length > SUMMARY_SCAN_CHARS ? text.slice(0, SUMMARY_SCAN_CHARS) : text;
   if (name === "get_change") {
-    const files = [...text.matchAll(/^##\s+"[^"]+"\s+\[[^\]]+\]\s+\(\+(\d+)\/-(\d+)\)/gm)];
+    const files = [...head.matchAll(/^##\s+"[^"]+"\s+\[[^\]]+\]\s+\(\+(\d+)\/-(\d+)\)/gm)];
     const additions = files.reduce((total, match) => total + Number(match[1]), 0);
     const deletions = files.reduce((total, match) => total + Number(match[2]), 0);
     return `${files.length || 1} file${files.length === 1 ? "" : "s"} · +${additions} / −${deletions}`;
   }
-  const matches = text.match(/matchingLines:\s*(\d+)/i);
+  const matches = head.match(/matchingLines:\s*(\d+)/i);
   if (matches) return `${matches[1]} match${matches[1] === "1" ? "" : "es"}`;
   const readLines = name === "read_code" || name === "read"
-    ? [...text.matchAll(/^\s*\d+\|/gm)].length
+    ? [...head.matchAll(/^\s*\d+\|/gm)].length
     : 0;
   if (readLines > 0) return `${readLines} line${readLines === 1 ? "" : "s"}`;
-  const returned = text.match(/returned:\s*(\d+)/i);
+  const returned = head.match(/returned:\s*(\d+)/i);
   if (returned && (name === "list_snapshot_files" || name.startsWith("find_"))) {
     return `${returned[1]} result${returned[1] === "1" ? "" : "s"}`;
   }
-  const sourceLine = text.match(/^\s*(\d+)\|/);
+  const sourceLine = head.match(/^\s*(\d+)\|/);
   if (sourceLine) return `line ${sourceLine[1]}`;
-  const candidate = text.match(/Recorded candidate\s+(F-[\w-]+)/);
+  const candidate = head.match(/Recorded candidate\s+(F-[\w-]+)/);
   if (candidate) return candidate[1];
-  if (/^Round complete\./m.test(text)) return "complete";
-  const firstMeaningful = text.split("\n").find((line) =>
+  if (/^Round complete\./m.test(head)) return "complete";
+  const firstMeaningful = head.split("\n").find((line) =>
     line.trim() &&
     !/^(?:snapshot:|totalLines:|matchingLines:|entries:|continuation:|Line previews)/i.test(line),
   );
@@ -262,8 +266,9 @@ function ResultView({ name, args, text, truncated, isError }: { name: string; ar
 
 export type ToolState = "input-streaming" | "input-available" | "output-available" | "output-error";
 
-/** One activity row; expands to parameters + result. */
-export function ToolRow({
+/** One activity row; expands to parameters + result. Memo'd so a live flush
+ * re-renders only the sessions whose items actually changed. */
+export const ToolRow = memo(function ToolRow({
   name,
   args,
   result,
@@ -275,10 +280,13 @@ export function ToolRow({
   running?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { icon, verb, object } = toolRow(name, args);
+  const { icon, verb, object } = useMemo(() => toolRow(name, args), [name, args]);
   const hasDetail = Boolean(result);
   const toolArgs = (args ?? {}) as ToolArgs;
-  const summary = result ? resultSummary(name, result.text, result.isError) : running ? "running" : "no result";
+  const summary = useMemo(
+    () => (result ? resultSummary(name, result.text, result.isError) : running ? "running" : "no result"),
+    [result, name, running],
+  );
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -318,7 +326,7 @@ export function ToolRow({
       )}
     </Collapsible>
   );
-}
+});
 
 export function RawBlock({ label, value }: { label: string; value: unknown }) {
   return (
