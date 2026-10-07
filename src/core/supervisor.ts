@@ -335,6 +335,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         pending: state.pending.length,
         reviewerRan: result !== undefined, summary: result?.summary ?? "Verified queued candidates",
       });
+      deps.memory.findings.touchRun(run.id);
       if (result) expandFrontier(state, result, drained.feedbackVerdicts);
       else if (drained.feedbackVerdicts.length) {
         state.focus = [...new Set([...drained.feedbackVerdicts.filter((v) => v.verdict === "uncertain").map((v) => v.codeFeedback!), ...state.focus])].slice(0, 16);
@@ -539,6 +540,13 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   deps.onProgress?.({ type: "info", message: `snapshot ${snapshot.commit.slice(0, 10)}: ${inScopeFiles} files in scope, ${plan.units.length} units` });
 
   const run = deps.memory.findings.createRun({ base: null, head, mode: "audit" });
+  // Target first, ledger as it happens: mid-run observers (a second serve
+  // request, an operator with sqlite) see scope + progress instead of a
+  // running row with nothing else (#38).
+  deps.memory.audit.beginRun(run.id, {
+    commit: snapshot.commit, treeId: snapshot.treeId, scopeVersion: snapshot.scopeVersion,
+    plannerVersion: PLANNER_VERSION, scope: snapshot.scope,
+  });
   const state = createReviewState("(snapshot)", head, Number.MAX_SAFE_INTEGER);
   const transcriptDir = transcriptsEnabled() ? runTranscriptDir(deps.memory.store.dbPath, run.id) : undefined;
   const startedAtMs = Date.now();
@@ -600,6 +608,29 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     }
     return deps.memory.findings.insert(finding, run.id);
   };
+  // Durable unit progress (#38): every ledger transition is upserted as it
+  // happens, so a multi-day audit is observable (and survives a kill) instead
+  // of surfacing its ledger once at finishRun.
+  const persistUnit = (unitId: string): void => {
+    const unit = ledger.unitRecords().find((candidate) => candidate.unitId === unitId);
+    if (!unit) return;
+    const owned = new Set(unit.ownedPaths);
+    deps.memory.audit.upsertProgress(run.id, {
+      units: [{
+        unitId: unit.unitId, state: unit.state, ...(unit.reason ? { reason: unit.reason } : {}),
+        files: unit.ownedPaths.length, attempts: attempts.get(unit.unitId) ?? 0,
+      }],
+      files: ledger.fileRecords().filter((file) => owned.has(file.path)).map((file) => ({
+        path: file.path, blobId: file.blobId, state: file.state,
+        ...(file.reason ? { reason: file.reason } : {}),
+        rangesTotal: file.rangesTotal, rangesReviewed: file.rangesReviewed,
+      })),
+    });
+  };
+  const markUnit = (unitId: string, state: Parameters<CoverageLedger["markUnit"]>[1], reason?: string): void => {
+    ledger.markUnit(unitId, state, reason);
+    persistUnit(unitId);
+  };
 
   try {
     while (true) {
@@ -628,6 +659,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           confirmed: drained.confirmed, rejected: drained.rejected, uncertain: drained.uncertain, suppressed: drained.suppressed,
           pending: state.pending.length, reviewerRan: false, summary: "Verified queued candidates",
         });
+        deps.memory.findings.touchRun(run.id);
         onProgress({ type: "round-end", round: state.round, message: `verification drain: ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
         continue;
       }
@@ -672,7 +704,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           state.pending.push(...recovered);
           persistCandidates(recovered);
           budget.chargeSession(error.usage, error.message);
-          ledger.markUnit(unit.id, "failed", `reviewer session failed: ${error.message}`);
+          markUnit(unit.id, "failed", `reviewer session failed: ${error.message}`);
           state.rounds.push({
             round: state.round, candidates: error.candidates.length, fresh: recovered.length,
             confirmed: 0, rejected: 0, uncertain: 0, suppressed: 0, pending: state.pending.length,
@@ -700,9 +732,9 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           `Previous attempt declared completion WITHOUT pinned reads of: ${unread.join(", ")}. Read those files before finishing.`,
         ].filter(Boolean).join("\n").slice(0, 6000));
         queue.unshift(unit);
-        ledger.markUnit(unit.id, "in-progress", "completion claim without owned-file reads; retrying");
+        markUnit(unit.id, "in-progress", "completion claim without owned-file reads; retrying");
       } else if (unread.length > 0) {
-        ledger.markUnit(unit.id, "blocked", `completion claimed without pinned reads of: ${unread.join(", ")}`);
+        markUnit(unit.id, "blocked", `completion claimed without pinned reads of: ${unread.join(", ")}`);
       } else if (result.needsMoreRounds && canRetry) {
         unitSummaries.set(unit.id, [
           result.summary,
@@ -710,9 +742,9 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           ...(result.unresolvedQuestions ?? []).map((s) => `Unresolved: ${s}`),
         ].join("\n").slice(0, 6000));
         queue.unshift(unit);
-        ledger.markUnit(unit.id, "in-progress", "reviewer requested another pass");
+        markUnit(unit.id, "in-progress", "reviewer requested another pass");
       } else {
-        ledger.markUnit(unit.id, "reviewed");
+        markUnit(unit.id, "reviewed");
       }
 
       state.rounds.push({
@@ -732,6 +764,17 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       rejected: state.verified.filter((f) => f.status === "rejected").length,
       uncertain: state.verified.filter((f) => f.status === "uncertain").length,
       status: "failed", notes: failureMessage,
+    });
+    // A failed audit still leaves its authoritative ledger: how far it got is
+    // the first question any post-mortem asks (#38).
+    deps.memory.audit.persistRunState(run.id, {
+      snapshot: { commit: snapshot.commit, treeId: snapshot.treeId, scopeVersion: snapshot.scopeVersion, plannerVersion: PLANNER_VERSION, scope: snapshot.scope },
+      coverage: ledger.summary(),
+      units: ledger.unitRecords().map((unit) => ({
+        unitId: unit.unitId, state: unit.state, ...(unit.reason ? { reason: unit.reason } : {}),
+        files: unit.ownedPaths.length, attempts: attempts.get(unit.unitId) ?? 0,
+      })),
+      files: ledger.fileRecords(),
     });
     sink.runEnded({
       status: "failed", stoppedBecause: failureMessage, durationMs: budget.elapsedMs,

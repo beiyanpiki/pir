@@ -2,6 +2,7 @@ import { isGitRepo } from "../changes/git.js";
 import { createCodeMap } from "../codemap/provider.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import { Memory } from "../memory/index.js";
+import type { ProjectIdentity } from "../memory/identity.js";
 import { PiSessionFactory } from "../agents/session-factory.js";
 import type { AgentSessionFactory } from "../agents/types.js";
 
@@ -22,21 +23,33 @@ export interface AppContextOptions {
   dbPath?: string;
   /**
    * Server read lane: open the memory db as a WAL reader (no migrations,
-   * no project-row insert) and skip index sync — the context serves pure
-   * reads and may run while a review holds single-writer access. The db
-   * file must already exist.
+   * no project-row insert, no index sync) so pure-read commands can run
+   * while a review holds single-writer access. The db file must already
+   * exist; callers route first contact through a normal (queued) open.
    */
   readOnlyMemory?: boolean;
+  /**
+   * Identity override for the server's bundle-free read lane: the request's
+   * remoteUrl + rootCommit pin the project without materializing a worktree
+   * (there is nothing to run git against — that is the point). Only meaningful
+   * together with dbPath + readOnlyMemory.
+   */
+  identity?: ProjectIdentity;
 }
 
 export async function createAppContext(repoRoot: string, options: AppContextOptions = {}): Promise<AppContext> {
-  if (!(await isGitRepo(repoRoot))) {
+  if (!options.identity && !(await isGitRepo(repoRoot))) {
     throw new Error(`not a git repository: ${repoRoot}`);
   }
-  const memory = await Memory.open(repoRoot, {
-    ...(options.dbPath ? { dbPath: options.dbPath } : {}),
-    ...(options.readOnlyMemory ? { readOnly: true } : {}),
-  });
+  const memory = options.identity
+    ? Memory.openDirect(options.identity, {
+        dbPath: options.dbPath!,
+        ...(options.readOnlyMemory ? { readOnly: true } : {}),
+      })
+    : await Memory.open(repoRoot, {
+        ...(options.dbPath ? { dbPath: options.dbPath } : {}),
+        ...(options.readOnlyMemory ? { readOnly: true } : {}),
+      });
   const codeMapResult = await createCodeMap(repoRoot);
   if (codeMapResult.degraded) {
     // Structural context silently missing is the worst failure mode for a

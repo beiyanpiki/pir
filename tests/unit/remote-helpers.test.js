@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { pinRefsToShas, UsageError } from "../../dist/cli/executor.js";
-import { wantsBundle } from "../../dist/cli/remote.js";
+import { isBundleFreeRead, stripClientFlags, wantsAsyncSubmit, wantsBundle } from "../../dist/cli/remote.js";
 import { describeTransportError, remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "../../dist/cli/remote-fetch.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -171,4 +171,50 @@ test("reportUnreachable: timeout causes get a PIR_REMOTE_TIMEOUT hint; others do
   const reset = new TypeError("fetch failed");
   reset.cause = { code: "ECONNRESET" };
   assert.doesNotMatch(reportUnreachable("https://pir.example", reset), /PIR_REMOTE_TIMEOUT/);
+});
+
+test("isBundleFreeRead: only findings list/show ship bundle-free", () => {
+  for (const argv of [["findings"], ["findings", "list"], ["findings", "list", "--json"], ["findings", "show", "F-1"]]) {
+    assert.equal(isBundleFreeRead(argv), true, JSON.stringify(argv));
+  }
+  // Everything else needs the worktree (or a write lane).
+  for (const argv of [
+    ["findings", "export"],
+    ["audit"],
+    ["memory", "status"],
+    ["memory", "bootstrap"],
+    ["find"],
+    ["feedback", "F-1", "expected"],
+    ["verify-fix", "F-1"],
+  ]) {
+    assert.equal(isBundleFreeRead(argv), false, JSON.stringify(argv));
+  }
+});
+
+test("wantsAsyncSubmit defaults to audit only; PIR_REMOTE_ASYNC=1 extends it", () => {
+  const saved = process.env.PIR_REMOTE_ASYNC;
+  delete process.env.PIR_REMOTE_ASYNC;
+  try {
+    assert.equal(wantsAsyncSubmit(["audit", "--json"]), true);
+    assert.equal(wantsAsyncSubmit(["--model", "m/x", "audit"]), true);
+    assert.equal(wantsAsyncSubmit(["find"]), false);
+    assert.equal(wantsAsyncSubmit(["memory", "status"]), false);
+    process.env.PIR_REMOTE_ASYNC = "1";
+    assert.equal(wantsAsyncSubmit(["find"]), true);
+    assert.equal(wantsAsyncSubmit(["memory", "status"]), true);
+  } finally {
+    if (saved === undefined) delete process.env.PIR_REMOTE_ASYNC;
+    else process.env.PIR_REMOTE_ASYNC = saved;
+  }
+});
+
+test("stripClientFlags removes transport flags, keeps everything else", () => {
+  assert.deepEqual(
+    stripClientFlags(["--server", "https://x", "--token", "t", "--insecure", "jobs", "list", "--json"]),
+    ["jobs", "list", "--json"],
+  );
+  assert.deepEqual(
+    stripClientFlags(["--server=https://x", "find", "--base", "main"]),
+    ["find", "--base", "main"],
+  );
 });

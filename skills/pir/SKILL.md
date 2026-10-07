@@ -2,7 +2,7 @@
 name: pir
 description: "Code review with the pir CLI: a reviewer→verifier agent loop with repository memory (SQLite) that reports only verified findings. Trigger when the user asks to review code / a diff / recent changes, find bugs introduced by a change (评审代码, 代码审查, 检查改动), gate a branch on findings, or mentions pir. Covers install (npx from GitHub), local vs remote mode, first-run config, the JSON protocol, feedback/memory commands, and troubleshooting."
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # pir — verified code review from the CLI
@@ -108,6 +108,22 @@ pir verify-fix F-13                      # confirm a fix removed the trigger
 # 4. Re-run: suppressed issues stay gone; memory is evidence, re-validated.
 ```
 
+**Audits are long — hours to days** (~5–10 min per 5-file work unit; a whole
+repo is that × units). Budget accordingly (`--path` to scope down,
+`--max-tokens` to bound) and never treat a quiet audit as dead: findings
+commit incrementally and 20–90 min gaps between them are normal. In remote
+mode audits are submitted as **async jobs**: the CLI polls and streams
+progress until the result arrives; Ctrl-C detaches safely and the output
+stays fetchable —
+
+```bash
+pir jobs list                    # what the server ran/is running
+pir jobs status <id>             # state + recent progress
+pir jobs fetch <id>              # relay a finished job's output
+pir jobs wait <id>               # follow a running job
+pir findings list                # mid-audit status check (never queues behind the audit)
+```
+
 Optional memory bootstrap for long-lived projects (summarizes modules into
 repository memory; costs model tokens):
 
@@ -127,6 +143,7 @@ pir memory refresh            # after large refactors
 | `pir verify-fix <id>` | verifier checks a reported fix |
 | `pir memory status\|bootstrap\|refresh` | repository memory |
 | `pir remember project\|feature\|symbol <target> invariant\|note\|risk --text "…"` | store code knowledge |
+| `pir jobs list\|status\|wait\|fetch <id>` | inspect / pick up async review jobs on a remote server |
 | `pir models [search] [--all] [--ids] [--provider p]` | model catalog |
 | `pir plugins list` | built-in language packs + what this repo activates (`find --plugins <names\|none\|auto>` overrides) |
 | `pir config show\|wizard\|set\|reset` | client config (`~/.pir/config.json`) |
@@ -146,6 +163,8 @@ Reviews run LLM sessions and consume tokens of the configured model. Prefer
 | `could not resolve model: …` | `pir models --all` for exact ids; pass `<provider>/<model>` |
 | `reviewer session failed` | provider credentials broken — check `~/.pi/agent/auth.json` |
 | `codegraph` warnings | harmless; file-level review without the structural index |
+| remote command times out (`UND_ERR_HEADERS_TIMEOUT`) | audits are async by default; for other long commands raise `PIR_REMOTE_TIMEOUT` (seconds, `0` = unlimited) or set `PIR_REMOTE_ASYNC=1` |
+| "where is my audit output?" | `pir jobs list` → `pir jobs fetch <id>` (a serve restart loses pending job ids; findings persist in the project db) |
 
 Deep references: `docs/for-llm.md` (deployment + JSON contract),
 repo `README.md` (architecture).
