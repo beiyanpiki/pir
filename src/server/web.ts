@@ -80,6 +80,16 @@ function acceptsGzip(req: http.IncomingMessage): boolean {
 }
 
 /**
+ * The gzip decision both the compressor and the ETag derive from: negotiation
+ * alone is not enough — bodies under the compression floor ship identity even
+ * to gzip-capable clients, so their validator must be the identity one too
+ * (dogfood F-36).
+ */
+function willGzip(req: http.IncomingMessage, body: Buffer): boolean {
+  return acceptsGzip(req) && body.length >= COMPRESS_MIN_BYTES;
+}
+
+/**
  * Send a complete body, gzip-compressed when the client accepts it. Same sync
  * posture the handlers already have; SSE streams bypass this (flush latency).
  * Every response here is content-negotiated, so it carries
@@ -95,7 +105,7 @@ function sendBody(
 ): void {
   const vary = { vary: "Accept-Encoding" };
   const buffer = typeof body === "string" ? Buffer.from(body, "utf8") : body;
-  if (acceptsGzip(req) && buffer.length >= COMPRESS_MIN_BYTES) {
+  if (willGzip(req, buffer)) {
     const compressed = gzipSync(buffer);
     res.writeHead(code, { ...headers, ...vary, "content-encoding": "gzip", "content-length": String(compressed.length) });
     res.end(compressed);
@@ -324,14 +334,17 @@ export function createWebUi(config: WebUiConfig): WebUi {
         // Transcripts are immutable once written: revalidation is always safe
         // and a 304 saves the whole body on revisit. The validator is
         // per-representation (RFC 9110 §8.8.1): the gzip and identity bodies
-        // are different octet sequences, so they must not share one ETag.
-        const etag = acceptsGzip(req) ? `${transcript.etag}-gz` : transcript.etag;
+        // are different octet sequences, so they must not share one ETag —
+        // and it must key on the representation actually sent: a transcript
+        // under the compression floor ships identity even to a gzip client.
+        const body = Buffer.from(JSON.stringify(transcript.payload), "utf8");
+        const etag = willGzip(req, body) ? `${transcript.etag}-gz` : transcript.etag;
         if (req.headers["if-none-match"] === etag) {
           res.writeHead(304, { etag, vary: "Accept-Encoding", "cache-control": "no-cache" });
           res.end();
           return;
         }
-        sendBody(req, res, 200, JSON.stringify(transcript.payload), {
+        sendBody(req, res, 200, body, {
           "content-type": "application/json; charset=utf-8",
           "cache-control": "no-cache",
           etag,

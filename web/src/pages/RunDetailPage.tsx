@@ -23,6 +23,7 @@ import {
 import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
+import { mergeEvents } from "../live-fold";
 import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
 import { SessionTimeline, sessionDomId } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
@@ -315,29 +316,6 @@ function useTicker(intervalMs: number): number {
     return () => clearInterval(timer);
   }, [intervalMs]);
   return now;
-}
-
-/**
- * Merge a batch of buffered live events into the list in one pass. The SSE
- * replay can hand over tens of thousands of events at once; folding them one
- * by one (copying the array per event) is quadratic, this is O(list + batch).
- */
-function mergeEvents(previous: RunEvent[], pending: RunEvent[]): RunEvent[] {
-  const merged = previous.slice();
-  for (const event of pending) {
-    const last = merged[merged.length - 1];
-    if (
-      event.kind === "session-delta" &&
-      last?.kind === "session-delta" &&
-      last.sessionId === event.sessionId &&
-      last.deltaType === event.deltaType
-    ) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts };
-    } else {
-      merged.push(event);
-    }
-  }
-  return merged;
 }
 
 function ActivityLog({ events }: { events: RunEvent[] }) {

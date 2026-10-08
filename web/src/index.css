@@ -1343,8 +1343,10 @@
   padding-bottom: 7px;
 }
 .session-flow-placeholder {
-  /* Height-pinned stand-in for sections scrolled far away; the inline style
-     overrides with the measured height once the section has rendered. */
+  /* Height-pinned stand-in for sections scrolled far away; the inline
+     minHeight overrides with the measured height once the section has
+     rendered (inline minHeight, because this stylesheet floor would beat an
+     inline height — dogfood F-37). */
   min-height: 480px;
 }
 .session-flow-items {

@@ -90,6 +90,12 @@ async function setupFixture() {
     padding: "y".repeat(4096), // push the body over the compression threshold
   };
   writeFileSync(path.join(transcriptsDir, "reviewer-r1.json"), JSON.stringify(transcript));
+  // A transcript under the compression floor: it ships identity even to
+  // gzip-capable clients, so its validator must be the identity one too.
+  writeFileSync(
+    path.join(transcriptsDir, "reviewer-r2.json"),
+    JSON.stringify({ role: "code reviewer", model: "test-model", prompt: "review the diff", messages: [] }),
+  );
   memory.close();
 
   const handle = await startServer({
@@ -201,6 +207,22 @@ test("web api: gzip negotiation, ETag 304, findings split, no live events embed"
     const refused = await requestJson(port, transcriptUrl, { "accept-encoding": "gzip;q=0" });
     assert.equal(refused.status, 200);
     assert.equal(refused.headers["content-encoding"], undefined, "gzip;q=0 is a refusal, not consent");
+
+    // A transcript under the compression floor ships identity even to a
+    // gzip-capable client — and carries the identity ETag, so the same octets
+    // never appear under two validators (dogfood F-36).
+    const smallUrl = `/api/runs/${projectId}/${runId}/transcript/reviewer-r2.json`;
+    const smallGzip = await requestJson(port, smallUrl, { "accept-encoding": "gzip" });
+    assert.equal(smallGzip.status, 200);
+    assert.equal(smallGzip.headers["content-encoding"], undefined, "small transcripts skip gzip");
+    assert.doesNotMatch(smallGzip.headers.etag, /-gz$/, "no -gz validator on the identity body");
+    const smallIdentity = await requestJson(port, smallUrl);
+    assert.equal(smallIdentity.headers.etag, smallGzip.headers.etag, "one representation, one validator");
+    const small304 = await requestJson(port, smallUrl, {
+      "accept-encoding": "gzip",
+      "if-none-match": smallGzip.headers.etag,
+    });
+    assert.equal(small304.status, 304, "the shared validator still revalidates");
 
     // Vary rides on plain (identity) negotiated responses too, so shared
     // caches key them by Accept-Encoding as well.
