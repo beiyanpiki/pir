@@ -48,6 +48,14 @@ const MAX_RESULT_BYTES = 32 * 1024 * 1024;
 /** Completed jobs kept for pickup; oldest finishedAt evicts first. */
 const MAX_COMPLETED_JOBS = 100;
 
+/** Cut at a UTF-8 codepoint boundary so a capped payload still decodes. */
+function truncateUtf8Bytes(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, "utf8");
+  let end = Math.min(maxBytes, buf.length);
+  while (end > 0 && (buf[end]! & 0xc0) === 0x80) end--;
+  return buf.subarray(0, end).toString("utf8");
+}
+
 /** The list-projection of a job: everything except the heavy log/result payloads. */
 export type JobSummary = Omit<JobRecord, "log" | "result">;
 
@@ -129,12 +137,14 @@ export class JobHandle {
   }
 
   finish(result: { code: number; output: string; log: string[] }): void {
-    const truncated = result.output.length > MAX_RESULT_BYTES;
+    // The cap is bytes: output.length would count UTF-16 code units and let
+    // non-ASCII payloads overshoot it up to 4x (dogfood F-34).
+    const truncated = Buffer.byteLength(result.output, "utf8") > MAX_RESULT_BYTES;
     this.record.status = "completed";
     this.record.finishedAt = Date.now();
     this.record.result = {
       code: result.code,
-      output: truncated ? result.output.slice(0, MAX_RESULT_BYTES) : result.output,
+      output: truncated ? truncateUtf8Bytes(result.output, MAX_RESULT_BYTES) : result.output,
       log: result.log.slice(-MAX_LOG_LINES),
       truncated,
     };

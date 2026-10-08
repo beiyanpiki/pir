@@ -396,3 +396,45 @@ test("CLI: pir jobs list shows the registry", async (t) => {
     (err) => err.code === 2 && /needs a remote server/.test(err.stderr),
   );
 });
+
+test("CLI: a sync thin-bundle find resends full history on needFull (dogfood F-33)", async (t) => {
+  const repo = createTempGitRepo("pir-jobs-");
+  t.after(() => repo.cleanup());
+  // Two commits so find has a base..head thin form to ship.
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+  // A stub server — the contract under test is the client's retry, not the
+  // execution behind it (executing find for real would need a model).
+  const requests = [];
+  const { createServer } = await import("node:http");
+  const stub = createServer((req, res) => {
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      requests.push(parsed);
+      res.writeHead(200, { "content-type": "application/json" });
+      // First contact on a thin (base-limited) bundle: the sync server
+      // answers 200 {needFull:true} with no jobId.
+      if (parsed.base !== null) {
+        res.end(JSON.stringify({ needFull: true }));
+        return;
+      }
+      res.end(JSON.stringify({ code: 0, output: '{"command":"find","data":{"findings":[]}}\n', log: [] }));
+    });
+  });
+  await new Promise((resolve) => stub.listen(0, "127.0.0.1", resolve));
+  t.after((done) => stub.close(done));
+
+  const env = { ...process.env, PIR_NO_WIZARD: "1" };
+  const { stdout, stderr } = await execFileAsync(
+    process.execPath,
+    [CLI, "--server", `http://127.0.0.1:${stub.address().port}`, "--token", TOKEN, "--insecure", "find", "--json", "--cwd", repo.dir],
+    { env, encoding: "utf8" },
+  );
+  assert.equal(requests.length, 2, "the client must resend after a sync needFull");
+  assert.notEqual(requests[0].base, null, "the first attempt ships the thin bundle");
+  assert.equal(requests[1].base, null, "the resend is full history");
+  assert.match(stderr, /needs full history, resending/);
+  assert.equal(JSON.parse(stdout).command, "find");
+});

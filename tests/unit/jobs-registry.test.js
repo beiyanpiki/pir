@@ -61,6 +61,22 @@ test("JobRegistry: oversize results are truncated and flagged", () => {
   assert.equal(record.result.output.length, 32 * 1024 * 1024);
 });
 
+test("JobRegistry: the result cap counts bytes, not UTF-16 code units (dogfood F-34)", () => {
+  const registry = new JobRegistry();
+  const job = registry.create({ command: "audit", argv: ["audit"] });
+  job.start();
+  // 12M CJK chars: 36 MB as UTF-8 but only 12M code units — a code-unit cap
+  // would keep all of it (and more) instead of truncating.
+  const wide = "漢".repeat(12 * 1024 * 1024);
+  job.finish({ code: 0, output: wide, log: [] });
+  const record = registry.get(job.jobId);
+  assert.equal(record.result.truncated, true);
+  assert.ok(Buffer.byteLength(record.result.output, "utf8") <= 32 * 1024 * 1024);
+  // The cut lands on a codepoint boundary, so the payload still decodes.
+  assert.ok(record.result.output.length > 0);
+  assert.ok(!record.result.output.includes("\uFFFD"));
+});
+
 test("JobRegistry: old completed jobs evict, active ones never", () => {
   const registry = new JobRegistry();
   const active = registry.create({ command: "audit", argv: ["audit"] });
