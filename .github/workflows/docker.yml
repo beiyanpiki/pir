@@ -2,13 +2,16 @@ name: docker
 
 # Builds and pushes the pir image to GHCR (GitHub Container Registry):
 #   ghcr.io/<owner>/pir:<tag>
-# - push to dev  -> :dev and :sha tags
-# - v* tag push   -> :1.2.3 and :1.2 semver tags
+# Release-only: runs exclusively on v* tag pushes, so no container
+# build/push/upload happens outside an actual release. Always on a
+# GitHub-hosted runner — the self-hosted runner is for testing only.
+#   v* tag push -> :1.2.3 and :1.2 semver tags, plus :main (docker-compose.yml
+#                  pins ghcr.io/beiyanpiki/pir:main, so every release
+#                  republishes it to keep `docker compose pull` on the
+#                  release line)
 on:
   push:
-    branches: [dev]
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -41,13 +44,12 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            # docker-compose.yml pins ghcr.io/beiyanpiki/pir:main — publish it
-            # on every dev build so `docker compose pull` tracks the release line.
-            type=raw,value=main,event=branch
+            # docker-compose.yml pins ghcr.io/beiyanpiki/pir:main — republish
+            # :main on every release so `docker compose pull` tracks the
+            # release line (this workflow only fires on v* tags now).
+            type=raw,value=main
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
 
       - name: Build and push
         uses: docker/build-push-action@v6

@@ -11,7 +11,10 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Testing only — runs on the self-hosted runner registered for this repo
+    # (host box /opt/pir-self-runner, label pir-self-runner). Anything that
+    # builds/compiles/uploads release artifacts stays on GitHub-hosted runners.
+    runs-on: [self-hosted, pir-self-runner]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -28,12 +31,14 @@ jobs:
   # The npm package behind `npx github:beiyanpiki/pir` and
   # `npm i -g github:beiyanpiki/pir` (no npm registry publish): pack the
   # files whitelist from package.json with the freshly built dist/, smoke-test
-  # that exact tarball the way npx installs it, upload it as a workflow
-  # artifact, and on v* tags attach it to the GitHub release so pinned
-  # installs can use
+  # that exact tarball the way npx installs it, and attach it to the GitHub
+  # release so pinned installs can use
   #   npm i -g github:beiyanpiki/pir/releases/download/vX.Y.Z/pir-X.Y.Z.tgz
+  # Release-only: this job never runs on branch pushes or PRs, and always on a
+  # GitHub-hosted runner — the self-hosted runner is for testing only.
   package:
     needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
