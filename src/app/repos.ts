@@ -456,10 +456,13 @@ export async function createBundle(
   const commonDirRaw = (await git(repoRoot, ["rev-parse", "--git-common-dir"])).trim();
   const objectsDir = path.resolve(repoRoot, commonDirRaw, "objects");
   // A bare init would otherwise inherit the machine's init.defaultObjectFormat
-  // (usually sha1); pointing alternates at a sha256 store from a sha1 repo
-  // cannot resolve anything (dogfood F-52). The flag is passed ONLY for
-  // sha256 sources: --object-format needs Git 2.29, and a sha256 repository
-  // cannot exist without it, while sha1 is every git's default (dogfood F-53).
+  // (usually sha1); pointing alternates at a store of the other format cannot
+  // resolve anything (dogfood F-52). The -c override pins the format on every
+  // git that supports the knob and is an inert unknown key on older gits —
+  // which cannot host sha256 anyway — so a machine defaulting to sha256 still
+  // gets a sha1 temp repo for a sha1 source (dogfood F-53/F-54). The explicit
+  // --object-format flag is added only for sha256, where Git 2.29+ is
+  // guaranteed by the source repository's existence.
   let objectFormat = "sha1";
   try {
     objectFormat = (await git(repoRoot, ["rev-parse", "--show-object-format"])).trim();
@@ -473,6 +476,8 @@ export async function createBundle(
   try {
     try {
       await git(tempRepo, [
+        "-c",
+        `init.defaultObjectFormat=${objectFormat}`,
         "init",
         "--quiet",
         "--bare",

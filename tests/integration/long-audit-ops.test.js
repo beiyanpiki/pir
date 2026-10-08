@@ -350,3 +350,35 @@ test("#46 (dogfood F-52): a sha256 source repository packs through a matching te
   const verify = await execFileAsync("git", ["-C", repo, "bundle", "verify", file]);
   assert.match(verify.stdout, /refs\/pir\/bundle-head/);
 });
+
+test("#46 (dogfood F-54): a machine defaulting to sha256 still packs a sha1 source", async (t) => {
+  sandbox(t);
+  const repo = createTempGitRepo("pir-lao-sha1-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    repo.commit("one");
+    const head = git(repo.dir, ["rev-parse", "HEAD"]).trim();
+    assert.equal(git(repo.dir, ["rev-parse", "--show-object-format"]).trim(), "sha1");
+
+    // Simulate a machine whose git defaults new repos to sha256 — via git's
+    // env-var config, so nothing global is polluted.
+    const saved = { GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT, GIT_CONFIG_KEY_0: process.env.GIT_CONFIG_KEY_0, GIT_CONFIG_VALUE_0: process.env.GIT_CONFIG_VALUE_0 };
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "init.defaultObjectFormat";
+    process.env.GIT_CONFIG_VALUE_0 = "sha256";
+    t.after(() => {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+    const { createBundle } = await import("../../dist/app/repos.js");
+    const bundle = await createBundle(repo.dir, { base: null, head });
+    const file = await bundleFile(bundle, "sha1-on-sha256-default");
+    t.after(() => rmSync(file, { force: true }));
+    const verify = await execFileAsync("git", ["-C", repo.dir, "bundle", "verify", file]);
+    assert.match(verify.stdout, /refs\/pir\/bundle-head/);
+  } finally {
+    repo.cleanup();
+  }
+});
