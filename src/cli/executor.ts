@@ -50,6 +50,7 @@ Usage:
   pir findings show <id>                 show one finding
   pir models [search] [--all] [--ids] [--provider <p>]   list pi models
   pir verify-fix <id>                    verify a reported fix
+  pir jobs list|status|wait|fetch <id>   inspect async review jobs on a server
   pir serve [--host H --port P] [--cert C --key K] [--token T] [--web]   HTTPS service
       --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
              viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
@@ -139,6 +140,13 @@ Remote mode:
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
 
+  Audits are submitted as async jobs (hours-to-days runs must not be bound
+  to one client's wait): the CLI polls, prints progress, and relays the
+  result; Ctrl-C detaches and \`pir jobs fetch <id>\` picks it up later.
+  PIR_REMOTE_ASYNC=1 forces async submission for any review command.
+  Remote \`findings list|show\` is answered bundle-free and never waits
+  behind an in-flight audit.
+
 Config keys (pir config set <key> <value>):
   mode local|remote   model <provider/model>|""
   server.url <url>    server.token <t>|""      server.insecure true|false
@@ -166,6 +174,11 @@ export interface ExecOptions {
    * exist; callers route first contact through a normal (queued) open.
    */
   readOnlyMemory?: boolean;
+  /**
+   * Identity for the server's bundle-free read lane: pins the project
+   * without a worktree. Only meaningful with dbPath + readOnlyMemory.
+   */
+  identity?: import("../memory/identity.js").ProjectIdentity;
 }
 
 interface ParsedArgs {
@@ -407,12 +420,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath }, command, positional, flags, multi, json, out, emit, log, null, Boolean(opts.readOnlyMemory));
+  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
   cwd: string,
-  ctxOptions: { dbPath?: string },
+  ctxOptions: { dbPath?: string; identity?: import("../memory/identity.js").ProjectIdentity },
   command: string,
   positional: string[],
   flags: Map<string, string | boolean>,
@@ -427,6 +440,7 @@ async function runInContext(
   const ctx = await createAppContext(cwd, {
     noSyncIndex: Boolean(flags.get("--no-sync-index")),
     dbPath: ctxOptions.dbPath,
+    ...(ctxOptions.identity ? { identity: ctxOptions.identity } : {}),
     ...(readOnlyMemory ? { readOnlyMemory: true } : {}),
   });
 

@@ -242,13 +242,14 @@ export class FindingStore {
     const startedAt = Date.now();
     const mode = input.mode ?? "change";
     this.store.run(
-      "INSERT INTO review_runs (id, project_id, mode, base, head, target, started_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'running')",
+      "INSERT INTO review_runs (id, project_id, mode, base, head, target, started_at, status, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?)",
       id,
       this.projectId,
       mode,
       input.base,
       input.head,
       input.target === undefined ? null : JSON.stringify(input.target),
+      startedAt,
       startedAt,
     );
     return {
@@ -268,6 +269,20 @@ export class FindingStore {
       uncertain: 0,
       notes: null,
     };
+  }
+
+  /**
+   * Liveness heartbeat (#38): advances updated_at so a run's progress is
+   * observable (and an orphaned status='running' row detectable) from the
+   * DB alone. Cheap by design — one UPDATE per round / work unit.
+   */
+  touchRun(runId: string): void {
+    this.store.run(
+      "UPDATE review_runs SET updated_at = ? WHERE id = ? AND project_id = ?",
+      Date.now(),
+      runId,
+      this.projectId,
+    );
   }
 
   /**
@@ -292,9 +307,10 @@ export class FindingStore {
     runId: string,
     stats: { rounds: number; candidates: number; confirmed: number; rejected: number; uncertain: number; status?: string; notes?: string },
   ): void {
+    const now = Date.now();
     this.store.run(
-      `UPDATE review_runs SET finished_at = ?, status = ?, rounds = ?, candidates = ?, confirmed = ?, rejected = ?, uncertain = ?, notes = ? WHERE id = ?`,
-      Date.now(),
+      `UPDATE review_runs SET finished_at = ?, status = ?, rounds = ?, candidates = ?, confirmed = ?, rejected = ?, uncertain = ?, notes = ?, updated_at = ? WHERE id = ?`,
+      now,
       stats.status ?? "completed",
       stats.rounds,
       stats.candidates,
@@ -302,6 +318,7 @@ export class FindingStore {
       stats.rejected,
       stats.uncertain,
       stats.notes ?? null,
+      now,
       runId,
     );
   }

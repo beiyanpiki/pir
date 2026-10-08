@@ -277,4 +277,15 @@ export const MIGRATIONS: Migration[] = [
       )`,
     ],
   },
+  {
+    version: 6,
+    statements: [
+      // Run liveness heartbeat (#38): review_runs.updated_at advances on every
+      // persisted progress step (per round, per audit work unit), so a live
+      // run and an orphaned status='running' row (serve died mid-run) are
+      // distinguishable from the DB alone — heartbeat age — and mid-run
+      // inspection no longer relies on the WAL-frozen main file.
+      `ALTER TABLE review_runs ADD COLUMN updated_at INTEGER`,
+    ],
+  },
 ];

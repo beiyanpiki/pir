@@ -206,11 +206,19 @@ When transport resolves to remote:
 |---|---|---|
 | `GET /health` | — | `{ok, version, tls, executor: {pending, oldestPendingMs}}` |
 | `POST /v1/exec` | `{argv}` | Runs `executePirCommand` under `cwdGuard: workspace`; refuses recursive `serve`; `UsageError` → HTTP 200 with `code:2`; repo-context commands on a non-git cwd → `code:2` guidance (bundle path / `--repo`) |
-| `POST /v1/review` | `{rootCommit, base?, head, bundleBase64, argv?}` | Whitelisted commands (`find audit memory findings feedback remember verify-fix`); materializes the bundle and reviews it in a throwaway worktree; thin-bundle miss → `{needFull:true}` |
+| `POST /v1/review` | `{rootCommit, base?, head, bundleBase64, argv?, async?, noBundle?}` | Whitelisted commands (`find audit memory findings feedback remember verify-fix`); materializes the bundle and reviews it in a throwaway worktree; thin-bundle miss → `{needFull:true}`. `async:true` → `202 {jobId, status:"queued"}` with the result in the job registry. `findings list/show` are served bundle-free from the project db when it exists (first contact → `{needFull:true}` if `noBundle`, else the queued path) |
+| `GET /v1/jobs` / `GET /v1/jobs/<id>` | — | Job registry: list / status / retained result of queued review executions (async submissions and sync requests whose client disconnected mid-wait). In-memory, per serve process; retention-bounded |
 | `POST /v1/memory/sync` | `{projectId, snapshot, dryRun?}` | Re-derives `projectId` from `normalizedRemote+rootCommit` (a token holder cannot clobber another project); merges snapshots server-side |
 
 - **Auth**: bearer token, `timingSafeEqual`. No token configured = open
   endpoint (warned at startup).
+- **Jobs (delivery contract, #38)**: every queued `/v1/review` execution is
+  a job in an in-memory registry. Sync responses carry its `jobId`; if the
+  client disconnects mid-wait the job runs to completion and its result
+  stays fetchable (`clientGone` flag). Async requests get the id up front —
+  audits (hours to days) must not be bound to one client's wait. The
+  registry keeps recent log lines (2000) and results (32 MB cap) for the
+  last 100 settled jobs; the durable record is always the review run.
 - **Serialization**: commands that write run through one promise queue —
   review sessions and the SQLite store assume single-writer access. A
   `/v1/review` holds its queue slot across materialize + execute + cleanup.
@@ -229,7 +237,9 @@ When transport resolves to remote:
   Both fast lanes share a small FIFO concurrency cap (16 per server):
   each fast request spawns git/codegraph subprocesses and opens sqlite,
   so an unbounded flood must not be able to exhaust process/file
-  descriptors and starve the queued reviews.
+  descriptors and starve the queued reviews. `/v1/review` bundle-free
+  reads (`findings list|show` with a ready db) join the same fast lane —
+  the mid-audit status check never waits behind the audit.
 - **Observability**: `/health` reports `executor.pending` (queued + running
   tasks) and `executor.oldestPendingMs` (age of the oldest unsettled task),
   so "hung behind a review" is visible from the outside.

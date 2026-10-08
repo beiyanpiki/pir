@@ -11,6 +11,7 @@ import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
 import { createWebUi, defaultWebRoot } from "./web.js";
 import { LiveRegistry } from "./live-registry.js";
+import { JobRegistry } from "./jobs.js";
 import { pirStateBase } from "./web-store.js";
 import { isGitRepo } from "../changes/git.js";
 
@@ -40,6 +41,27 @@ const MAX_SYNC_BYTES = 64 * 1024 * 1024;
  * models/config/skill/serve have no business running against a worktree.
  */
 const REVIEW_ENDPOINT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
+
+/**
+ * Bundle-free read lane for /v1/review (#38): these commands read only the
+ * project's central memory db — their answers never depend on the worktree —
+ * so the request's remoteUrl + rootCommit (enough to derive the projectId)
+ * can serve them as a WAL reader while an audit holds the serial queue and
+ * the single-writer db connection. The db must already exist; first contact
+ * falls back to the queued materialize path, which creates it.
+ */
+function isBundleFreeReadArgv(argv: string[]): boolean {
+  const { positional } = parseArgs(argv);
+  return positional[0] === "findings" && ["list", "show"].includes(positional[1] ?? "list");
+}
+
+/**
+ * Terminal failure marker for a thin bundle the server could not apply. The
+ * async client matches this prefix and resends full history instead of
+ * surfacing the failure (dogfood F-30); the sync client gets the usual
+ * `{needFull:true}` body and never sees the string.
+ */
+export const NEEDFULL_MARKER = "needFull: the shipped thin bundle could not be applied; resend full history";
 
 /**
  * Commands the executor runs inside a repo context (runInContext →
@@ -168,6 +190,10 @@ export async function startServer(input: {
     webHandler = createWebUi({ ...input.webUi, registry: webRegistry });
   }
 
+  // Every queued /v1/review execution becomes a job: async requests pick the
+  // result up by id; sync requests whose client disconnected keep it here too.
+  const jobs = new JobRegistry();
+
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
     if (req.method === "GET" && url.pathname === "/health") {
@@ -175,6 +201,15 @@ export async function startServer(input: {
       res.end(
         JSON.stringify({ ok: true, version: readVersion(), tls: Boolean(input.tls), executor: executorStats() }),
       );
+      return;
+    }
+    if (req.method === "GET" && (url.pathname === "/v1/jobs" || url.pathname.startsWith("/v1/jobs/"))) {
+      if (input.token && !isAuthorizedRequest(req.headers.authorization, input.token)) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "missing or invalid bearer token" }));
+        return;
+      }
+      handleJobs(res, url.pathname.slice("/v1/jobs/".length));
       return;
     }
     if (
@@ -217,7 +252,7 @@ export async function startServer(input: {
     res.end(
       JSON.stringify({
         error: "not found",
-        endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review", "POST /v1/memory/sync"],
+        endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review", "POST /v1/memory/sync", "GET /v1/jobs", "GET /v1/jobs/<id>"],
       }),
     );
   };
@@ -226,6 +261,17 @@ export async function startServer(input: {
    * coderabbit-cli style flow: the client ships its LOCAL state as a git
    * bundle (unpushed commits included); we materialize a throwaway worktree
    * and run the requested command there under the repo's stable projectId.
+   *
+   * Two contracts layered on top (#38):
+   * - `async: true` answers `202 {jobId, status:"queued"}` immediately; the
+   *   result is picked up via `GET /v1/jobs/<jobId>` — audits run hours to
+   *   days and must not be bound to one client's wait.
+   * - bundle-free reads (`findings list|show`) are served from the central
+   *   db as WAL readers, bypassing the serial queue entirely — the obvious
+   *   "what does it have so far" check has to work mid-audit.
+   * Every queued execution is also a job, so a sync request whose client
+   * disconnected mid-wait leaves its result in the registry for pickup
+   * instead of writing it into a dead socket.
    */
   async function handleReview(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const logLines: string[] = [];
@@ -238,6 +284,8 @@ export async function startServer(input: {
         head?: string;
         bundleBase64?: string;
         argv?: string[];
+        async?: boolean;
+        noBundle?: boolean;
       };
       if (!parsed.head || !parsed.rootCommit || typeof parsed.bundleBase64 !== "string") {
         throw new Error("body must include rootCommit, head and bundleBase64");
@@ -254,8 +302,6 @@ export async function startServer(input: {
         throw new Error(`command not allowed on /v1/review: ${command} (use /v1/exec for repos/models)`);
       }
 
-      const bundle = Buffer.from(parsed.bundleBase64, "base64");
-      const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
       // Force the review into the worktree; drop any client --cwd (both the
       // two-token and the --cwd=path form).
       const cleanedArgv: string[] = [];
@@ -267,54 +313,178 @@ export async function startServer(input: {
         if (argv[i]!.startsWith("--cwd=")) continue;
         cleanedArgv.push(argv[i]!);
       }
-      // Materialization, command execution and worktree cleanup share one
-      // queue slot: the bundle fetch and the worktree operate on the shared
-      // per-project repo directory, which no other in-flight task may touch.
       const meta = {
         remoteUrl: parsed.remoteUrl ?? null,
         rootCommit: parsed.rootCommit,
         base: parsed.base ?? null,
         head: parsed.head,
       };
-      const outcome = await enqueue(async (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> => {
-        let materialized: import("../app/repos.js").MaterializedReview | null = null;
-        try {
-          try {
-            materialized = (await materializeFromBundle(bundle, meta)).review;
-          } catch (err) {
-            if ((err as { needFull?: boolean }).needFull) return { needFull: true };
-            throw err;
-          }
-          log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
 
-          // Older clients also forwarded raw refs in argv — pin them to the
-          // SHAs this request actually materialized so the diff resolves in a
-          // repo without remote-tracking refs.
-          const pinnedArgv = pinRefsToShas(cleanedArgv, {
-            base: meta.base,
-            head: materialized.headCommit,
-          });
-          const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
-          const result = await executePirCommand(effectiveArgv, {
-            cwdGuard: materialized.worktree,
-            dbPath: reviewDbPath(materialized.projectId),
-            onLog: (message) => {
-              logLines.push(message);
-              log(`${cleanedArgv.join(" ")} :: ${message}`);
-            },
-          });
-          return { needFull: false, code: result.code, output: result.output };
-        } finally {
-          await materialized?.cleanup();
+      // Bundle-free read lane: pure db reads answered while the serial queue
+      // is busy with an audit. Falls through to the queued materialize path
+      // on first contact (db missing or not yet migrated), which creates it.
+      if (isBundleFreeReadArgv(cleanedArgv)) {
+        const { projectIdFor, reviewDbPath } = await import("../app/repos.js");
+        const { dbCurrentForRead } = await import("../memory/index.js");
+        const projectId = projectIdFor(meta.remoteUrl, meta.rootCommit);
+        const dbPath = reviewDbPath(projectId);
+        if (dbCurrentForRead(dbPath)) {
+          const { normalizeRemoteUrl } = await import("../memory/identity.js");
+          const identity = {
+            projectId,
+            remote: meta.remoteUrl,
+            normalizedRemote: meta.remoteUrl ? normalizeRemoteUrl(meta.remoteUrl) : null,
+            rootCommit: meta.rootCommit,
+          };
+          const logRead = (message: string): void => {
+            logLines.push(message);
+            log(`${cleanedArgv.join(" ")} :: ${message}`);
+          };
+          const result = await fastLane.run(() =>
+            executePirCommand(["--cwd", input.workspace, ...cleanedArgv], {
+              cwdGuard: input.workspace,
+              dbPath,
+              readOnlyMemory: true,
+              identity,
+              onLog: logRead,
+            }),
+          );
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
+          return;
         }
-      });
-      if (outcome.needFull) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ needFull: true }));
+        if (parsed.noBundle) {
+          // First contact and nothing shipped to create the db from: the
+          // client resends with the bundle (the existing needFull retry).
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ needFull: true }));
+          return;
+        }
+      } else if (parsed.noBundle) {
+        throw new Error("noBundle is only accepted for findings list/show (other commands need the worktree)");
+      }
+
+      const bundle = Buffer.from(parsed.bundleBase64, "base64");
+      const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
+      const job = jobs.create({ command, argv: cleanedArgv });
+      // Materialization, command execution and worktree cleanup share one
+      // queue slot: the bundle fetch and the worktree operate on the shared
+      // per-project repo directory, which no other in-flight task may touch.
+      const runQueued = (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> =>
+        enqueue(async (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> => {
+          job.start();
+          let materialized: import("../app/repos.js").MaterializedReview | null = null;
+          try {
+            try {
+              materialized = (await materializeFromBundle(bundle, meta)).review;
+            } catch (err) {
+              if ((err as { needFull?: boolean }).needFull) return { needFull: true };
+              throw err;
+            }
+            log(`materialized worktree at ${materialized.headCommit.slice(0, 10)}`);
+
+            // Older clients also forwarded raw refs in argv — pin them to the
+            // SHAs this request actually materialized so the diff resolves in a
+            // repo without remote-tracking refs.
+            const pinnedArgv = pinRefsToShas(cleanedArgv, {
+              base: meta.base,
+              head: materialized.headCommit,
+            });
+            const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
+            const result = await executePirCommand(effectiveArgv, {
+              cwdGuard: materialized.worktree,
+              dbPath: reviewDbPath(materialized.projectId),
+              onLog: (message) => {
+                logLines.push(message);
+                job.progress(message);
+                log(`${cleanedArgv.join(" ")} :: ${message}`);
+              },
+            });
+            return { needFull: false, code: result.code, output: result.output };
+          } finally {
+            await materialized?.cleanup();
+          }
+        });
+
+      if (parsed.async) {
+        res.writeHead(202, { "content-type": "application/json" });
+        res.end(JSON.stringify({ jobId: job.jobId, status: "queued" }));
+        log(`review job ${job.jobId} accepted (async): ${cleanedArgv.join(" ")}`);
+        void runQueued().then(
+          (outcome) => {
+            if (outcome.needFull) {
+              // The "needFull:" prefix is the machine-readable retry marker
+              // the async client acts on by resending full history.
+              job.fail(NEEDFULL_MARKER);
+              return;
+            }
+            job.finish({ code: outcome.code, output: outcome.output, log: logLines });
+          },
+          (err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            if (err instanceof UsageError) {
+              // Preserve the CLI contract on the async lane too: usage
+              // problems are exit code 2 with the usage text on the log
+              // channel, not a job failure (dogfood F-32).
+              job.finish({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] });
+              return;
+            }
+            job.fail(message);
+            log(`review job ${job.jobId} failed: ${message}`);
+          },
+        );
         return;
       }
+
+      // Sync delivery — but watch the socket: a client that gave up waiting
+      // (default PIR_REMOTE_TIMEOUT) must not take its result with it. The
+      // job keeps running; the retained result is fetchable by id.
+      let clientGone = false;
+      res.on("close", () => {
+        if (res.writableEnded || clientGone) return;
+        clientGone = true;
+        job.markClientGone();
+        log(`client disconnected while job ${job.jobId} was in flight; result will be retained (GET /v1/jobs/${job.jobId})`);
+      });
+      let outcome: Awaited<ReturnType<typeof runQueued>>;
+      try {
+        outcome = await runQueued();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof UsageError) {
+          // Same contract on both delivery paths: usage problems are a
+          // completed job with code 2 and the usage text on the log channel.
+          job.finish({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] });
+          if (!clientGone) {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] }));
+          }
+          return;
+        }
+        job.fail(message);
+        log(`review error: ${message}`);
+        if (!clientGone) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: message }));
+        }
+        return;
+      }
+      if (outcome.needFull) {
+        // Settle the job: an unsettled record would sit at "running" forever
+        // and, being non-terminal, never evict (dogfood F-29). The failure
+        // is this attempt's outcome — the client's full-history retry is a
+        // new job.
+        job.fail(NEEDFULL_MARKER);
+        if (!clientGone) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ needFull: true }));
+        }
+        return;
+      }
+      job.finish({ code: outcome.code, output: outcome.output, log: logLines });
+      if (clientGone) return;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ code: outcome.code, output: outcome.output, log: logLines }));
+      res.end(JSON.stringify({ code: outcome.code, output: outcome.output, log: logLines, jobId: job.jobId }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof UsageError) {
@@ -326,6 +496,32 @@ export async function startServer(input: {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     }
+  }
+
+  /**
+   * GET /v1/jobs[/<id>]: the list is a summary projection (no retained
+   * logs/results — up to 100 settled jobs × 32 MB payloads must never ride
+   * along on a listing, dogfood F-31); the single-job view carries the full
+   * record including the retained result for pickup.
+   */
+  function handleJobs(res: http.ServerResponse, jobId: string): void {
+    if (!jobId) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jobs: jobs.list() }));
+      return;
+    }
+    const record = jobs.get(jobId);
+    if (!record) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: `unknown job: ${jobId} (the registry is in-memory; the server may have restarted since the job was submitted)`,
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ job: record }));
   }
 
   /**

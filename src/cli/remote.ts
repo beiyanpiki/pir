@@ -2,6 +2,7 @@ import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
+import type { JobView } from "./jobs.js";
 
 export interface RemoteOptions {
   token?: string;
@@ -62,6 +63,28 @@ export function wantsBundle(cleanedArgv: string[]): boolean {
     REVIEW_COMMANDS.has(command) &&
     !cleanedArgv.some((a) => a === "--repo" || a.startsWith("--repo="))
   );
+}
+
+/**
+ * Pure db reads the server can answer without the worktree (#38): shipped
+ * bundle-free first (3 KB request instead of a full-history upload) and
+ * served off the serial queue while an audit is in flight. On refusal
+ * (needFull / an old server's 400 on the empty bundle) the caller falls
+ * back to the normal bundle path.
+ */
+export function isBundleFreeRead(cleanedArgv: string[]): boolean {
+  const { positional } = parseArgs(cleanedArgv);
+  return positional[0] === "findings" && ["list", "show"].includes(positional[1] ?? "list");
+}
+
+/**
+ * Async submission (#38): audits run hours to days — hours no single client
+ * wait should own. Default for audit; PIR_REMOTE_ASYNC=1 extends it to any
+ * review command (a find expected to be long, for example).
+ */
+export function wantsAsyncSubmit(cleanedArgv: string[]): boolean {
+  if (process.env.PIR_REMOTE_ASYNC === "1") return true;
+  return parseArgs(cleanedArgv).positional[0] === "audit";
 }
 
 async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions): Promise<number> {
@@ -133,8 +156,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   const [remoteUrl, rootCommit] = await Promise.all([getRemoteUrl(cwd), getRootCommit(cwd)]);
   const { createBundle } = await import("../app/repos.js");
 
-  const send = async (withBase: boolean): Promise<Response> => {
-    const bundle = await createBundle(cwd, { base: withBase ? base : null, head });
+  const send = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<Response> => {
+    const bundle = opts.noBundle
+      ? Buffer.alloc(0)
+      : await createBundle(cwd, { base: opts.withBase ? base : null, head });
     return fetch(new URL("/v1/review", url), {
       method: "POST",
       // undici's default 300 s headersTimeout would kill any review queued
@@ -148,47 +173,120 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       body: JSON.stringify({
         remoteUrl,
         rootCommit,
-        base: withBase ? base : null,
+        base: opts.withBase ? base : null,
         head,
         bundleBase64: bundle.toString("base64"),
         argv,
+        ...(opts.noBundle ? { noBundle: true } : {}),
+        ...(opts.async ? { async: true } : {}),
       }),
     });
   };
 
-  process.stderr.write(`pir: shipping local state ${isFind && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`);
-  // Audit and the memory family ship a full-history bundle from the start
-  // (there is no thin/base form to miss); find keeps its thin-first,
-  // one-retry-full strategy.
-  let response: Response;
-  try {
-    response = await send(isFind && base !== null);
-  } catch (err) {
-    process.stderr.write(reportUnreachable(url.origin, err));
-    return 3;
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);
-    return 3;
-  }
-  let payload = (await response.json()) as { needFull?: boolean } & RelayResult;
-  if (payload.needFull) {
-    process.stderr.write("pir: server needs full history, resending\n");
+  const submit = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<number> => {
+    let response: Response;
     try {
-      response = await send(false);
+      response = await send(opts);
     } catch (err) {
       process.stderr.write(reportUnreachable(url.origin, err));
       return 3;
     }
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);
+    let payload = (await response.json().catch(() => ({}))) as { needFull?: boolean; jobId?: string } & RelayResult;
+    // A refused bundle-free read (first contact: db not created yet; or an
+    // old server that tried to materialize the empty bundle and 400'd)
+    // retries with the real bundle instead of surfacing the refusal.
+    const refusedNoBundle = opts.noBundle === true && (!response.ok || payload.needFull === true);
+    if (!response.ok && !refusedNoBundle) {
+      const text = JSON.stringify(payload).slice(0, 300);
+      process.stderr.write(`pir: server error ${response.status}: ${text}\n`);
       return 3;
     }
-    payload = (await response.json()) as RelayResult;
+    if (refusedNoBundle) {
+      process.stderr.write(payload.needFull ? "pir: server needs full history, resending\n" : "pir: server refused the bundle-free request, resending with bundle\n");
+      return await submit({ withBase: false, async: opts.async });
+    }
+    // A sync thin-bundle attempt the server could not apply answers
+    // 200 {needFull:true} with no jobId — resending full history instead of
+    // relaying that marker as an empty success (the sync twin of the async
+    // F-30 retry below).
+    if (payload.needFull === true && opts.withBase) {
+      process.stderr.write("pir: server needs full history, resending\n");
+      return await submit({ withBase: false, async: opts.async });
+    }
+    if (payload.jobId) {
+      let settled: JobView;
+      try {
+        settled = await followJob(url, payload.jobId, options, argv);
+      } catch (err) {
+        process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)}\n`);
+        return 3;
+      }
+      // A thin bundle the server could not apply reports failure with the
+      // needFull marker: resend full history instead of surfacing it (the
+      // async equivalent of the sync needFull retry, dogfood F-30). The
+      // resend is a full bundle, so it cannot needFull again.
+      if (settled.status === "failed" && (settled.error ?? "").startsWith("needFull") && opts.withBase) {
+        process.stderr.write("pir: server needs full history, resending\n");
+        return await submit({ withBase: false, async: opts.async });
+      }
+      if (settled.status === "failed") {
+        process.stderr.write(`pir: job ${settled.jobId.slice(0, 8)} failed: ${settled.error ?? "unknown error"}\n`);
+        return 3;
+      }
+      if (settled.result?.truncated) {
+        process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
+      }
+      // relay() prints the result's log channel — everything the polling
+      // already streamed is excluded, so only the tail (usage text on a
+      // code-2 finish, dogfood F-32) lands here.
+      const printedDuringPoll = Math.min(settled.logTotal, settled.result?.log.length ?? 0);
+      return relay(
+        { code: settled.result?.code ?? 0, output: settled.result?.output ?? "", log: settled.result?.log.slice(printedDuringPoll) ?? [] },
+        argv,
+      );
+    }
+    return relay(payload, argv);
+  };
+
+  const readonly = isBundleFreeRead(argv);
+  const asyncSubmit = wantsAsyncSubmit(argv);
+  if (readonly) {
+    // Bundle-free first (first contact falls back to a bundled resend above).
+    process.stderr.write(`pir: asking ${url.origin} for findings (bundle-free)\n`);
+    return await submit({ withBase: false, noBundle: true });
   }
-  return relay(payload, argv);
+  process.stderr.write(
+    asyncSubmit
+      ? `pir: submitting ${command} of ${head.slice(0, 8)} to ${url.origin} (async job)\n`
+      : `pir: shipping local state ${isFind && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`,
+  );
+  // Audit and the memory family ship a full-history bundle from the start
+  // (there is no thin/base form to miss); find keeps its thin-first,
+  // one-retry-full strategy.
+  return await submit({ withBase: isFind && base !== null, async: asyncSubmit });
+}
+
+/**
+ * Follow an async job to its end: stream progress lines as they arrive and
+ * hand the settled record back to the caller for relay/retry decisions. No
+ * overall deadline — Ctrl-C detaches, and the result stays fetchable via
+ * `pir jobs fetch`.
+ */
+async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: string[]): Promise<JobView> {
+  const { pollJobToEnd } = await import("./jobs.js");
+  process.stderr.write(
+    `pir: accepted as job ${jobId.slice(0, 8)} — polling ${url.origin} until it finishes (Ctrl-C detaches; fetch later with \`pir jobs fetch ${jobId.slice(0, 8)}\`)\n`,
+  );
+  return await pollJobToEnd(jobId, {
+    url: url.origin,
+    ...(options.token ? { token: options.token } : {}),
+    ...(options.insecure ? { insecure: true } : {}),
+    onLog: (lines) => {
+      if (!argv.includes("--quiet")) {
+        for (const line of lines) process.stderr.write(`${line}\n`);
+      }
+    },
+  });
 }
 
 async function forwardExec(url: URL, argv: string[], options: RemoteOptions): Promise<number> {
@@ -237,7 +335,7 @@ function relay(result: RelayResult, argv: string[]): number {
 }
 
 /** Remove transport-only flags (--server URL, --token VALUE, --insecure, --local, --no-wizard) before forwarding. */
-function stripClientFlags(argv: string[]): string[] {
+export function stripClientFlags(argv: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;

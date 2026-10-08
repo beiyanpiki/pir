@@ -35,6 +35,30 @@ A `head` that is a well-formed commit id but missing from the shipped bundle
 fails the request with 400 — a client/bundle mismatch is never silently
 reviewed away. `argv` must be an array of strings when present.
 
+**Async jobs (audits).** Audits run hours to days (~5–10 min per 5-file work
+unit; whole-repo sweeps take that times units), so no single client wait can
+own their delivery. A `/v1/review` body with `"async": true` is answered
+immediately with `202 {"jobId": "...", "status": "queued"}`; poll
+`GET /v1/jobs/<jobId>` (bearer-authenticated like the POST endpoints) for
+`status` (`queued` → `running` → `completed`/`failed`), recent `log` lines
+and, once settled, the full `result` (`{code, output, log}`). The remote
+client submits audits this way by default and polls for you — progress
+streams to stderr, the envelope lands on stdout as usual, and Ctrl-C
+detaches harmlessly (`pir jobs fetch <id>` picks the result up later; the
+registry keeps the last 100 settled jobs; it is in-memory, so a serve
+restart orphans pending job ids — the durable record stays in the project's
+sqlite). Sync requests that disconnect mid-wait get the same retention: the
+job finishes and its result stays fetchable instead of dying with the
+socket. `PIR_REMOTE_ASYNC=1` extends async submission to every review
+command; every sync `/v1/review` response also carries its `jobId`.
+
+**Bundle-free reads.** Remote `findings list|show` never waits behind an
+in-flight audit and ships no bundle at all: the client sends a 3 KB request
+(`"noBundle": true`) and the server answers from the project's central db
+as a WAL reader. First contact (db not created yet) answers
+`{"needFull": true}` and the client automatically resends bundled, which
+creates the db under the serial queue.
+
 Optional: `PIR_WEB_UI=1` + `PIR_WEB_UI_TOKEN` (or `--web`) hosts a strictly
 read-only browser explorer at `/` (projects → runs → full session timelines
 with live SSE for in-flight runs). It never reaches the executor; viewer
@@ -196,11 +220,24 @@ self-signed certificate, `--token` authenticates.
 pir find --uncommitted --json                      # mode from ~/.pir/config.json
 pir --server https://host:8790 --token T --insecure find --base origin/main --json
 pir --server https://host:8790 --token T --insecure feedback F-1 expected --note "intentional"
+pir --server https://host:8790 --token T --insecure audit --json   # async job: polls until done
+
+# Detached auditing: submit from one shell, pick up from another (or after
+# the audit has long outlived any patience):
+pir jobs list                                     # what the server is/was running
+pir jobs status <id>                              # state + recent progress lines
+pir jobs fetch <id>                               # relay a finished job's output
+pir jobs wait <id>                                # follow a running job to its end
 
 # Server-side registered repos (server fetches them itself):
 docker compose exec pir repos add git@github.com:team/pay.git --name pay
 docker compose exec pir find --repo pay --branch origin/pr-42 --json
 ```
+
+Remote `findings list|show` answers even while an audit holds the server
+(bundle-free read lane), so it is the mid-run status check: findings commit
+incrementally, and the audit's per-unit progress + `review_runs.updated_at`
+heartbeat are queryable in the project's sqlite at any moment.
 
 **Memory sync** merges the user's local memory DB with the server's
 (bidirectional; both sides converge, same-logical-record rows — same feature
@@ -243,7 +280,9 @@ Use `--fail-on P1` + exit code `1` for gating decisions.
 | `pir: no config at ~/.pir/…` on stderr | first run, non-interactive | informational; `pir config wizard` to set up, or `PIR_NO_WIZARD=1` to silence |
 | `401` on API calls | wrong/missing token | pass `--token` / fix `PIR_SERVER_TOKEN` |
 | TLS handshake error | self-signed cert | add `--insecure` (client) |
-| `pir: cannot reach …: fetch failed (UND_ERR_HEADERS_TIMEOUT…)` | server took longer than the client wait (long task queued server-side) | raise `PIR_REMOTE_TIMEOUT` (seconds, default 1800; `0` = unlimited); check whether an earlier task still holds the server's serial queue |
+| `pir: cannot reach …: fetch failed (UND_ERR_HEADERS_TIMEOUT…)` | a **sync** command took longer than the client wait | audits no longer hit this (async jobs); for long sync commands raise `PIR_REMOTE_TIMEOUT` (seconds, default 1800; `0` = unlimited) or set `PIR_REMOTE_ASYNC=1` |
+| "where is my audit output?" | the client detached (Ctrl-C) or a new shell | `pir jobs list` → `pir jobs fetch <id>`; the job kept running and its result is retained. After a serve restart the job id is gone — the findings live on in the project's sqlite |
+| "is the audit still alive?" | long gaps between findings are normal (5–10 min per unit) | `pir jobs status <id>` shows live progress; remotely `pir findings list` answers mid-audit; in the db, `review_runs.updated_at` is the heartbeat (stale ⇒ orphaned run) |
 | `reviewer session failed: ...` | model endpoint/auth broken | re-check `PI_AUTH_JSON` / `PI_API_KEY__<provider>`; `docker compose logs` |
 | `could not resolve model: <id>` | unknown or ambiguous model id | `pir models --all` to find the exact id; pass `<provider>/<model>` |
 | `codegraph` warnings | no structural index | harmless (file-level review); optional `codegraph init` in the project |

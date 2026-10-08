@@ -40,6 +40,12 @@ A glossary of the terms this codebase uses. Implementation details live in
 - **Run (review run)** — one review request: a `review_runs` row with its
   own run id, verdicts and (when transcripts are on) a transcript directory.
   The unit the web UI pages over; distinct from the sessions inside it.
+- **Job** — the serve-side delivery wrapper around one queued `/v1/review`
+  execution (materialize + run + cleanup): async requests answer with its id
+  and pick the result up later (`GET /v1/jobs/<id>`, `pir jobs fetch`);
+  sync requests whose client disconnected keep their result in the job
+  registry instead of losing it. In-memory and process-local; the durable
+  record is always the run.
 - **Session transcript** — the settled SDK message dump (prompt, thinking,
   tool traffic, usage) of one reviewer/verifier session, written under
   `<stateRoot>/<projectId>/transcripts/<runId>/`. Final messages, not a wire

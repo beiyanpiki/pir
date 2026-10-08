@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { pinRefsToShas, UsageError } from "../../dist/cli/executor.js";
-import { wantsBundle } from "../../dist/cli/remote.js";
+import { isBundleFreeRead, stripClientFlags, wantsAsyncSubmit, wantsBundle } from "../../dist/cli/remote.js";
 import { describeTransportError, remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "../../dist/cli/remote-fetch.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -171,4 +171,125 @@ test("reportUnreachable: timeout causes get a PIR_REMOTE_TIMEOUT hint; others do
   const reset = new TypeError("fetch failed");
   reset.cause = { code: "ECONNRESET" };
   assert.doesNotMatch(reportUnreachable("https://pir.example", reset), /PIR_REMOTE_TIMEOUT/);
+});
+
+test("isBundleFreeRead: only findings list/show ship bundle-free", () => {
+  for (const argv of [["findings"], ["findings", "list"], ["findings", "list", "--json"], ["findings", "show", "F-1"]]) {
+    assert.equal(isBundleFreeRead(argv), true, JSON.stringify(argv));
+  }
+  // Everything else needs the worktree (or a write lane).
+  for (const argv of [
+    ["findings", "export"],
+    ["audit"],
+    ["memory", "status"],
+    ["memory", "bootstrap"],
+    ["find"],
+    ["feedback", "F-1", "expected"],
+    ["verify-fix", "F-1"],
+  ]) {
+    assert.equal(isBundleFreeRead(argv), false, JSON.stringify(argv));
+  }
+});
+
+test("wantsAsyncSubmit defaults to audit only; PIR_REMOTE_ASYNC=1 extends it", () => {
+  const saved = process.env.PIR_REMOTE_ASYNC;
+  delete process.env.PIR_REMOTE_ASYNC;
+  try {
+    assert.equal(wantsAsyncSubmit(["audit", "--json"]), true);
+    assert.equal(wantsAsyncSubmit(["--model", "m/x", "audit"]), true);
+    assert.equal(wantsAsyncSubmit(["find"]), false);
+    assert.equal(wantsAsyncSubmit(["memory", "status"]), false);
+    process.env.PIR_REMOTE_ASYNC = "1";
+    assert.equal(wantsAsyncSubmit(["find"]), true);
+    assert.equal(wantsAsyncSubmit(["memory", "status"]), true);
+  } finally {
+    if (saved === undefined) delete process.env.PIR_REMOTE_ASYNC;
+    else process.env.PIR_REMOTE_ASYNC = saved;
+  }
+});
+
+test("stripClientFlags removes transport flags, keeps everything else", () => {
+  assert.deepEqual(
+    stripClientFlags(["--server", "https://x", "--token", "t", "--insecure", "jobs", "list", "--json"]),
+    ["jobs", "list", "--json"],
+  );
+  assert.deepEqual(
+    stripClientFlags(["--server=https://x", "find", "--base", "main"]),
+    ["find", "--base", "main"],
+  );
+});
+
+
+test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async needFull job (dogfood F-30)", async () => {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  const { createTempGitRepo } = await import("../fixtures/helpers.js");
+  const repo = createTempGitRepo("pir-needfull-");
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/v1/review")) {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      const first = posts.length === 1;
+      return {
+        status: 202,
+        ok: true,
+        json: async () => (first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" }),
+      };
+    }
+    if (url.includes("/v1/jobs/job-thin")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({
+          job: {
+            jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
+            createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
+            result: null,
+            error: "needFull: the shipped thin bundle could not be applied; resend full history",
+            clientGone: false,
+          },
+        }),
+      };
+    }
+    if (url.includes("/v1/jobs/job-full")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({
+          job: {
+            jobId: "job-full", command: "find", argv: ["find"], status: "completed",
+            createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
+            result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
+            error: null, clientGone: false,
+          },
+        }),
+      };
+    }
+    throw new Error(`unexpected fetch in test: ${url}`);
+  };
+
+  const savedAsync = process.env.PIR_REMOTE_ASYNC;
+  process.env.PIR_REMOTE_ASYNC = "1";
+  try {
+    const code = await remoteExec("https://pir.invalid", ["--cwd", repo.dir, "find", "--json"], {});
+    assert.equal(code, 0, "the full-history retry must relay the completed job");
+    // Attempt 1: thin (base-limited) bundle, async. Attempt 2: full bundle.
+    assert.equal(posts.length, 2);
+    assert.notEqual(posts[0].base, null, "first attempt ships the thin bundle");
+    assert.equal(posts[0].async, true);
+    assert.ok(posts[0].bundleBase64.length > 0, "thin attempt still carries a bundle");
+    assert.equal(posts[1].base, null, "retry ships full history");
+    assert.equal(posts[1].async, true, "retry stays async");
+    assert.ok(posts[1].bundleBase64.length > posts[0].bundleBase64.length, "retry bundle must be the full one");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (savedAsync === undefined) delete process.env.PIR_REMOTE_ASYNC;
+    else process.env.PIR_REMOTE_ASYNC = savedAsync;
+    repo.cleanup();
+  }
 });

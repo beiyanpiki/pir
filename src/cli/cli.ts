@@ -58,6 +58,20 @@ async function main(argv: string[]): Promise<number> {
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
+  if (command === "jobs") {
+    // jobs talks to the server's job registry directly (GET /v1/jobs) —
+    // there is nothing to forward through the executor.
+    if (transport.mode !== "remote") {
+      throw new UsageError("pir jobs needs a remote server — pass --server <url> or configure remote mode (`pir config`)");
+    }
+    const { runJobsCommand } = await import("./jobs.js");
+    const { stripClientFlags } = await import("./remote.js");
+    return runJobsCommand(stripClientFlags(argv), {
+      url: transport.url,
+      ...(transport.token ? { token: transport.token } : {}),
+      ...(transport.insecure ? { insecure: true } : {}),
+    });
+  }
   if (transport.mode === "remote" && forwardToServer) {
     const { remoteExec } = await import("./remote.js");
     return remoteExec(transport.url, argv, {

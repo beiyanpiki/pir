@@ -64,8 +64,21 @@ export async function memoryDbReadyForRead(
   } catch {
     return false; // identity/git problems: let the normal open report them
   }
+  return dbCurrentForRead(dbPath);
+}
+
+/**
+ * Same readiness contract as memoryDbReadyForRead, for an explicit db path —
+ * the server's bundle-free read lane knows the db location without a repo.
+ */
+export function dbCurrentForRead(dbPath: string): boolean {
   if (!existsSync(dbPath)) return false;
-  const store = SqliteStore.open(dbPath, { readOnly: true });
+  let store: SqliteStore;
+  try {
+    store = SqliteStore.open(dbPath, { readOnly: true });
+  } catch {
+    return false;
+  }
   try {
     const row = store.get<{ v: number | null }>("SELECT MAX(version) AS v FROM _migrations");
     const latest = MIGRATIONS.reduce((max, migration) => Math.max(max, migration.version), 0);
@@ -141,6 +154,29 @@ export class Memory {
       identity.rootCommit,
       Date.now(),
     );
+    return new Memory(identity, store);
+  }
+
+  /**
+   * Open by explicit identity instead of a checkout — the server's
+   * bundle-free read lane: the request already pins the project
+   * (remoteUrl + rootCommit), so no worktree needs materializing to serve
+   * pure reads (#38). The db must exist (readOnly) or be creatable
+   * elsewhere by the caller's queued path.
+   */
+  static openDirect(identity: ProjectIdentity, options: { dbPath: string; readOnly?: boolean }): Memory {
+    const store = SqliteStore.open(options.dbPath, { readOnly: options.readOnly });
+    if (!options.readOnly) {
+      store.run(
+        `INSERT INTO projects (id, remote, normalized_remote, root_commit, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO NOTHING`,
+        identity.projectId,
+        identity.remote,
+        identity.normalizedRemote,
+        identity.rootCommit,
+        Date.now(),
+      );
+    }
     return new Memory(identity, store);
   }
 
