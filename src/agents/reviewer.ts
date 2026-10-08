@@ -68,9 +68,10 @@ export interface ReviewerDeps {
   memoryPack: string;
   round: number;
   maxRounds: number;
-  maxFindings: number;
-  /** Slots left under the maxFindings cap at the start of this round. */
-  findingsRemaining: number;
+  /** Whole-run reporting cap; null = unlimited (#57). */
+  maxFindings: number | null;
+  /** Slots left under the maxFindings cap at the start of this round; null = unlimited. */
+  findingsRemaining: number | null;
   focus: string[];
   priorSummary?: string;
   investigationFeedback?: string[];

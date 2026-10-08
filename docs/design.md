@@ -87,6 +87,15 @@ files over 800 lines are divided into 500-line chunks. These are scheduling
 limits, not separate model token budgets. One run-wide budget, finding limit,
 and deduplication state span every unit.
 
+`pir audit --dry-run` (#56) runs the same snapshot and planner and reports
+head/tree ids, per-selection and per-classification counts, and the planned
+unit count without creating a run or invoking a model. `pir audit coverage
+(--run <id>|--latest)` reads the per-file ledger a run persisted through
+`upsertProgress`. `--max-findings unlimited` (#57) removes the report cap:
+result envelopes and run manifests carry `maxFindings: null` plus an explicit
+`maxFindingsMode` of `capped`/`unlimited`, and every supervisor budget check
+passes through a null cap while token/round budgets still bound the run.
+
 ## Evidence and session isolation
 
 Evidence tools resolve `head`, `base`, and `merge-base` to the pinned commits.
@@ -202,8 +211,14 @@ Client configuration selects a transport, not a different engine. Repo-context
 commands normally use `/v1/review`:
 
 1. The client resolves refs and identifies the repository.
-2. It creates a git bundle, using a thin bundle first for change reviews when
-   a base is available; other repo commands send full history.
+2. It creates a git bundle in a throwaway temporary bare repository whose
+   `objects/info/alternates` points at the checkout's object store (resolved
+   via `git rev-parse --git-common-dir`, so linked worktrees work): the
+   source repo is never written, a read-only `.git` is sufficient, and
+   concurrent invocations cannot collide (#46). Thin bundle first for change
+   reviews when a base is available; other repo commands send full history.
+   `find --uncommitted` is the one local-write exception — it records
+   working-tree objects in the source repo before packing.
 3. The service imports the bundle and creates a detached temporary worktree.
 4. The shared executor runs against that worktree and the central database.
 5. The worktree is cleaned up; the result and durable state remain.
@@ -233,6 +248,11 @@ Every queued `/v1/review` request has a job. With `async: true`, the service
 responds with HTTP 202 and a job ID; clients poll `/v1/jobs/<id>` for the
 result. A synchronous client's disconnect also leaves the job running and its
 result available. Bundled remote audits use asynchronous submission by default.
+`--detach` makes any find/audit submission asynchronous and returns right
+after acceptance (#53): stdout carries a submission envelope with the full
+job id; exit 0 attests acceptance, never review success. Wait paths render a
+poll-liveness line on state changes and about once a minute (#55) —
+connection alive and log growth, explicitly not review progress.
 
 Jobs are process-local delivery records. They keep 2,000 recent log lines,
 cap retained output at 32 MiB, and retain the latest 100 settled jobs. A restart
@@ -264,6 +284,11 @@ so an interrupted run resumes; a live run exports a snapshot marked
 job endpoints with bearer authentication. `/health` is public. TLS comes from
 an explicit certificate/key pair or an automatically generated self-signed
 pair. If generation is unavailable, plain HTTP requires `PIR_ALLOW_HTTP=1`.
+
+The client's remote response wait (#54) resolves once per invocation —
+`--remote-timeout` > `PIR_REMOTE_TIMEOUT` > `server.timeoutSeconds` > 1800s,
+`0` disabling — and is normalized into the environment so the review, jobs
+and web-tier paths share one dispatcher.
 
 The web tier's viewer credential is deliberately separate from the execution
 token: `--viewer-token` > `PIR_VIEWER_TOKEN` > `server.viewerToken`, with no

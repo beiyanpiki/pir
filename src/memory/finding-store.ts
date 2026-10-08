@@ -59,6 +59,27 @@ interface RawFinding extends Omit<FindingRow, "memoryMatches"> {
   verifier_rationale__: never;
 }
 
+/** review_runs row (snake_case) → ReviewRunRow (#56 coverage queries). */
+function mapRunRow(raw: Record<string, unknown>): ReviewRunRow {
+  return {
+    id: String(raw.id),
+    projectId: String(raw.project_id),
+    mode: String(raw.mode),
+    base: (raw.base as string | null) ?? null,
+    head: String(raw.head),
+    target: (raw.target as string | null) ?? null,
+    startedAt: Number(raw.started_at),
+    finishedAt: raw.finished_at === null || raw.finished_at === undefined ? null : Number(raw.finished_at),
+    status: String(raw.status),
+    rounds: Number(raw.rounds),
+    candidates: Number(raw.candidates),
+    confirmed: Number(raw.confirmed),
+    rejected: Number(raw.rejected),
+    uncertain: Number(raw.uncertain),
+    notes: (raw.notes as string | null) ?? null,
+  };
+}
+
 function rawToRow(raw: Record<string, unknown>): FindingRow {
   return {
     id: String(raw.id),
@@ -321,6 +342,34 @@ export class FindingStore {
       uncertain: 0,
       notes: null,
     };
+  }
+
+  /**
+   * One run row by id (#56: `pir audit coverage --run <id>`). Exact ids only
+   * — display ids belong to findings, not runs.
+   */
+  runById(id: string): ReviewRunRow | null {
+    const rows = this.store.all<Record<string, unknown>>(
+      "SELECT * FROM review_runs WHERE id = ? AND project_id = ? LIMIT 1",
+      id,
+      this.projectId,
+    );
+    return rows.length > 0 ? mapRunRow(rows[0]!) : null;
+  }
+
+  /** Most recent run of a mode (#56: `pir audit coverage --latest`). */
+  latestRun(mode?: "change" | "audit"): ReviewRunRow | null {
+    const rows = mode
+      ? this.store.all<Record<string, unknown>>(
+          "SELECT * FROM review_runs WHERE project_id = ? AND mode = ? ORDER BY started_at DESC LIMIT 1",
+          this.projectId,
+          mode,
+        )
+      : this.store.all<Record<string, unknown>>(
+          "SELECT * FROM review_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 1",
+          this.projectId,
+        );
+    return rows.length > 0 ? mapRunRow(rows[0]!) : null;
   }
 
   /**

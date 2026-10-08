@@ -77,6 +77,50 @@ export interface PollOptions extends RemoteTarget {
 }
 
 /**
+ * Renders poll-liveness lines (#55): one when a job's status CHANGES (first
+ * observation included) and a heartbeat roughly every heartbeatMs otherwise.
+ * The wording separates what polling proves — the connection is alive and
+ * the server still reports the job — from what it cannot: review progress.
+ * Log growth is reported as observed, never extrapolated.
+ */
+export function jobStatusReporter(jobId: string, options: { heartbeatMs?: number } = {}): (job: JobView) => void {
+  const heartbeatMs = options.heartbeatMs ?? 60_000;
+  let lastStatus: string | null = null;
+  let lastPrintAt = 0;
+  let lastLogTotal: number | null = null;
+  return (job) => {
+    const now = Date.now();
+    const first = lastStatus === null;
+    const changed = !first && lastStatus !== job.status;
+    if (!first && !changed && now - lastPrintAt < heartbeatMs) return;
+    lastStatus = job.status;
+    lastPrintAt = now;
+    const delta = lastLogTotal === null ? null : job.logTotal - lastLogTotal;
+    lastLogTotal = job.logTotal;
+    const since = job.startedAt ?? job.createdAt;
+    const logPart =
+      delta === null
+        ? `log lines ${job.logTotal}`
+        : `log lines ${job.logTotal}${delta > 0 ? `, +${delta}` : ", no new lines"}`;
+    process.stderr.write(
+      `pir: job ${shortId(jobId)} ${job.status} for ${formatDuration(now - since)} ` +
+        `(connection alive, last poll ok; ${logPart}; review progress is not observable from job polling)\n`,
+    );
+  };
+}
+
+/** 8000 -> "2h13m", 90_000 -> "1m30s", 45_000 -> "45s", 3 days -> "3d2h". */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m${(totalSeconds % 60).toString().padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
+/**
  * Poll a job until it settles, streaming new log lines. No overall deadline
  * by design: an async audit may legitimately run for days; each individual
  * request is fast, and a dead server surfaces as repeated network failures
@@ -237,6 +281,9 @@ async function dispatchJobs(
         onLog: (lines) => {
           if (!json) for (const line of lines) process.stderr.write(`${line}\n`);
         },
+        // #55: liveness heartbeats during a potentially hours-long wait —
+        // suppressed with --json (matching the log lines) and --quiet.
+        onStatus: json || flags.get("--quiet") === true ? undefined : jobStatusReporter(jobId),
       });
       if (job.status === "failed") {
         process.stderr.write(`pir: job ${shortId(jobId)} failed: ${job.error ?? "unknown error"}\n`);

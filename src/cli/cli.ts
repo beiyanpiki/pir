@@ -2,6 +2,7 @@
 import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs } from "./executor.js";
 import { drainAndExit } from "./exit.js";
+import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
@@ -76,6 +77,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const transport = resolveTransport({ argv, env: process.env, config });
+  // #54: resolve the remote-response timeout once (flag > env > config >
+  // default) and normalize it into the environment variable every consumer
+  // already reads (review submission, job polling, web-tier queries) — one
+  // dispatcher, one precedence, invalid values fail fast with exit 2.
+  const remoteTimeout = resolveRemoteTimeoutSeconds({ argv, env: process.env, config });
+  if (remoteTimeout.source === "flag" || remoteTimeout.source === "config") {
+    process.env.PIR_REMOTE_TIMEOUT = String(remoteTimeout.seconds);
+  }
   // serve/config/skill/plugins/version/help (and a bare `pir`) stay
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.

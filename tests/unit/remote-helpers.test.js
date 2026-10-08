@@ -10,7 +10,15 @@ import {
   wantsAsyncSubmit,
   wantsBundle,
 } from "../../dist/cli/remote.js";
-import { describeTransportError, remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "../../dist/cli/remote-fetch.js";
+import {
+  describeTransportError,
+  remoteDispatcher,
+  remoteTimeoutMs,
+  reportUnreachable,
+  resolveRemoteTimeoutSeconds,
+} from "../../dist/cli/remote-fetch.js";
+import { jobStatusReporter } from "../../dist/cli/jobs.js";
+import { maxFindingsFlag } from "../../dist/cli/executor.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HEAD = "9999999999999999999999999999999999999999";
@@ -450,4 +458,105 @@ test("#44: an ok response that is not JSON is a decoding-stage error, not an emp
   assert.equal(posts.length, 1);
   assert.match(stderr, /response-decoding stage/);
   assert.match(stderr, /not valid JSON/);
+});
+
+// ---------------------------------------------------------------------------
+// PR3 (#42 batch 3): remote timeout resolution (#54), wait heartbeats (#55),
+// unlimited findings parsing (#57).
+// ---------------------------------------------------------------------------
+
+test("resolveRemoteTimeoutSeconds precedence: flag > env > config > default (#54)", () => {
+  const mk = (argv = [], env = {}, config = null) => resolveRemoteTimeoutSeconds({ argv, env, config });
+  assert.deepEqual(mk(), { seconds: 1800, source: "default" });
+  assert.deepEqual(mk(["--remote-timeout", "60"]), { seconds: 60, source: "flag" });
+  assert.deepEqual(mk(["--remote-timeout=0"]), { seconds: 0, source: "flag" });
+  assert.deepEqual(mk([], { PIR_REMOTE_TIMEOUT: "45" }), { seconds: 45, source: "env" });
+  assert.deepEqual(mk([], {}, { server: { timeoutSeconds: 90 } }), { seconds: 90, source: "config" });
+  assert.deepEqual(mk(["--remote-timeout", "7"], { PIR_REMOTE_TIMEOUT: "45" }, { server: { timeoutSeconds: 90 } }), {
+    seconds: 7,
+    source: "flag",
+  });
+  assert.deepEqual(mk([], { PIR_REMOTE_TIMEOUT: "45" }, { server: { timeoutSeconds: 90 } }), {
+    seconds: 45,
+    source: "env",
+  });
+  // Invalid values are usage errors on every level — never silent fallbacks.
+  assert.throws(() => mk(["--remote-timeout", "18OO"]), UsageError);
+  assert.throws(() => mk(["--remote-timeout", "-5"]), UsageError);
+  assert.throws(() => mk([], { PIR_REMOTE_TIMEOUT: "soon" }), UsageError);
+  assert.throws(() => mk([], {}, { server: { timeoutSeconds: 1.5 } }), UsageError);
+});
+
+test("jobStatusReporter prints on transitions and heartbeats, never invents progress (#55)", () => {
+  const lines = [];
+  const original = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    lines.push(String(chunk));
+    return true;
+  };
+  try {
+    const report = jobStatusReporter("job-1234567890", { heartbeatMs: 60_000 });
+    const now = Date.now();
+    const job = (over = {}) => ({
+      jobId: "job-1234567890",
+      command: "audit",
+      argv: ["audit"],
+      status: "running",
+      createdAt: now - (2 * 60 + 13) * 60_000,
+      startedAt: now - (2 * 60 + 13) * 60_000,
+      finishedAt: null,
+      logTotal: 1240,
+      log: [],
+      result: null,
+      error: null,
+      clientGone: false,
+      ...over,
+    });
+    report(job()); // first observation prints
+    report(job()); // same status inside the window: silent
+    report(job({ logTotal: 1252 })); // still inside the window: silent
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /job job-1234 running for 2h13m/);
+    assert.match(lines[0], /connection alive, last poll ok/);
+    assert.match(lines[0], /log lines 1240/);
+    assert.match(lines[0], /review progress is not observable from job polling/);
+
+    // A state transition prints immediately, carrying the log delta since
+    // the last PRINTED line (silent polls accumulate into it: 1240 -> 1264).
+    report(job({ status: "completed", logTotal: 1264, finishedAt: now }));
+    assert.equal(lines.length, 2);
+    assert.match(lines[1], /job job-1234 completed/);
+    assert.match(lines[1], /\+24/);
+
+    // Past the heartbeat window with no transition, the line repeats — with
+    // the honest "no new lines" wording when the log did not move.
+    const late = jobStatusReporter("job-1234567890", { heartbeatMs: 0 });
+    late(job());
+    late(job());
+    assert.ok(lines.length >= 4);
+    assert.match(lines[lines.length - 1], /no new lines|\+\d+/);
+  } finally {
+    process.stderr.write = original;
+  }
+});
+
+test("maxFindingsFlag: positive int, literal unlimited -> null, garbage rejected (#57)", () => {
+  assert.equal(maxFindingsFlag(new Map()), undefined);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "10"]])), 10);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "unlimited"]])), null);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "UNLIMITED"]])), null);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", " Unlimited "]])), null);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "0"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "-3"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "many"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", true]])), UsageError);
+});
+
+test("stripClientFlags removes --detach and --remote-timeout before forwarding (#53/#54)", () => {
+  assert.deepEqual(
+    stripClientFlags(["find", "--detach", "--remote-timeout", "60", "--json"]),
+    ["find", "--json"],
+  );
+  assert.deepEqual(stripClientFlags(["audit", "--detach", "--remote-timeout=0"]), ["audit"]);
+  assert.deepEqual(stripClientFlags(["find", "--json"]), ["find", "--json"]);
 });

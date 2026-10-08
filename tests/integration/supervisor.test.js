@@ -425,6 +425,58 @@ test("findIssues: maxFindings caps reported findings and stops the loop", async 
   }
 });
 
+test("findIssues: maxFindings null (#57 unlimited) reports every candidate past the default cap", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  let seenPrompt = "";
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      seenPrompt = promptText;
+      // 12 candidates: over the default cap (10) and over one round's
+      // verification capacity (8), so unlimited must survive both ceilings.
+      for (let i = 1; i <= 12; i++) {
+        await tool("record_candidate").execute({
+          title: `issue ${i}`,
+          claim: `claim ${i}: the quota path ${i} skips its guard`,
+          trigger: `trigger ${i}`,
+          category: "correctness",
+          severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+        });
+      }
+      await tool("finish_round").execute({ summary: "found a dozen issues", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 5, maxFindings: null },
+    });
+    // Every candidate is verified and persisted — the default cap of 10 was
+    // explicitly removed, and the loop only stopped on completion.
+    assert.equal(outcome.findings.length, 12);
+    assert.ok(outcome.findings.every((f) => f.status === "confirmed"));
+    assert.equal(outcome.maxFindings, null);
+    assert.notEqual(outcome.stoppedBecause, "max findings reached (10)");
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+    // The prompt states the absence of a cap instead of a fake number, and
+    // keeps the anti-fabrication rule.
+    assert.ok(seenPrompt.includes("There is no cap on reported findings for this change"), "prompt states unlimited");
+    assert.ok(seenPrompt.includes("Never invent, split, or pad findings"), "prompt forbids fabrication");
+    assert.ok(!seenPrompt.includes("At most"), "no numeric ceiling is quoted");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
 test("findIssues: rejected findings do not consume the maxFindings budget", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });

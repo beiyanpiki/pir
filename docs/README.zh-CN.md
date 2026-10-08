@@ -143,7 +143,7 @@ pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 ```
 
-`--max-findings` 是报告上限，不是要凑满的数量。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
+`--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
 
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。
 
@@ -159,6 +159,16 @@ pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 
 Audit 还返回覆盖率记录。范围内文件分别记为 `reviewed`、`partial`、`unreviewed`、`blocked` 或 `failed`；被排除及未选中的文件另行统计。`reviewed` 表示流程完成，不表示已经找到了全部缺陷。
 
+在投入长时间 audit 之前可以先预览范围（#56）：
+
+```bash
+pir audit --dry-run --list-files   # head/tree id、选择统计、计划的工作单元
+pir audit coverage --latest        # 最近一次 audit run 的逐文件覆盖率
+pir audit coverage --run <run-id>  # ……或指定某个 run
+```
+
+`--dry-run` 复用真实 audit 的快照与单元规划器，不建 run、不调模型；`coverage` 从本地项目库读取该 run 过程中持久化的覆盖率记录。
+
 ## 服务 API 与任务
 
 `pir serve` 提供以下端点：
@@ -171,7 +181,11 @@ Audit 还返回覆盖率记录。范围内文件分别记为 `reviewed`、`parti
 | `POST /v1/memory/sync` | 将本地记忆快照与服务端合并 |
 | `GET /v1/jobs` 和 `/v1/jobs/<id>` | 查看或取回异步任务 |
 
-从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。
+从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。`find`/`audit --detach` 提交后立即返回（#53）：stdout 输出携带完整任务 id 与后续命令的提交信封，本地回执是持久记录——退出码 `0` 表示**已受理**，不表示评审成功。等待期间（`jobs wait` 或提交后的轮询）状态行在状态变化和约每分钟各打印一次（#55）：只报告连接存活，不虚构评审进度。
+
+bundle 在一个临时 bare 仓库中打包，该仓库通过 alternates 只读取 checkout 的对象库（#46）：源仓库的 refs、index、config 和对象零写入，只读 `.git` 也可用。唯一例外是 `find --uncommitted`——它按设计先在源仓库记录工作区对象再打包。
+
+远程响应等待时长依次为 `--remote-timeout <秒>`（0 禁用）> `PIR_REMOTE_TIMEOUT` > 配置 `server.timeoutSeconds` > 默认 1800 秒（#54）。异步任务轮询（5 秒间隔）没有总时限。
 
 可选的只读浏览界面通过 `--web` 或 `PIR_WEB_UI=1` 开启，使用独立于 `PIR_SERVER_TOKEN` 的 `PIR_WEB_UI_TOKEN`。开启界面时，未设置的 `PIR_TRANSCRIPTS` 默认取 `1`，设置为 `0` 可以禁用转录。Compose 会传入这个变量，因此需要在 `.env` 中显式设置 `PIR_TRANSCRIPTS=1` 才能记录历史时间线。实时时间线覆盖 serve 进程中的评审；历史转录也能显示提示词、工具调用和可用的 thinking 内容。界面开发方式见 [web 文档](../web/README.md)。
 

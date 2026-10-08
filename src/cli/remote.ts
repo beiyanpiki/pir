@@ -1,7 +1,7 @@
 import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
-import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
+import { remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "./remote-fetch.js";
 import type { JobView } from "./jobs.js";
 
 /**
@@ -13,6 +13,8 @@ export class BundlePrepError extends Error {}
 export interface RemoteOptions {
   token?: string;
   insecure?: boolean;
+  /** #53: submit asynchronously and return right after acceptance. */
+  detach?: boolean;
 }
 
 /**
@@ -39,16 +41,34 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
     // short-lived so the blast radius is this invocation only.
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  // Build the dispatcher up front: an invalid PIR_REMOTE_TIMEOUT must surface
+  // Build the dispatcher up front: an invalid timeout value must surface
   // as a UsageError here (exit 2 + usage text in cli.ts), not be swallowed by
   // the transport-error catches below and misreported as an unreachable
   // server (dogfood F-20).
   remoteDispatcher();
   const url = new URL(serverUrl);
+  // #54: one stderr line stating the effective transport policy, so a
+  // multi-hour wait never looks like a hang and nobody has to guess which
+  // timeout knob won (flag > env > config > 1800).
+  if (!argv.includes("--quiet")) {
+    const seconds = Math.round(remoteTimeoutMs() / 1000);
+    process.stderr.write(
+      `pir: transport — response wait ${seconds === 0 ? "disabled (0s)" : `${seconds}s`}; async jobs poll every 5s with no overall deadline, giving up after 5 consecutive failures\n`,
+    );
+  }
+  // #53: --detach is a client-side flag (stripClientFlags removes it below),
+  // but it only means something for async review submissions.
+  const detachRequested = argv.includes("--detach");
   const cleaned = stripClientFlags(argv);
+  if (detachRequested) {
+    const { positional } = parseArgs(cleaned);
+    if (!["find", "audit"].includes(positional[0] ?? "")) {
+      throw new UsageError("--detach applies to `pir find` / `pir audit` submissions");
+    }
+  }
 
   if (wantsBundle(cleaned)) {
-    return await reviewViaBundle(url, cleaned, options);
+    return await reviewViaBundle(url, cleaned, { ...options, ...(detachRequested ? { detach: true } : {}) });
   }
   return await forwardExec(url, cleaned, options);
 }
@@ -278,6 +298,10 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       return await submit({ withBase: false, async: opts.async });
     }
     if (payload.jobId) {
+      // Same formula the server's materializeFromBundle uses, so the id in
+      // the receipt and the detach envelope is the id the run lands under.
+      const { projectIdFor } = await import("../app/repos.js");
+      const projectId = projectIdFor(remoteUrl, rootCommit);
       // #52: an accepted ASYNC submission (HTTP 202) gets a local receipt
       // before any waiting starts — after a disconnect or a serve restart
       // this is the only record naming origin, job, project and (once known)
@@ -286,14 +310,11 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       let receiptFile: string | null = null;
       if (response.status === 202) {
         const { writeSubmissionReceipt } = await import("./receipts.js");
-        const { projectIdFor } = await import("../app/repos.js");
         receiptFile = writeSubmissionReceipt({
           kind: command ?? "review",
           origin: url.origin,
           jobId: payload.jobId,
-          // Same formula the server's materializeFromBundle uses, so the id
-          // in the receipt is the id the run lands under.
-          projectId: projectIdFor(remoteUrl, rootCommit),
+          projectId,
           base,
           head,
           argv,
@@ -303,6 +324,49 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
             `pir: receipt saved (${path.basename(receiptFile)}) — \`pir receipts list\` recovers this submission after a disconnect\n`,
           );
         }
+      }
+      // #53: --detach returns right after acceptance. No polling, no relay:
+      // stdout carries the submission envelope (full jobId + recovery
+      // commands), exit 0 — which says the submission was accepted, never
+      // that the review succeeded.
+      if (options.detach) {
+        const followUp = [
+          `pir jobs wait ${payload.jobId}`,
+          `pir jobs fetch ${payload.jobId}`,
+          `pir receipts show ${payload.jobId.slice(0, 8)}`,
+        ];
+        const receipt = receiptFile !== null ? path.basename(receiptFile) : null;
+        if (argv.includes("--json")) {
+          process.stdout.write(
+            `${JSON.stringify({
+              schemaVersion: 1,
+              command: `${command}.detach`,
+              project: { id: projectId },
+              data: {
+                jobId: payload.jobId,
+                origin: url.origin,
+                projectId,
+                base,
+                head,
+                mode: "async",
+                runId: null,
+                receipt: receiptFile,
+                followUp,
+              },
+            })}\n`,
+          );
+        } else {
+          const lines = [
+            `submitted ${command} as job ${payload.jobId} to ${url.origin}`,
+            `project ${projectId.slice(0, 12)}… head ${head.slice(0, 10)}${base ? ` (base ${base.slice(0, 10)})` : ""}`,
+            ...(receipt ? [`receipt: ${receipt}`] : []),
+            "follow up:",
+            ...followUp.map((line) => `  ${line}`),
+            "run id lands in the receipt once the job finishes (pir receipts show)",
+          ];
+          process.stdout.write(`${lines.join("\n")}\n`);
+        }
+        return 0;
       }
       let settled: JobView;
       try {
@@ -346,7 +410,8 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   };
 
   const readonly = isBundleFreeRead(argv);
-  const asyncSubmit = wantsAsyncSubmit(argv);
+  // #53: --detach implies async — there is nothing to wait for by design.
+  const asyncSubmit = wantsAsyncSubmit(argv) || options.detach === true;
   if (readonly) {
     // Bundle-free first (first contact falls back to a bundled resend above).
     process.stderr.write(`pir: asking ${url.origin} for findings (bundle-free)\n`);
@@ -354,7 +419,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   }
   process.stderr.write(
     asyncSubmit
-      ? `pir: submitting ${command} of ${head.slice(0, 8)} to ${url.origin} (async job)\n`
+      ? `pir: submitting ${command} of ${head.slice(0, 8)} to ${url.origin} (async job${options.detach === true ? ", --detach" : ""})\n`
       : `pir: shipping local state ${isFind && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`,
   );
   // Audit and the memory family ship a full-history bundle from the start
@@ -370,7 +435,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
  * `pir jobs fetch`.
  */
 async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: string[]): Promise<JobView> {
-  const { pollJobToEnd } = await import("./jobs.js");
+  const { pollJobToEnd, jobStatusReporter } = await import("./jobs.js");
   process.stderr.write(
     `pir: accepted as job ${jobId.slice(0, 8)} — polling ${url.origin} until it finishes (Ctrl-C detaches; fetch later with \`pir jobs fetch ${jobId.slice(0, 8)}\`)\n`,
   );
@@ -378,6 +443,8 @@ async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: 
     url: url.origin,
     ...(options.token ? { token: options.token } : {}),
     ...(options.insecure ? { insecure: true } : {}),
+    // #55: poll-liveness heartbeats while the audit runs for hours.
+    onStatus: argv.includes("--quiet") ? undefined : jobStatusReporter(jobId),
     onLog: (lines) => {
       if (!argv.includes("--quiet")) {
         for (const line of lines) process.stderr.write(`${line}\n`);
@@ -431,17 +498,24 @@ function relay(result: RelayResult, argv: string[]): number {
   return result.code ?? 0;
 }
 
-/** Remove transport-only flags (--server URL, --token VALUE, --viewer-token VALUE, --insecure, --local, --no-wizard) before forwarding. */
+/** Remove transport-only flags (--server URL, --token VALUE, --viewer-token VALUE, --remote-timeout VALUE, --insecure, --local, --no-wizard, --detach) before forwarding. */
 export function stripClientFlags(argv: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
-    if (token === "--server" || token === "--token" || token === "--viewer-token") {
+    if (token === "--server" || token === "--token" || token === "--viewer-token" || token === "--remote-timeout") {
       i += 1; // skip the flag and its value
       continue;
     }
-    if (token.startsWith("--server=") || token.startsWith("--token=") || token.startsWith("--viewer-token=")) continue;
-    if (token === "--insecure" || token === "--local" || token === "--no-wizard") continue;
+    if (
+      token.startsWith("--server=") ||
+      token.startsWith("--token=") ||
+      token.startsWith("--viewer-token=") ||
+      token.startsWith("--remote-timeout=")
+    ) {
+      continue;
+    }
+    if (token === "--insecure" || token === "--local" || token === "--no-wizard" || token === "--detach") continue;
     out.push(token);
   }
   return out;

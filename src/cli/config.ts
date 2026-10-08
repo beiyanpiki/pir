@@ -17,6 +17,11 @@ export interface ServerSettings {
    */
   viewerToken?: string;
   insecure?: boolean;
+  /**
+   * Remote response-header/body wait in seconds (#54): the config-level
+   * default under --remote-timeout > PIR_REMOTE_TIMEOUT > this > 1800.
+   */
+  timeoutSeconds?: number;
 }
 
 export interface UserConfig {
@@ -85,6 +90,12 @@ function validateUserConfig(value: unknown, file: string): UserConfig {
       if (typeof server.token === "string" && server.token) config.server.token = server.token;
       if (typeof server.viewerToken === "string" && server.viewerToken) config.server.viewerToken = server.viewerToken;
       if (server.insecure === true) config.server.insecure = true;
+      if (server.timeoutSeconds !== undefined) {
+        if (typeof server.timeoutSeconds !== "number" || !Number.isSafeInteger(server.timeoutSeconds) || server.timeoutSeconds < 0) {
+          throw new UsageError(`${file}: server.timeoutSeconds must be a non-negative integer number of seconds`);
+        }
+        config.server.timeoutSeconds = server.timeoutSeconds;
+      }
     }
   }
   if (mode === "remote" && !config.server?.url) {
@@ -311,8 +322,9 @@ export async function runWizard(): Promise<UserConfig> {
 
 /**
  * `pir config set <key> <value>` — dotted keys: mode, model, server.url,
- * server.token, server.viewerToken, server.insecure. Empty string clears
- * model/server.token/server.viewerToken.
+ * server.token, server.viewerToken, server.insecure, server.timeoutSeconds.
+ * Empty string clears model/server.token/server.viewerToken/
+ * server.timeoutSeconds.
  */
 export function setConfigValue(config: UserConfig, key: string, value: string): UserConfig {
   const next: UserConfig = { schemaVersion: 1, mode: config.mode, ...(config.model ? { model: config.model } : {}) };
@@ -342,6 +354,7 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       if (next.server?.token) server.token = next.server.token;
       if (next.server?.viewerToken) server.viewerToken = next.server.viewerToken;
       if (next.server?.insecure) server.insecure = true;
+      if (next.server?.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
       next.server = server;
       return next;
     }
@@ -354,6 +367,7 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       if (trimmed) server.token = trimmed;
       if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
       if (next.server.insecure) server.insecure = true;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
       next.server = server;
       return next;
     }
@@ -366,6 +380,7 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       if (trimmed) server.viewerToken = trimmed;
       if (next.server.token) server.token = next.server.token;
       if (next.server.insecure) server.insecure = true;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
       next.server = server;
       return next;
     }
@@ -380,12 +395,32 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       const server: ServerSettings = { url: next.server.url, insecure: ["true", "1", "yes"].includes(normalized) };
       if (next.server.token) server.token = next.server.token;
       if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
+      next.server = server;
+      return next;
+    }
+    case "server.timeoutSeconds": {
+      if (!next.server?.url) {
+        throw new UsageError("set server.url before server.timeoutSeconds");
+      }
+      const server: ServerSettings = { url: next.server.url };
+      // Empty clears back to the default; strict decimal form otherwise.
+      const trimmed = value.trim();
+      if (trimmed !== "") {
+        if (!/^\d+$/.test(trimmed)) {
+          throw new UsageError('server.timeoutSeconds must be a non-negative integer number of seconds (or "" to clear)');
+        }
+        server.timeoutSeconds = Number(trimmed);
+      }
+      if (next.server.token) server.token = next.server.token;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
+      if (next.server.insecure) server.insecure = true;
       next.server = server;
       return next;
     }
     default:
       throw new UsageError(
-        `unknown config key: ${key} (expected mode, model, server.url, server.token, server.viewerToken or server.insecure)`,
+        `unknown config key: ${key} (expected mode, model, server.url, server.token, server.viewerToken, server.insecure or server.timeoutSeconds)`,
       );
   }
 }

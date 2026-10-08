@@ -696,3 +696,83 @@ test("receipts (#52): async submission writes a receipt; the settled run id land
   assert.match(unknown.stderr, /local receipt/);
   assert.match(unknown.stderr, /runs status/);
 });
+
+test("--detach (#53): submit, print the envelope, never poll", async (t) => {
+  const { base, seen, jobId } = await withJobStub(t);
+  const repo = mkdtempSync(path.join(tmpdir(), "pir-detach-repo-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: repo });
+  writeFileSync(path.join(repo, "a.txt"), "hello\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "one"], { cwd: repo });
+
+  const { cwd, env } = scratchEnv(t);
+  // find is sync by default; --detach must imply the async lane (202).
+  const { stdout, stderr } = await pir(
+    ["--server", base, "--token", EXEC_TOKEN, "find", "--detach", "--json", "--cwd", repo],
+    { cwd, env },
+  );
+  const envelope = JSON.parse(stdout);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.command, "find.detach");
+  assert.equal(envelope.data.jobId, jobId);
+  assert.equal(envelope.data.origin, base);
+  // The project id is computed locally (same formula as the server) — a
+  // 64-hex identity, not something echoed from the server we never polled.
+  assert.match(envelope.data.projectId, /^[0-9a-f]{64}$/);
+  assert.equal(envelope.data.projectId, envelope.project.id);
+  assert.equal(envelope.data.mode, "async");
+  assert.equal(envelope.data.runId, null, "run id is unknown until pickup");
+  assert.ok(envelope.data.followUp.some((c) => c === `pir jobs wait ${jobId}`));
+  assert.ok(envelope.data.followUp.some((c) => c.startsWith("pir receipts show")));
+
+  // Detach means detach: exactly one request left the machine and the job
+  // registry was never polled.
+  assert.equal(seen.filter((r) => r.path === "/v1/review" && r.method === "POST").length, 1);
+  assert.equal(seen.filter((r) => r.path.startsWith("/v1/jobs")).length, 0);
+
+  // The receipt exists and still names runId null — nothing followed the job.
+  assert.match(stderr, /receipt saved/);
+  const listed = await pir(["receipts", "list", "--json"], { cwd, env });
+  const receipts = JSON.parse(listed.stdout).data.receipts;
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].jobId, jobId);
+  assert.equal(receipts[0].runId, null);
+
+  // Text mode keeps stdout human: full job id and the follow-up commands.
+  const repo2 = mkdtempSync(path.join(tmpdir(), "pir-detach-repo2-"));
+  t.after(() => rmSync(repo2, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: repo2 });
+  writeFileSync(path.join(repo2, "a.txt"), "hello\n");
+  execFileSync("git", ["add", "."], { cwd: repo2 });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "one"], { cwd: repo2 });
+  const text = await pir(["--server", base, "--token", EXEC_TOKEN, "find", "--detach", "--cwd", repo2], { cwd, env });
+  assert.match(text.stdout, new RegExp(`submitted find as job ${jobId}`));
+  assert.match(text.stdout, /pir jobs wait/);
+});
+
+test("--detach (#53): rejected for non-review commands and in local mode", async (t) => {
+  const { base, seen } = await withJobStub(t);
+  const { cwd, env } = scratchEnv(t);
+  // models forwards through /v1/exec — detach has nothing to detach there.
+  const wrongCommand = await pir(["models", "--ids", "--detach", "--server", base], { cwd, env }).then(
+    () => assert.fail("expected exit 2"),
+    (err) => err,
+  );
+  assert.equal(wrongCommand.code, 2);
+  assert.match(wrongCommand.stderr, /--detach applies to/);
+  // Local execution cannot detach either (executor-side validation, #53).
+  const repo = mkdtempSync(path.join(tmpdir(), "pir-detach-local-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: repo });
+  writeFileSync(path.join(repo, "a.txt"), "hello\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "one"], { cwd: repo });
+  const local = await pir(["find", "--detach", "--local", "--cwd", repo], { cwd, env }).then(
+    () => assert.fail("expected exit 2"),
+    (err) => err,
+  );
+  assert.equal(local.code, 2);
+  assert.match(local.stderr, /--detach submits to a remote server/);
+  assert.equal(seen.length, 0, "validation failures never reach the network");
+});

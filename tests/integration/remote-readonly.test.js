@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, git } from "../fixtures/helpers.js";
 
 const execFileAsync = promisify(execFile);
 const CLI = path.resolve("dist/cli/cli.js");
@@ -22,28 +22,22 @@ async function pir(args, opts = {}) {
   return { stdout, stderr, code: 0 };
 }
 
-async function pirExpectFail(args, opts = {}) {
-  try {
-    await pir(args, opts);
-  } catch (err) {
-    return { stderr: err.stderr ?? "", stdout: err.stdout ?? "", code: err.code ?? 1 };
-  }
-  throw new Error(`expected failure: pir ${args.join(" ")}`);
-}
-
 /**
- * #44, the incident from #42: a sandbox whose .git is readable but read-only.
- * The bundle-free findings read gets needFull, the fallback tries to prepare
- * the full bundle locally, and update-ref fails on the read-only .git. That
- * failure is a LOCAL preparation error — it must name the local stage and
- * must never claim the server is unreachable.
+ * #46 (supersedes the #44 incident fixture): a sandbox whose .git is readable
+ * but read-only. Bundles are now packed in a temporary bare repo that reads
+ * the source objects through alternates, so a read-only .git no longer fails
+ * preparation at all — the bundle-free probe gets needFull and the full
+ * bundle resend carries real history, with zero writes to the source repo.
+ * (#44's error classification for genuinely broken local prep stays covered
+ * by the reportBundlePrepFailure unit test.)
  */
-test("#44: bundle preparation on a read-only .git is reported as a local error, not 'cannot reach'", async (t) => {
+test("#46: a read-only .git packs a full bundle without writing the source repo", async (t) => {
   if (process.getuid?.() === 0) return t.skip("chmod-based read-only fixtures do not bind under root");
 
   const repo = createTempGitRepo("pir-ro-");
   repo.write("src/a.ts", "export const a = 1;\n");
   repo.commit("second");
+  const refsBefore = git(repo.dir, ["for-each-ref"]);
 
   const posts = [];
   const server = http.createServer((req, res) => {
@@ -51,8 +45,14 @@ test("#44: bundle preparation on a read-only .git is reported as a local error, 
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
       posts.push({ url: req.url, body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ needFull: true }));
+      if (posts.length === 1) {
+        // First contact: the bundle-free probe is refused with needFull.
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ needFull: true }));
+      } else {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ code: 0, output: "", log: [] }));
+      }
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -60,21 +60,23 @@ test("#44: bundle preparation on a read-only .git is reported as a local error, 
   t.after(() => server.close());
 
   try {
-    // Read-only .git: git update-ref cannot create refs/pir/bundle-head.lock.
+    // Read-only .git: the old flow died here on update-ref; the new flow
+    // never writes a single byte to the source repository.
     chmodSync(path.join(repo.dir, ".git"), 0o500);
     chmodSync(path.join(repo.dir, ".git", "refs"), 0o500);
 
-    const res = await pirExpectFail(["findings", "list", "--json", "--server", base, "--cwd", repo.dir]);
-    assert.equal(res.code, 3);
-    assert.match(res.stderr, /failed to prepare the review bundle locally/);
-    assert.match(res.stderr, /local git error, not a server connectivity problem/);
+    const res = await pir(["findings", "list", "--json", "--server", base, "--cwd", repo.dir]);
+    assert.equal(res.code, 0);
     assert.doesNotMatch(res.stderr, /cannot reach/);
-    assert.doesNotMatch(res.stderr, /PIR_REMOTE_TIMEOUT/);
-    // The stub saw only the bundle-free probe — the failure happened before
-    // any history upload (#44: the stub receives zero uploads).
-    assert.equal(posts.length, 1);
+    // Probe first, then a full-bundle resend with real history — both made
+    // it past a read-only .git (#46).
+    assert.equal(posts.length, 2);
     assert.equal(posts[0].body.noBundle, true);
     assert.equal(posts[0].body.bundleBase64, "");
+    assert.ok(posts[1].body.bundleBase64.length > 0, "the resend carries a real bundle");
+    assert.equal(posts[1].body.noBundle, undefined);
+    // Zero source-repo writes: refs and HEAD are byte-identical.
+    assert.equal(git(repo.dir, ["for-each-ref"]), refsBefore);
   } finally {
     chmodSync(path.join(repo.dir, ".git", "refs"), 0o700);
     chmodSync(path.join(repo.dir, ".git"), 0o700);

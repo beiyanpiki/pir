@@ -434,10 +434,16 @@ export async function materializeFromBundle(
 }
 
 /**
- * Client side: pack the local commits (and nothing else) as a bundle.
- * Uses transient refs under refs/pir/* — `git bundle create` only accepts
- * symbolic refs — and cleans them up afterwards. Neither the index, the
- * working tree nor any user ref is touched.
+ * Client side: pack the local commits (and nothing else) as a bundle (#46).
+ * The transient refs under refs/pir/* are written in a throwaway bare repo
+ * that READS the source's objects through `objects/info/alternates` — the
+ * source checkout's refs, index, config and objects are never written, a
+ * read-only .git works, and concurrent invocations cannot collide on ref
+ * names. `git rev-parse --git-common-dir` resolves the shared object store,
+ * so linked worktrees pack from their main repo's objects. The ref names
+ * match what the server's materializeFromBundle fetches. The one local-write
+ * exception is --uncommitted (createWorkingTreeSnapshot), which by design
+ * records working-tree objects in the source repo before bundling.
  */
 export async function createBundle(
   repoRoot: string,
@@ -445,20 +451,39 @@ export async function createBundle(
 ): Promise<Buffer> {
   const headRef = "refs/pir/bundle-head";
   const baseRef = "refs/pir/bundle-base";
-  await git(repoRoot, ["update-ref", headRef, meta.head]);
-  if (meta.base) await git(repoRoot, ["update-ref", baseRef, meta.base]);
+  // --git-common-dir is ".git" in a plain checkout, an absolute or ../
+  // relative path in a linked worktree; objects always live under it.
+  const commonDirRaw = (await git(repoRoot, ["rev-parse", "--git-common-dir"])).trim();
+  const objectsDir = path.resolve(repoRoot, commonDirRaw, "objects");
+  const tempRepo = mkdtempSync(path.join(tmpdir(), "pir-bundle-repo-"));
   try {
-    const revs = meta.base ? [headRef, `^${baseRef}`] : [headRef];
-    return await gitBuffer(repoRoot, ["bundle", "create", "-", ...revs]);
-  } finally {
-    await git(repoRoot, ["update-ref", "-d", headRef]);
-    if (meta.base) {
-      try {
-        await git(repoRoot, ["update-ref", "-d", baseRef]);
-      } catch {
-        // already gone
-      }
+    try {
+      await git(tempRepo, ["init", "--quiet", "--bare"]);
+      // An alternates line makes the temp repo resolve every source object
+      // without copying it; missing line or wrong path fails the bundle step
+      // below, never silently producing an empty bundle.
+      mkdirSync(path.join(tempRepo, "objects", "info"), { recursive: true });
+      writeFileSync(path.join(tempRepo, "objects", "info", "alternates"), `${objectsDir}\n`);
+    } catch (err) {
+      throw new Error(
+        `failed to set up the temporary bundle repo at ${tempRepo}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
+    try {
+      await git(tempRepo, ["update-ref", headRef, meta.head]);
+      if (meta.base) await git(tempRepo, ["update-ref", baseRef, meta.base]);
+      const revs = meta.base ? [headRef, `^${baseRef}`] : [headRef];
+      return await gitBuffer(tempRepo, ["bundle", "create", "-", ...revs]);
+    } catch (err) {
+      // Reading objects/resolving refs happens against the source store via
+      // alternates — a failure here is a source problem (missing objects, a
+      // ref that does not resolve), not a temp-dir problem.
+      throw new Error(
+        `failed to pack the review bundle from ${objectsDir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  } finally {
+    rmSync(tempRepo, { recursive: true, force: true });
   }
 }
 

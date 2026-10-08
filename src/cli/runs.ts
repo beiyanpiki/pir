@@ -59,7 +59,8 @@ interface WebRunDetail {
     status?: string;
     stoppedBecause?: string;
     incomplete?: boolean;
-    maxFindings?: number;
+    maxFindings?: number | null;
+    maxFindingsMode?: "capped" | "unlimited";
     coverage?: Record<string, number> | null;
   } | null;
   sessions: unknown[];
@@ -161,6 +162,7 @@ export async function runRunsCommand(argv: string[], input: WebCommandInput): Pr
       stopReason,
       incomplete: detail.manifest?.incomplete ?? null,
       maxFindings: detail.manifest?.maxFindings ?? null,
+      maxFindingsMode: detail.manifest?.maxFindingsMode ?? (detail.manifest?.maxFindings == null ? null : "capped"),
       coverage: detail.manifest?.coverage ?? null,
       findingsTotal: detail.findings.total,
       candidates: run.candidates,

@@ -77,7 +77,9 @@ Usage:
                       unbounded by default (rounds and findings still cap)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
-                      out — nothing is padded to reach it
+                      out — nothing is padded to reach it. "unlimited"
+                      removes the cap (#57; remote needs a same-version
+                      server)
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -88,7 +90,9 @@ Usage:
                       packs follow): comma-separated names, "none" to
                       disable, or "auto" to detect from marker files at
                       head (default)
-  --no-sync-index     skip codegraph index sync`,
+  --no-sync-index     skip codegraph index sync
+  --detach            remote only: submit as an async job and return
+                      immediately (#53; see Remote mode)`,
 
   audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
@@ -99,8 +103,19 @@ Usage:
                       tree only: uncommitted changes are never audited
   --max-tokens <n>    optional whole-run token budget across all units;
                       unlimited unless set (rounds and findings still cap)
-  --max-findings <n>  whole-run cap on reported findings (default 10)
+  --max-findings <n>  whole-run cap on reported findings (default 10);
+                      "unlimited" removes it (#57)
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
+  --dry-run           preview the scope a real audit of the same tree and
+                      options would take (#56): head/tree ids, selection and
+                      classification counts, planned units — no run, no
+                      model, no writes. --list-files adds per-file
+                      selection/classification/reason
+  --detach            remote only: submit as an async job and return
+                      immediately (#53; see Remote mode)
+  coverage            post-run readout of one recorded audit run (#56):
+                      per-file coverage ledger from the local project db.
+                      Exactly one of --run <run-id> | --latest
   Coverage is process accounting: "reviewed" means the allotted sessions
   completed. Budget stops leave files unreviewed and exit incomplete.`,
 
@@ -108,7 +123,9 @@ Usage:
   list                jobs on the server, oldest first
   status <id>         one job's record: state, timing, last log lines
   wait <id>           poll until it settles, streaming new log lines
-                      (Ctrl-C detaches; re-run later to continue)
+                      (Ctrl-C detaches; re-run later to continue). A status
+                      line prints on state changes and about once a minute
+                      (#55): connection liveness, never review progress
   fetch <id>          relay a completed job's captured result
   <id>                an 8-char prefix is enough; the registry is in-memory
                       and empty after a server restart`,
@@ -204,8 +221,25 @@ Usage:
                       Env/config viewer tokens are only sent to the server
                       they were configured for — a foreign run URL needs the
                       explicit flag (#50)
+  --remote-timeout <s> seconds the client waits for remote response headers
+                      and body chunks (0 disables): --remote-timeout >
+                      PIR_REMOTE_TIMEOUT > config server.timeoutSeconds >
+                      default 1800. Async job polling (5s interval) has no
+                      overall deadline by design (#54)
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
+  --detach            submit find/audit as an async job and exit 0 without
+                      waiting (#53): implies async, writes the #52 receipt,
+                      prints the submission envelope (full jobId, origin,
+                      project, head/base, follow-up commands) on stdout.
+                      Exit 0 means accepted, not reviewed. Local mode
+                      rejects the flag
+
+  Review bundles are packed in a throwaway temporary bare repository that
+  reads the checkout's object store (#46): the source repo's refs, index,
+  config and objects are never written — a read-only .git works. The one
+  exception is find --uncommitted, which records working-tree objects in
+  the source repo before packing.
 
   Audits are submitted as async jobs (hours-to-days runs must not be bound
   to one client's wait): the CLI polls, prints progress, and relays the
@@ -217,7 +251,8 @@ Usage:
   config: `Config keys (pir config set <key> <value>):
   mode local|remote   model <provider/model>|""
   server.url <url>    server.token <t>|""      server.insecure true|false
-  server.viewerToken <t>|""  web-tier credential for runs/findings --run`,
+  server.viewerToken <t>|""  web-tier credential for runs/findings --run
+  server.timeoutSeconds <s>|""  remote response wait (#54)`,
 
   footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
@@ -320,6 +355,7 @@ export const VALUE_FLAGS = new Set([
   "--server",
   "--token",
   "--viewer-token",
+  "--remote-timeout",
   "--run",
   "--project",
   "--output",
@@ -770,6 +806,26 @@ export function nonNegativeIntFlag(flags: Map<string, string | boolean>, name: s
 }
 
 /**
+ * --max-findings (#57): positive integer, or the literal "unlimited"
+ * (case-insensitive) which removes the cap — parsed to null so the supervisor
+ * can distinguish "no cap" from every numeric value. Returns undefined when
+ * the flag is absent (the caller applies the default).
+ */
+export function maxFindingsFlag(flags: Map<string, string | boolean>): number | null | undefined {
+  const raw = flags.get("--max-findings");
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError('invalid --max-findings: a value is required (positive integer or "unlimited")');
+  }
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError(`invalid --max-findings: ${raw} (positive integer or "unlimited" required)`);
+  }
+  return value;
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -834,9 +890,14 @@ async function cmdFind(
   emit: Emit,
   log: Log,
 ): Promise<number> {
+  // --detach is a remote-submission flag (#53): local execution cannot honor
+  // it, and a server receiving it unstripped (old client) must not ignore it.
+  if (flags.has("--detach")) {
+    throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
+  }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  const maxFindings = positiveIntFlag(flags, "--max-findings");
+  const maxFindings = maxFindingsFlag(flags);
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
@@ -860,6 +921,7 @@ async function cmdFind(
             head: result.head,
             rounds: result.rounds,
             maxFindings: result.maxFindings,
+            maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
             files: result.changeSet.files.map((f) => ({
               path: f.path,
@@ -918,15 +980,43 @@ async function cmdAudit(
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
+  // --detach is remote-only (#53): a local run cannot detach, and a server
+  // receiving the flag unstripped (old client) must fail instead of ignoring.
+  if (flags.has("--detach")) {
+    throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
+  }
+  // Post-run coverage readout (#56) answers from the recorded ledger — no
+  // snapshot, no model, no run.
+  if (_args[0] === "coverage") {
+    return await cmdAuditCoverage(ctx, _args.slice(1), flags, json, emit, log);
+  }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  const maxFindings = positiveIntFlag(flags, "--max-findings");
+  const maxFindings = maxFindingsFlag(flags);
   const includePaths = multi.get("--path") ?? [];
   const skipGlobs = multi.get("--skip") ?? [];
   for (const value of [...includePaths, ...skipGlobs]) {
     if (value.includes("\0") || value.includes("\\") || value === "") {
       throw new UsageError(`invalid --path/--skip value: ${JSON.stringify(value)}`);
     }
+  }
+  // Scope preview (#56): same snapshot + planner as a real audit, but no run,
+  // no model, no writes. Run-shaping flags cannot affect a preview, so they
+  // are rejected instead of silently ignored.
+  if (flags.get("--dry-run") === true) {
+    for (const shaping of ["--max-tokens", "--max-findings", "--fail-on"]) {
+      if (flags.has(shaping)) {
+        throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
+      }
+    }
+    return await renderAuditDryRun(ctx, {
+      head: flags.get("--head") as string | undefined,
+      includePaths,
+      skipGlobs,
+      listFiles: flags.get("--list-files") === true,
+      json,
+      emit,
+    });
   }
   const { AuditScopeError } = await import("../core/supervisor.js");
   const result = await runAudit(ctx, {
@@ -961,6 +1051,7 @@ async function cmdAudit(
             head: result.head,
             rounds: result.rounds,
             maxFindings: result.maxFindings,
+            maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
           },
           coverage: { ...result.coverage, units: result.units },
@@ -1004,6 +1095,189 @@ async function cmdAudit(
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `pir audit --dry-run [--list-files] [--json]` (#56): the exact snapshot and
+ * unit plan a real audit of the same tree and options would build — counts
+ * come from the same buildRepoSnapshot + planAuditUnits calls, so parity is
+ * by construction. No run row, no model, no writes.
+ */
+async function renderAuditDryRun(
+  ctx: Ctx,
+  input: {
+    head: string | undefined;
+    includePaths: string[];
+    skipGlobs: string[];
+    listFiles: boolean;
+    json: boolean;
+    emit: Emit;
+  },
+): Promise<number> {
+  const { buildRepoSnapshot, DEFAULT_SKIP_PATTERNS } = await import("../changes/snapshot.js");
+  const { planAuditUnits } = await import("../core/audit-planner.js");
+  const { isDirty } = await import("../changes/git.js");
+  const emit = input.emit;
+  const snapshot = await buildRepoSnapshot(ctx.repoRoot, input.head ?? "HEAD", {
+    includePaths: input.includePaths,
+    skipGlobs: input.skipGlobs,
+  });
+  const plan = await planAuditUnits(snapshot);
+  const dirtyWorktree = await isDirty(ctx.repoRoot);
+  const bySelection = { selected: 0, "not-selected": 0, excluded: 0 };
+  const byClassification: Record<string, number> = {};
+  for (const entry of snapshot.entries) {
+    bySelection[entry.selection] += 1;
+    if (entry.selection === "selected") {
+      byClassification[entry.classification] = (byClassification[entry.classification] ?? 0) + 1;
+    }
+  }
+  const reviewable = byClassification.text ?? 0;
+  const files = {
+    total: snapshot.entries.length,
+    selected: bySelection.selected,
+    notSelected: bySelection["not-selected"],
+    excluded: bySelection.excluded,
+    reviewable,
+    byClassification,
+  };
+  const modules = new Set(plan.units.map((unit) => unit.module));
+  const nonText = Object.entries(files.byClassification)
+    .filter(([kind, count]) => kind !== "text" && count > 0)
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(", ");
+  const note =
+    "no run is created and no model is used; uncommitted working-tree files are outside a committed audit";
+  if (input.json) {
+    emit(
+      envelope(
+        "audit.dry-run",
+        {
+          head: snapshot.commit,
+          treeId: snapshot.treeId,
+          scopeVersion: snapshot.scopeVersion,
+          plannerVersion: plan.plannerVersion,
+          scope: snapshot.scope,
+          policy: { defaultExclusions: DEFAULT_SKIP_PATTERNS },
+          files,
+          units: { total: plan.units.length, modules: modules.size },
+          dirtyWorktree,
+          note,
+          ...(input.listFiles
+            ? {
+                list: snapshot.entries.map((entry) => ({
+                  path: entry.path,
+                  selection: entry.selection,
+                  classification: entry.classification,
+                  ...(entry.exclusionReason ? { reason: entry.exclusionReason } : {}),
+                })),
+              }
+            : {}),
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: snapshot.commit } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const lines = [
+    `audit dry-run: head ${snapshot.commit} (tree ${snapshot.treeId})`,
+    `scope: version ${snapshot.scopeVersion}, planner ${plan.plannerVersion}; --path ${JSON.stringify(snapshot.scope.includePaths)} --skip ${JSON.stringify(snapshot.scope.skipGlobs)}`,
+    `files: ${files.total} total — ${files.selected} selected (${files.reviewable} reviewable text` +
+      `${nonText ? `; ${nonText}` : ""}), ${files.notSelected} not-selected, ${files.excluded} excluded`,
+    `units: ${plan.units.length} planned across ${modules.size} module(s)`,
+    `worktree: ${dirtyWorktree ? "dirty (uncommitted files are outside this audit)" : "clean"}`,
+    note,
+  ];
+  if (input.listFiles) {
+    lines.push("files:");
+    for (const entry of snapshot.entries) {
+      lines.push(`  ${entry.selection.padEnd(13)}${entry.classification.padEnd(17)}${entry.path}${entry.exclusionReason ? `  (${entry.exclusionReason})` : ""}`);
+    }
+  }
+  emit(`${lines.join("\n")}\n`);
+  return 0;
+}
+
+/**
+ * `pir audit coverage [--run <id>|--latest] [--json]` (#56): per-file coverage
+ * of one recorded audit run, read from the audit_file_coverage ledger the run
+ * persisted as it went. Local project db only.
+ */
+async function cmdAuditCoverage(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  const runFlag = flags.get("--run");
+  const latest = flags.get("--latest") === true;
+  if ((typeof runFlag === "string") === latest) {
+    throw new UsageError("audit coverage needs exactly one of --run <run-id> or --latest");
+  }
+  if (_args.length > 0) {
+    throw new UsageError(`unknown audit coverage argument: ${_args[0]}`);
+  }
+  const run =
+    typeof runFlag === "string" ? ctx.memory.findings.runById(runFlag) : ctx.memory.findings.latestRun("audit");
+  if (!run) {
+    if (typeof runFlag === "string") {
+      log(`pir: audit run not found: ${runFlag}`);
+      return 3;
+    }
+    emit("no audit runs recorded in this project\n");
+    return 0;
+  }
+  if (run.mode !== "audit") {
+    throw new UsageError(`run ${run.id} is a ${run.mode}-mode run; audit coverage needs an audit run`);
+  }
+  const files = ctx.memory.audit.fileCoverage(run.id);
+  const summary: Record<string, number> = {};
+  for (const file of files) summary[file.state] = (summary[file.state] ?? 0) + 1;
+  if (json) {
+    emit(
+      envelope(
+        "audit.coverage",
+        {
+          run: {
+            id: run.id,
+            head: run.head,
+            status: run.status,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+            ...(run.notes ? { notes: run.notes } : {}),
+          },
+          summary,
+          files: files.map((file) => ({
+            path: file.path,
+            state: file.state,
+            ...(file.reason ? { reason: file.reason } : {}),
+            rangesReviewed: file.rangesReviewed,
+            rangesTotal: file.rangesTotal,
+          })),
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: run.head } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const lines = [
+    `audit run ${run.id}`,
+    `  head ${run.head}; status ${run.status}; started ${new Date(run.startedAt).toISOString()}`,
+    `  coverage: ${files.length} file record(s) — ${Object.entries(summary).map(([state, n]) => `${n} ${state}`).join(", ") || "none"}`,
+  ];
+  if (run.notes) lines.push(`  notes: ${run.notes}`);
+  lines.push("files:");
+  for (const file of files) {
+    lines.push(
+      `  ${file.state.padEnd(10)}${file.path} (ranges ${file.rangesReviewed}/${file.rangesTotal})${file.reason ? ` — ${file.reason}` : ""}`,
+    );
+  }
+  emit(`${lines.join("\n")}\n`);
+  return 0;
 }
 
 async function cmdMemory(
@@ -1317,6 +1591,9 @@ function renderConfig(config: UserConfig, file: string): string {
     lines.push(`server: ${config.server.url}`);
     lines.push(`token:  ${maskSecret(config.server.token)}`);
     lines.push(`tls:    ${config.server.insecure ? "self-signed accepted (--insecure)" : "verified"}`);
+    if (config.server.timeoutSeconds !== undefined) {
+      lines.push(`wait:   ${config.server.timeoutSeconds}s (remote response timeout)`);
+    }
   }
   if (config.model) lines.push(`model:  ${config.model}`);
   lines.push(`path:   ${file}`);
