@@ -309,3 +309,44 @@ test("#56: audit coverage reads the recorded ledger (--latest and --run)", async
     repo.cleanup();
   }
 });
+
+test("#56 (dogfood F-51): dry-run fails exactly where a real audit fails — empty and non-reviewable scopes", async (t) => {
+  const repo = createTempGitRepo("pir-lao-guards-");
+  const dbPath = path.join(mkdtempSync(path.join(tmpdir(), "pir-lao-db-")), "memory.sqlite");
+  t.after(() => rmSync(path.dirname(dbPath), { recursive: true, force: true }));
+  try {
+    repo.write("assets/logo.png", "\u0000binary\u0000\n");
+    repo.commit("binary-only");
+    await assert.rejects(
+      executePirCommand(["audit", "--dry-run", "--json", "--no-sync-index", "--cwd", repo.dir], { dbPath }),
+      (error) => error instanceof UsageError && /none are reviewable text/.test(error.message),
+    );
+    repo.write("src/a.ts", "export const a = 1;\n");
+    repo.commit("text");
+    await assert.rejects(
+      executePirCommand(["audit", "--dry-run", "--json", "--no-sync-index", "--cwd", repo.dir, "--path", "docs"], { dbPath }),
+      (error) => error instanceof UsageError && /audit scope is empty/.test(error.message),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("#46 (dogfood F-52): a sha256 source repository packs through a matching temp repo", async (t) => {
+  const repo = mkdtempSync(path.join(tmpdir(), "pir-lao-sha256-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ["init", "--quiet", "--object-format=sha256"]);
+  git(repo, ["config", "user.email", "t@t"]);
+  git(repo, ["config", "user.name", "t"]);
+  writeFileSync(path.join(repo, "a.ts"), "export const a = 1;\n");
+  git(repo, ["add", "."]);
+  git(repo, ["commit", "--quiet", "-m", "one"]);
+  const head = git(repo, ["rev-parse", "HEAD"]).trim();
+
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const bundle = await createBundle(repo, { base: null, head });
+  const file = await bundleFile(bundle, "sha256");
+  t.after(() => rmSync(file, { force: true }));
+  const verify = await execFileAsync("git", ["-C", repo, "bundle", "verify", file]);
+  assert.match(verify.stdout, /refs\/pir\/bundle-head/);
+});

@@ -125,3 +125,20 @@ test("/review-feedback usage errors notify instead of throwing", async () => {
     repo.cleanup();
   }
 });
+
+test("/review-find rejects an invalid --max-findings with the extension parser (dogfood F-50)", async () => {
+  const repo = createTempGitRepo("pir-ext-maxf-");
+  try {
+    const { commands } = await loadExtension();
+    const ctx = makeCtx(repo.dir);
+    // "unlimited" must parse to null (no cap, #57) — the failure mode F-50
+    // pinned is a bare Number() turning it into NaN; the parser's own error
+    // message proves the dedicated parser is on this path.
+    await assert.rejects(
+      commands.get("review-find").handler("--max-findings bogus", ctx),
+      (error) => /invalid --max-findings: bogus \(positive integer or "unlimited" required\)/.test(error.message),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});

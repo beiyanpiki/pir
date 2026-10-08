@@ -31,6 +31,23 @@ function extractRepeatedFlag(tokens: string[], name: string): string[] {
   return values;
 }
 
+/**
+ * --max-findings on the extension lane (#57, dogfood F-50): the same contract
+ * as the CLI parser — positive integer, or the literal "unlimited" parsed to
+ * null. A bare Number() here would turn "unlimited" into NaN and fail the
+ * supervisor's positiveInteger guard.
+ */
+function extractMaxFindings(tokens: string[]): number | null | undefined {
+  const raw = extractFlag(tokens, "--max-findings");
+  if (raw === undefined) return undefined;
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`invalid --max-findings: ${raw} (positive integer or "unlimited" required)`);
+  }
+  return value;
+}
+
 export function registerReviewCommands(pi: ExtensionAPI): void {
   pi.registerCommand("review-find", {
     description: "Run the pi-review finding loop on a change range (default HEAD^..HEAD)",
@@ -47,7 +64,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           base: extractFlag(tokens, "--base"),
           head: extractFlag(tokens, "--head"),
           maxRounds: extractFlag(tokens, "--max-rounds") !== undefined ? Number(extractFlag(tokens, "--max-rounds")) : undefined,
-          maxFindings: extractFlag(tokens, "--max-findings") !== undefined ? Number(extractFlag(tokens, "--max-findings")) : undefined,
+          maxFindings: extractMaxFindings(tokens),
           model: extractFlag(tokens, "--model"),
         });
         const findings = result.findings.map((row) => toFindingView(app, row));
@@ -75,7 +92,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           includePaths: extractRepeatedFlag(tokens, "--path"),
           skipGlobs: extractRepeatedFlag(tokens, "--skip"),
           maxTokens: extractFlag(tokens, "--max-tokens") !== undefined ? Number(extractFlag(tokens, "--max-tokens")) : undefined,
-          maxFindings: extractFlag(tokens, "--max-findings") !== undefined ? Number(extractFlag(tokens, "--max-findings")) : undefined,
+          maxFindings: extractMaxFindings(tokens),
           model: extractFlag(tokens, "--model"),
         });
         const findings = result.findings.map((row) => toFindingView(app, row));

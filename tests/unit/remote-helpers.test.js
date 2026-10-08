@@ -560,3 +560,12 @@ test("stripClientFlags removes --detach and --remote-timeout before forwarding (
   assert.deepEqual(stripClientFlags(["audit", "--detach", "--remote-timeout=0"]), ["audit"]);
   assert.deepEqual(stripClientFlags(["find", "--json"]), ["find", "--json"]);
 });
+
+test("--detach cannot ride the registered-repo lane (#53, dogfood F-49)", async () => {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  // Validation fires before any network IO, so a dead port is fine.
+  await assert.rejects(
+    remoteExec("http://127.0.0.1:9", ["find", "--detach", "--repo", "demo", "--json"], {}),
+    (error) => error instanceof UsageError && /cannot be combined with --repo/.test(error.message),
+  );
+});

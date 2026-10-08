@@ -1123,6 +1123,18 @@ async function renderAuditDryRun(
     skipGlobs: input.skipGlobs,
   });
   const plan = await planAuditUnits(snapshot);
+  // The same scope guards auditIssues applies right after its identical
+  // snapshot+plan calls: a preview that exits 0 where the real audit exits 2
+  // is not a preview (dogfood F-51).
+  const inScopeFiles = snapshot.entries.filter((entry) => entry.selection === "selected").length;
+  if (inScopeFiles === 0) {
+    throw new UsageError("audit scope is empty: no committed files selected (check --path/--skip)");
+  }
+  if (plan.units.length === 0) {
+    throw new UsageError(
+      `audit scope has ${inScopeFiles} selected file(s) but none are reviewable text (binary/oversized/submodule entries cannot be audited); refine --path/--skip`,
+    );
+  }
   const dirtyWorktree = await isDirty(ctx.repoRoot);
   const bySelection = { selected: 0, "not-selected": 0, excluded: 0 };
   const byClassification: Record<string, number> = {};

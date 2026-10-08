@@ -455,10 +455,17 @@ export async function createBundle(
   // relative path in a linked worktree; objects always live under it.
   const commonDirRaw = (await git(repoRoot, ["rev-parse", "--git-common-dir"])).trim();
   const objectsDir = path.resolve(repoRoot, commonDirRaw, "objects");
+  // A bare init would otherwise inherit the machine's init.defaultObjectFormat
+  // (usually sha1); pointing alternates at a sha256 store from a sha1 repo
+  // cannot resolve anything (dogfood F-52).
+  const objectFormat = (await git(repoRoot, ["rev-parse", "--show-object-format"])).trim();
+  if (objectFormat !== "sha1" && objectFormat !== "sha256") {
+    throw new Error(`unsupported source object format: ${objectFormat || "(empty)"}`);
+  }
   const tempRepo = mkdtempSync(path.join(tmpdir(), "pir-bundle-repo-"));
   try {
     try {
-      await git(tempRepo, ["init", "--quiet", "--bare"]);
+      await git(tempRepo, ["init", "--quiet", "--bare", `--object-format=${objectFormat}`]);
       // An alternates line makes the temp repo resolve every source object
       // without copying it; missing line or wrong path fails the bundle step
       // below, never silently producing an empty bundle.

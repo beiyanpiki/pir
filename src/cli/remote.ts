@@ -65,6 +65,12 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
     if (!["find", "audit"].includes(positional[0] ?? "")) {
       throw new UsageError("--detach applies to `pir find` / `pir audit` submissions");
     }
+    // The registered-repo lane forwards through /v1/exec, which has no job
+    // registry to detach from — honoring the flag would silently wait
+    // synchronously instead (dogfood F-49).
+    if (cleaned.some((a) => a === "--repo" || a.startsWith("--repo="))) {
+      throw new UsageError("--detach cannot be combined with --repo: the registered-repo lane runs synchronously via /v1/exec with no job registry");
+    }
   }
 
   if (wantsBundle(cleaned)) {
