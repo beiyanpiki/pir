@@ -1,279 +1,276 @@
-# pir — pi-based code review with Repository Memory
+# pir
 
-[![ci](https://github.com/beiyanpiki/pir/actions/workflows/ci.yml/badge.svg)](https://github.com/beiyanpiki/pir/actions/workflows/ci.yml)
-[![docker](https://github.com/beiyanpiki/pir/actions/workflows/docker.yml/badge.svg)](https://github.com/beiyanpiki/pir/actions/workflows/docker.yml)
+`pir` reviews git changes and audits repositories using
+[Pi](https://github.com/earendil-works/pi). A reviewer investigates the code
+and proposes candidate defects; an isolated verifier checks each candidate's
+trigger, impact, and supporting evidence. Results include both confirmed
+findings and explicitly marked uncertainties.
 
-`pir` is a code-review engine built on [Pi](https://github.com/earendil-works/pi).
-It does exactly one thing: **find problems introduced by the current change,
-as accurately as possible, and use project history to stop repeating itself.**
-No GitHub integration, no PR comments, no CI gates, no auto-fixes — structured
-findings in, structured findings out.
+pir also keeps repository memory in SQLite. Project rules, feature notes,
+symbol contracts, finding decisions, and verified fixes can be reused on later
+runs. This gives later reviews context about the project and lets them
+reconsider earlier decisions when the code changes.
 
-> **中文文档**:[docs/README.zh-CN.md](docs/README.zh-CN.md)
+The package provides a local CLI, a Pi extension, and an HTTPS service. All
+three call the same application and review code.
 
-## Highlights
+[中文文档](docs/README.zh-CN.md) · [Agent guide](docs/for-llm.md)
 
-- **Reviewer → Verifier loop, from scratch.** A read-only reviewer session
-  explores the diff and must emit candidates through a structured tool
-  (`record_candidate`); reported findings pass through an isolated verifier
-  and retain an explicit confirmed/uncertain status. Unverified candidates
-  remain in a separate pending queue rather than disappearing at budget limits.
-- **Repository Memory that actually changes behavior.** Five layers (project /
-  feature / code entity / issue decisions / finding resolutions) in SQLite.
-  Tell it once that `retry_count` intentionally counts attempts — the same
-  issue stops being reported, **and a verifier re-validates that decision
-  against current code every time**, reopening it when reality changes.
-- **Trust boundaries by design.** Agents can never write decision memories
-  (`expected` / `wont-fix` / `false-positive` come only from users or verified
-  fixes); the reviewer never sees historical decisions (no bias), only the
-  verifier does; memory is injected as *evidence, not instructions*.
-- **Reviews what you have, not what you pushed.** CodeRabbit-CLI-style: the
-  client ships its local state as a git bundle — unpushed commits and even
-  *uncommitted* working trees (`--uncommitted`) review fine; the server needs
-  no credentials for your origin.
-- **Machine-first CLI.** stdout is pure JSON (`schemaVersion:1` envelope),
-  progress goes to stderr, exit codes are contract (`0` ok, `1` findings ≥
-  `--fail-on`, `2` usage, `3` runtime). Build agent pipelines on it directly.
-- **One package, three faces.** Local CLI (`pir`), Pi extension
-  (`/review-find`, `/review-memory`, `/review-feedback`, `/review-remember`),
-  HTTPS service (`pir serve`) — all sharing one command path.
-- **Lean core.** Runtime dependencies: the Pi SDK + typebox. Storage is
-  `node:sqlite`. Optional [codegraph](https://www.npmjs.com/package/@colbymchenry/codegraph)
-  for symbol-level structure (graceful degradation without it).
+## What pir reviews
 
-## Architecture
+`pir find` reviews a change range and asks which problems were introduced or
+unmasked by that change. `pir audit` reviews one committed snapshot and asks
+which problems exist in the repository now. An audit does not attribute a
+finding to a commit and never includes uncommitted files.
 
-```
-Pi extension (/review-*)        pir CLI ── remote (--server) ──┐
-        └────────────┬─────────────────────┘                  │
-                  src/app  (single command path: executor)    │
-                     │                                       │
-   ┌─────────────────┼───────────────────────────┐           │
-   │ core: supervisor / frontier / budget        │        HTTPS
-   │ changes: git / diff / worktree snapshots    │      POST /v1/review
-   │ findings: fingerprint / dedup               │◄─────────┘
-   │ codemap: codegraph CLI adapter / degraded   │   (client ships a git
-   │ memory: SQLite five-layer + feedback        │    bundle of its local
-   └─────────────────┬───────────────────────────┘    state)
-                     │
-        agents: one-shot in-memory sessions
-        (read-only builtins + structured collector tools;
-         reviewer never sees historical decisions — verifier does)
-```
+The review loop is deliberately conservative:
 
-Key invariants:
+- Agents are read-only. They use review tools and cannot edit files, run shell
+  commands, or write memory decisions.
+- Candidates that do not fit the remaining verification budget are preserved
+  as `candidate` rows, separate from reported findings.
+- Reported statuses are `confirmed` and `uncertain`. Rejected and
+  user-suppressed findings remain in the database with their rationale.
+- A user decision is checked against the current code by a verifier on every
+  later match. Code drift can reopen a previously suppressed issue.
 
-- `projectId = sha256(normalizedRemote + rootCommit)` — memory follows the
-  repository across machines and paths. **Branches never key memory**;
-  invariants and decisions are repo-level knowledge.
-- Sessions are disposable (`SessionManager.inMemory()` + `dispose()`);
-  everything durable lives in SQLite, never in chat history.
-- Server-side reviews run in throwaway `git worktree`s; state concentrates
-  under `PIR_STATE_ROOT/<projectId>/`.
+## Requirements
 
-## Installation
+- Node.js 22.5 or newer
+- git
+- Credentials for at least one provider supported by Pi, unless the CLI sends
+  work to a configured `pir serve` instance
 
-**npx — straight from GitHub, no npm publish, no install:**
+## Install
 
 ```bash
-npx -y github:beiyanpiki/pir find --json
-# or keep it:                       (Node >= 22.5; the git install builds itself)
-npm i -g github:beiyanpiki/pir     # provides `pir`
+npx -y github:beiyanpiki/pir version
+npm install --global github:beiyanpiki/pir
 ```
 
-CI builds and smoke-tests this exact package on every push (`package` job in
-[ci.yml](.github/workflows/ci.yml)), uploads it as a workflow artifact, and
-attaches `pir-<version>.tgz` to the GitHub release on `v*` tags for pinned
-installs.
+From a checkout, `npm install --global .` installs the CLI. `pi install .`
+installs the Pi extension and exposes `/review-find`, `/review-audit`,
+`/review-memory`, `/review-feedback`, and `/review-remember`.
 
-On the first interactive run `pir` starts a short setup wizard and writes
-`~/.pir/config.json` (chmod 600): **local mode** (default — review in the
-current repo with this machine's pi credentials) or **remote mode** (forward
-everything to a `pir serve` instance; repo commands — `find`, `audit` and the
-`memory`/`findings`/`feedback`/`remember`/`verify-fix` family — ship your
-local state as a git bundle, so unpushed/uncommitted code reviews fine).
-Non-interactive runs fall
-back to local defaults with a one-line hint. Manage later:
+## Choose an execution mode
+
+Local and remote execution have different prerequisites. Pick one; a remote
+client does not need local model credentials.
+
+### Local mode
+
+The command runs in the current checkout and uses this machine's Pi
+credentials. Credentials normally live in `~/.pi/agent/auth.json`:
+
+```json
+{ "anthropic": { "type": "api_key", "key": "<key>" } }
+```
 
 ```bash
-pir config show                                   # effective config (token masked)
-pir config set mode remote                        # + server.url / server.token / server.insecure
-pir config wizard                                 # re-run the setup wizard
-pir --local find --json                           # one-off override, either direction
-pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
+pir models
+pir find --json
+pir find --uncommitted --base HEAD --json
 ```
 
-**Long remote tasks:** the server runs commands serially, and a remote find or
-audit can legitimately take many minutes — the client waits up to 30 minutes
-for an answer, overriding Node/undici's 5-minute default that used to abort
-longer tasks with a bare `fetch failed`. Raise, lower or disable the wait with
-`PIR_REMOTE_TIMEOUT` (seconds; `0` = no limit), e.g. `PIR_REMOTE_TIMEOUT=7200`
-for hour-scale audits.
+The first interactive invocation can create `~/.pir/config.json`. A minimal
+local configuration is:
 
-**Memory sync (local ⇄ server):** memories accumulated on your machine and on
-a `pir serve` instance are separate SQLite DBs keyed by the same projectId.
-`pir memory sync` merges them bidirectionally — both sides converge, and rows
-describing the same logical record (same feature key, symbol key, or finding
-fingerprint) collapse onto the winning replica's rows. On a conflicting record
-the newer write wins, and user knowledge (`user_explicit` / `verified_fix`)
-always beats agent summaries regardless of timestamps. The command always runs
-locally (even in remote mode) and takes `--dry-run`:
+```json
+{ "schemaVersion": 1, "mode": "local" }
+```
+
+Add `"model": "provider/model"` to choose a default. `--model` has highest
+priority, followed by `PIR_MODEL`, this config value, and Pi settings.
+
+### Remote mode
+
+With an existing `pir serve` instance, the client needs just a connection:
 
 ```bash
-pir memory sync --server https://pir.svc:8790 --token T --insecure --json
-pir memory sync --dry-run                         # report what would change
+pir config set server.url https://pir.example:8790
+pir config set server.token '<service-token>'
+pir config set server.insecure true   # self-signed certificate only
+pir config set mode remote
+pir find --uncommitted --base HEAD --json
 ```
 
-**Skill for your coding agent:** `pir skill install` drops a ready-made
-LLM skill (`skills/pir/SKILL.md` in this repo) into `~/.agents/skills/pir/`,
-teaching the agent when and how to drive the CLI — install, modes, JSON
-protocol, feedback loop, troubleshooting. `pir skill print` dumps it for any
-other agent framework.
-
-**Docker (recommended for the service side):**
-
-```bash
-docker pull ghcr.io/beiyanpiki/pir:main
-# interactive QA deployment of the HTTPS service:
-sh docker/deploy.sh          # asks token / provider+model+key / port / TLS, then verifies
-```
-
-**From a checkout (extension + CLI):**
-
-```bash
-npm i -g .                   # provides `pir`
-pi install $(pwd)            # Pi extension: /review-* commands
-```
-
-**Model access (any pi provider):** pir runs on every provider Pi supports —
-anthropic, openai, google, deepseek, moonshotai, zai-coding-cn, minimax,
-openrouter, xai, groq, and the rest of the catalog. Browse it:
-
-```bash
-pir models                   # models you have credentials for
-pir models --all glm         # full catalog, fuzzy-filtered
-pir models --ids --provider deepseek   # one provider/model per line
-```
-
-Store credentials in `~/.pi/agent/auth.json` (chmod 600), one entry per
-provider:
-
-```jsonc
+```json
 {
-  "zai-coding-cn": { "type": "api_key", "key": "<your bigmodel key>" },
-  "anthropic": { "type": "api_key", "key": "sk-ant-..." }
+  "schemaVersion": 1,
+  "mode": "remote",
+  "server": { "url": "https://pir.example:8790", "token": "<token>" }
 }
 ```
 
-and default the model in `~/.pi/agent/settings.json`
-(`defaultProvider`/`defaultModel`/`defaultThinkingLevel`). Precedence for the
-review/verify sessions: `--model <provider>/<model>` flag (fuzzy ids work) >
-`PIR_MODEL` env > `~/.pir/config.json` `model` > pi settings. In Docker, inject credentials per provider
-instead: `-e PI_API_KEY__deepseek=sk-...` (or `PI_AUTH_JSON` with the full
-map) plus `PI_DEFAULT_PROVIDER`/`PI_DEFAULT_MODEL` for the default.
-
-## Web UI (read-only run explorer)
-
-`pir serve` can host a browser UI that visualizes every review run: projects
-in the sidebar, one run per review request, and the full execution timeline —
-each reviewer round and per-candidate verifier session with prompts,
-thinking, markdown output, and every tool call (arguments + results). It is
-strictly read-only: there is no way to start a review from the browser.
+For repo-context commands, the client sends a git bundle containing the local
+state. Unpushed commits and an uncommitted working tree therefore work without
+push access or origin credentials. `memory sync` is the exception: it always
+runs locally and explicitly merges the local database with the server.
 
 ```bash
-PIR_WEB_UI=1 PIR_WEB_UI_TOKEN=<viewer-token> pir serve --web   # https://<host>:8790/
+pir --local find --json
+pir --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN" --insecure \
+  find --uncommitted --base HEAD --json
 ```
 
-- **Off by default.** `PIR_WEB_UI=1` (or `--web`) mounts the UI at `/`;
-  the JSON API (`/v1/*`, `/health`) is untouched and `/api/*` never reaches
-  the executor. Mutating verbs on `/api` answer 405.
-- **Separate viewer token.** The UI uses `PIR_WEB_UI_TOKEN`, independent of
-  `PIR_SERVER_TOKEN`, so view access can be handed out without executor
-  access. Without a token the UI only opens on loopback binds.
-- **Live + historical.** Runs executing in the serve process stream live
-  (thinking/tool calls over SSE); finished runs are replayed from their
-  transcripts. Runs from before `PIR_TRANSCRIPTS` still show findings from
-  repository memory, with a note that no timeline exists. Local CLI runs
-  (other processes) appear after they finish — live view covers serve-executed
-  runs only.
-- **Transcripts auto-enable.** With the UI on, `PIR_TRANSCRIPTS` defaults to
-  `1` (set `0` to opt out); each run also records a `run.json` manifest
-  (rounds, plugins, usage, coverage) next to its transcripts.
-- In docker-compose: set `PIR_WEB_UI=1` and `PIR_WEB_UI_TOKEN` in `.env`.
+Transport precedence is `--server`, `--local`, `PIR_SERVER_URL`, `PIR_MODE`,
+then `~/.pir/config.json`. `serve`, `config`, `skill`, `plugins`, `version`,
+and `memory sync` always run on the client. `--server` and `--local` cannot
+be combined. A client-side model default is not forwarded; use `--model` to
+override the server's choice for a particular review.
 
-The SPA builds from `web/` (React + Vite, no runtime dependencies) into
-`dist/web`; see [web/README.md](web/README.md) for the dev workflow
-(`npm run dev:web` proxies `/api` to a local `pir serve`).
-
-## For LLMs
-
-Deploying or operating pir on a user's behalf? Read
-**[docs/for-llm.md](docs/for-llm.md)** — a deterministic guide with the exact
-QA checklist for deployment configuration (token, API key, port, TLS), docker
-commands, verification steps, the JSON contract, and a troubleshooting table.
-The interactive equivalent ships as `docker/deploy.sh`.
-
-## For humans
-
-| Document | What's inside |
-|---|---|
-| [docs/README.zh-CN.md](docs/README.zh-CN.md) | 完整中文说明(功能、架构、安装、协议) |
-| [docs/for-llm.md](docs/for-llm.md) | Agent-facing deployment & usage guide |
-| [docs/design.md](docs/design.md) | Full architecture reference for developers |
-| [docs/review-loop.md](docs/review-loop.md) | Evidence snapshots, pending candidates, isolation, usage, and evaluation |
-
-## Quick start
+To host the service yourself, run it on the machine with model access:
 
 ```bash
-pir find --json --fail-on P1          # review HEAD^..HEAD
-pir find --uncommitted --json         # review the working tree (untracked included)
-pir audit --json                      # full-repository audit of the committed HEAD snapshot
-pir audit --path src/auth --json      # audit one subtree (repeatable, unions)
-pir plugins list                      # language packs + what this repo activates
-pir find --plugins golang --json      # force a language pack (or --plugins none)
-pir feedback F-12 expected --note "intentional"   # teach repository memory
-pir find --json                       # same issue no longer reported
-pir verify-fix F-13                   # confirm a fix removed the trigger
-pir --server https://pir.svc:8790 --token T --insecure find --uncommitted --json
-pir memory sync --server https://pir.svc:8790 --token T --insecure   # merge local & server memory
+PIR_SERVER_TOKEN='<service-token>' pir serve --host 0.0.0.0 --port 8790
 ```
 
-### Full-repository audits (`pir audit`)
+A host installation uses that machine's Pi settings and credentials. TLS
+uses `--cert`/`--key`, `PIR_TLS_CERT`/`PIR_TLS_KEY`, or a generated self-signed
+certificate when `openssl` is available.
 
-`find` answers *"what did this change break?"*; `audit` answers *"what is
-broken in the code right now?"* — current-state semantics, no change
-attribution, so long-standing defects are reportable precisely because they
-exist today. The audit target is one immutable snapshot: the committed tree at
-`--head` (default `HEAD`); uncommitted changes are never audited. There is no
-`--base`, no merge-base, and no `--uncommitted`.
+### Docker service
 
-- Scope: `--path <file-or-dir-prefix>` (repeatable, union) and
-  `--skip <glob>` (repeatable; `*`, `**`, `?`, plain values act as dir
-  prefixes). Default excludes vendored/build output and lockfiles; selected
-  binary/oversized files are reported `blocked`, never silently skipped.
-- Scheduling: the snapshot is partitioned into deterministic work units
-  (module groups; oversized files split into line-range chunks) that feed the
-  **same** reviewer/verifier loop as `find`, with one global token budget,
-  findings ceiling and dedup state across units.
-- Coverage is first-class: the JSON envelope reports per-file states
-  (`reviewed / partial / unreviewed / blocked / failed / excluded /
-  not-selected`) and unit completion. A budget stop leaves files honestly
-  `unreviewed` and the run `incomplete` — "reviewed" is process accounting,
-  not a guarantee that every defect was found.
-- Suppression stays conditional: a prior `accepted-risk`/`wont-fix` decision
-  only suppresses when the verifier re-validates it against current code;
-  drift reopens the finding.
+The [Compose configuration](docker-compose.yml) provides persistent volumes
+for repositories and memory. Its `.env` settings are:
 
-CLI reference, the full memory-trust model, and Docker details are covered in
-[docs/README.zh-CN.md](docs/README.zh-CN.md) (中文); the JSON protocol and
-exit-code contract in [docs/for-llm.md](docs/for-llm.md).
+```dotenv
+PIR_SERVER_TOKEN=<service-token>
+PI_AUTH_JSON={"anthropic":{"type":"api_key","key":"<provider-key>"}}
+PI_DEFAULT_PROVIDER=anthropic
+PI_DEFAULT_MODEL=<model-id>
+```
+
+```bash
+docker compose up -d
+```
+
+The container entrypoint translates `PI_AUTH_JSON`, `PI_API_KEY__<provider>`,
+and `PI_DEFAULT_*` into Pi configuration. `sh docker/deploy.sh` offers an
+interactive setup for this deployment.
+
+## Common commands
+
+```bash
+pir find --json                         # HEAD^..HEAD
+pir find --base origin/main --head HEAD --fail-on P1 --json
+pir find --uncommitted --base HEAD --json # staged, unstaged, and untracked work
+
+pir audit --json                        # committed HEAD snapshot
+pir audit --path src/auth --path src/payments --json
+pir audit --skip '**/generated/**' --json
+
+pir findings list --status candidate
+pir findings show F-12
+pir feedback F-12 expected --note "retry_count counts attempts by design"
+pir feedback F-12 priority P1
+pir feedback F-13 fixed --note "Fixed in committed HEAD"
+pir verify-fix F-13
+
+pir memory status
+pir memory bootstrap
+pir memory refresh
+pir remember symbol PaymentService.retry invariant --text "..."
+pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
+```
+
+`--max-findings` is a ceiling, not a target. `--max-rounds` applies to change
+reviews; audits are bounded by work units and the optional `--max-tokens`
+budget. Reviews have no token ceiling unless one is set. `--plugins auto` is
+the default; use `--plugins none` or a comma separated list of built-in packs
+to override detection. The shipped Go and TypeScript packs support both modes.
+
+Change reviews compare the merge base of the selected refs to head. An
+explicit `--base HEAD` limits a working-tree review to uncommitted work.
+`verify-fix` checks a finding marked fixed against committed HEAD.
+
+## Output contract
+
+Successful `--json` commands write one result envelope to stdout. A shortened
+review result looks like this:
+
+```json
+{ "schemaVersion": 1, "command": "find", "data": { "findings": [], "incomplete": false } }
+```
+
+Progress and diagnostics go to stderr. Exit codes are stable: `0` means no
+gate failure, `1` means a reported finding met `--fail-on`, `2` is a usage
+error, and `3` is a runtime error. With `--fail-on none` (the default), an
+incomplete result can still return `0`; check `data.incomplete`. With a gate
+configured, an incomplete run returns `3` unless a qualifying finding already
+caused `1`.
+
+Audits also return a coverage ledger. Each selected file is accounted for as
+`reviewed`, `partial`, `unreviewed`, `blocked`, or `failed`; excluded and
+not-selected files are reported separately. `reviewed` records process
+completion and is not a claim that every defect was found.
+
+## Service API and jobs
+
+`pir serve` exposes:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | version, TLS state, and queue status |
+| `POST /v1/exec` | execute a non-bundled CLI invocation |
+| `POST /v1/review` | execute a repo-context command from a git bundle |
+| `POST /v1/memory/sync` | merge a local memory snapshot into the server |
+| `GET /v1/jobs` and `/v1/jobs/<id>` | inspect or retrieve asynchronous work |
+
+Remote audits sent from a checkout are asynchronous jobs by default.
+`pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
+memory and retains the latest 100 settled jobs; runs and findings remain in
+SQLite. `PIR_REMOTE_ASYNC=1` applies
+job submission to other review commands.
+
+The optional read-only explorer is enabled with `--web` or `PIR_WEB_UI=1`.
+`PIR_WEB_UI_TOKEN` protects it independently of `PIR_SERVER_TOKEN`. With the
+UI enabled, an unset `PIR_TRANSCRIPTS` defaults to `1`; set it to `0` to disable
+recording. Compose supplies this variable, so set `PIR_TRANSCRIPTS=1` in `.env`
+to record timelines there. Live timelines cover runs in the serve process; historical
+transcripts also show prompts, tool traffic, and available thinking. See the
+[web guide](web/README.md) for development of the explorer.
+
+## State and memory
+
+Project identity comes from the normalized remote URL and root commit, so it
+follows a repository across checkout paths and machines. Local state lives in
+the platform state directory under `pir/<projectId>/memory.sqlite`; a server
+can centralize it with `PIR_STATE_ROOT`. `PIR_MEMORY_DB` and
+`PIR_STATE_IN_PROJECT=1` provide explicit overrides.
+
+| Layer | Examples |
+| --- | --- |
+| Project | architecture, ownership, invariants |
+| Feature | behavior of a vertical feature |
+| Code entity | symbol contracts and relationships |
+| Issue decision | expected, false-positive, accepted-risk, wont-fix |
+| Finding resolution | a verified fix and its after-state |
+
+`memory sync` is bidirectional. The newer version wins for a conflicting row;
+`user_explicit` and `verified_fix` knowledge outranks agent summaries.
+
+## Documentation
+
+- [Chinese README](docs/README.zh-CN.md)
+- [Agent execution reference](docs/for-llm.md)
+- [Architecture](docs/design.md)
+- [Review loop](docs/review-loop.md)
+- [Pi skill](skills/pir/SKILL.md)
+
+`pir skill install` installs the shipped agent skill; `pir skill print` outputs
+it for other integrations.
 
 ## Development
 
 ```bash
-npm test                    # build + model-free regression suite
-PIR_EVAL=1 node tests/eval/run-eval.js   # evaluation suite (needs a model)
+npm install
+npm run build
+npm run typecheck
+npm test
 ```
+
+Model evaluation is under `tests/eval/` and requires provider access.
 
 ## License
 
