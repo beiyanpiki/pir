@@ -422,10 +422,17 @@ export function reportBundlePrepFailure(err: BundlePrepError): string {
   return `pir: failed to prepare the review bundle locally — a local git error, not a server connectivity problem: ${err.message}\n`;
 }
 
-/** Backoff for the bounded bundle-free retry (#45): 1s then 5s, honoring Retry-After capped at 30s. */
+/**
+ * Backoff for the bounded bundle-free retry (#45): 1s then 5s, honoring
+ * Retry-After capped at 30s. An absent header is NOT a zero delay —
+ * Headers.get returns null and Number(null) === 0 would slip through a
+ * naive isFinite guard, collapsing the backoff to back-to-back retries
+ * (dogfood F-38).
+ */
 function retryDelayMs(response: Response, attempt: number): number {
-  const header = Number(response.headers.get("retry-after"));
-  if (Number.isFinite(header) && header >= 0) return Math.min(header * 1000, 30_000);
+  const header = response.headers.get("retry-after");
+  const seconds = header === null ? Number.NaN : Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30_000);
   return attempt === 0 ? 1_000 : 5_000;
 }
 

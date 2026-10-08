@@ -20,10 +20,10 @@ import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
 import {
-  countFindings,
   feedback,
   feedbackPriority,
   listFindings,
+  listFindingsPage,
   memoryBootstrap,
   memoryRefresh,
   memoryStatus,
@@ -1151,20 +1151,22 @@ async function cmdFindings(
     if (all && (limit !== undefined || offset !== undefined)) {
       throw new UsageError("--all cannot be combined with --limit/--offset (it fetches every page)");
     }
-    const total = countFindings(ctx, { status });
+    // Rows and total come from ONE statement (listPage), so an --all page can
+    // never report hasMore:false over a stale count while a WAL writer — the
+    // mid-audit bundle-free lane — commits between two reads (dogfood F-39).
     const query = all
-      ? { status, limit: Math.max(total, 1) }
+      ? { status, limit: Number.MAX_SAFE_INTEGER }
       : { status, ...(limit !== undefined ? { limit } : {}), ...(offset !== undefined ? { offset } : {}) };
-    const findings = listFindings(ctx, query);
+    const { findings, total } = listFindingsPage(ctx, query);
     const returned = findings.length;
-    const nextOffset = offset ?? 0;
-    const hasMore = all ? false : nextOffset + returned < total;
+    const pageStart = offset ?? 0;
+    const hasMore = all ? false : pageStart + returned < total;
     const page = {
       findings,
       total,
       returned,
       hasMore,
-      ...(hasMore ? { nextOffset: nextOffset + returned } : { nextOffset: null }),
+      nextOffset: hasMore ? pageStart + returned : null,
     };
     if (json) {
       emit(`${envelope("findings.list", page)}\n`);

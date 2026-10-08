@@ -232,6 +232,38 @@ export class FindingStore {
     return row?.total ?? 0;
   }
 
+  /**
+   * One-statement page: the filtered total rides along as a window function,
+   * so rows and total describe the SAME snapshot. Two separate autocommitted
+   * reads could disagree while a WAL writer — the bundle-free read lane
+   * serving queries mid-audit — commits between them, making an --all page
+   * silently omit rows while claiming hasMore:false (dogfood F-39).
+   */
+  listPage(opts: { status?: string; limit?: number; offset?: number } = {}): { rows: FindingRow[]; total: number } {
+    const limit = opts.limit ?? 100;
+    const offset = opts.offset ?? 0;
+    const rows = opts.status
+      ? this.store.all<Record<string, unknown>>(
+          "SELECT *, COUNT(*) OVER () AS full_count FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+          this.projectId,
+          opts.status,
+          limit,
+          offset,
+        )
+      : this.store.all<Record<string, unknown>>(
+          "SELECT *, COUNT(*) OVER () AS full_count FROM findings WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+          this.projectId,
+          limit,
+          offset,
+        );
+    if (rows.length === 0 && offset > 0) {
+      // The window total is unobservable with no rows on the page; a bare
+      // count is safe here — this snapshot has no rows to contradict.
+      return { rows: [], total: this.count({ status: opts.status }) };
+    }
+    return { rows: rows.map(rawToRow), total: Number(rows[0]?.full_count ?? 0) };
+  }
+
   evidence(findingId: string): FindingEvidence[] {
     const rows = this.store.all<Record<string, unknown>>(
       "SELECT * FROM finding_evidence WHERE finding_id = ? ORDER BY rowid",

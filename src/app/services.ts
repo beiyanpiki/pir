@@ -183,9 +183,13 @@ export function listFindings(
   return ctx.memory.findings.list(opts).map((row) => toFindingView(ctx, row));
 }
 
-/** Total under the same filter `listFindings` pages over — the completeness half of #47. */
-export function countFindings(ctx: AppContext, opts: { status?: string } = {}): number {
-  return ctx.memory.findings.count(opts);
+/** Page plus filtered total from one snapshot — the completeness half of #47. */
+export function listFindingsPage(
+  ctx: AppContext,
+  opts: { status?: string; limit?: number; offset?: number } = {},
+): { findings: FindingView[]; total: number } {
+  const page = ctx.memory.findings.listPage(opts);
+  return { findings: page.rows.map((row) => toFindingView(ctx, row)), total: page.total };
 }
 
 export function showFinding(ctx: AppContext, idOrDisplayId: string): FindingView | null {
