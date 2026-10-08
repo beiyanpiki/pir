@@ -87,10 +87,11 @@ priority, followed by `PIR_MODEL`, this config value, and Pi settings.
 With an existing `pir serve` instance, the client needs just a connection:
 
 ```bash
-pir config set server.url https://pir.example:8790
+pir config set server.url https://pir.example.com:8790
 pir config set server.token '<service-token>'
 pir config set server.insecure true   # self-signed certificate only
 pir config set mode remote
+pir config show                        # effective settings; token masked in text and JSON alike
 pir find --uncommitted --base HEAD --json
 ```
 
@@ -117,7 +118,10 @@ Transport precedence is `--server`, `--local`, `PIR_SERVER_URL`, `PIR_MODE`,
 then `~/.pir/config.json`. `serve`, `config`, `skill`, `plugins`, `version`,
 and `memory sync` always run on the client. `--server` and `--local` cannot
 be combined. A client-side model default is not forwarded; use `--model` to
-override the server's choice for a particular review.
+override the server's choice for a particular review. `--help` anywhere on
+the command line is answered locally and exits 0 — before config, transport,
+git or network — so it works offline, outside a repository, and with a
+read-only `.git`.
 
 To host the service yourself, run it on the machine with model access:
 
@@ -161,6 +165,7 @@ pir audit --path src/auth --path src/payments --json
 pir audit --skip '**/generated/**' --json
 
 pir findings list --status candidate
+pir findings list --all --json        # every stored finding (--limit/--offset page otherwise)
 pir findings show F-12
 pir feedback F-12 expected --note "retry_count counts attempts by design"
 pir feedback F-12 priority P1

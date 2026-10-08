@@ -176,8 +176,16 @@ export function remember(
 // findings service
 // ---------------------------------------------------------------------------
 
-export function listFindings(ctx: AppContext, opts: { status?: string; limit?: number } = {}): FindingView[] {
+export function listFindings(
+  ctx: AppContext,
+  opts: { status?: string; limit?: number; offset?: number } = {},
+): FindingView[] {
   return ctx.memory.findings.list(opts).map((row) => toFindingView(ctx, row));
+}
+
+/** Total under the same filter `listFindings` pages over — the completeness half of #47. */
+export function countFindings(ctx: AppContext, opts: { status?: string } = {}): number {
+  return ctx.memory.findings.count(opts);
 }
 
 export function showFinding(ctx: AppContext, idOrDisplayId: string): FindingView | null {

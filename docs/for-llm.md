@@ -147,6 +147,12 @@ Transport resolution:
 `--server` and `--local` are mutually exclusive. `PIR_MODE=remote` still needs
 a URL from config or a higher-precedence URL setting.
 
+`--help` anywhere on the command line is answered locally and exits 0 —
+before config, transport, git or network, with the section for that
+subcommand — so `pir <cmd> --help` works offline, outside a repository and
+with a read-only `.git`. A `--help` directly after a value flag is that
+flag's value (`--status --help`), not a help request.
+
 These commands always execute on the client: `serve`, `config`, `skill`,
 `plugins`, `help`, `version`, and `memory sync`. `jobs` contacts the remote job
 registry directly. Other commands are routed as follows:
@@ -284,12 +290,19 @@ pir jobs status <job-id-or-unique-prefix> --json
 pir jobs wait <job-id>
 pir jobs fetch <job-id>
 pir findings list --json
+pir findings list --all --json
 ```
 
 `jobs list/status --json` return `jobs.list`/`jobs.status` envelopes.
 `jobs wait/fetch` relay the **original command output and exit code**; adding
 `--json` at pickup does not convert originally non-JSON output. Submit with
 `--json` when the result will be parsed later.
+
+Stored-findings queries are paginated: the default page is 100 rows, the JSON
+envelope reports `total`/`returned`/`hasMore`/`nextOffset` so a partial page
+is never mistaken for the complete set, and `--all` fetches every page up
+front. `--limit`/`--offset` select pages explicitly. This paging is unrelated
+to a review's `--max-findings` cap.
 
 Job statuses are `queued`, `running`, `completed`, and `failed`. `completed`
 means execution returned a result, whose `result.code` can still be `1`, `2`,
@@ -507,6 +520,7 @@ own 120-second request timeout.
 | Provider error / missing verdict | retain uncertainty and incomplete diagnostics; inspect execution-machine credentials and logs |
 | Codegraph degraded | file/diff review remains available; optional index initialization is separate |
 | Sync request timeout | inspect jobs before retrying; increase `PIR_REMOTE_TIMEOUT` or use asynchronous submission |
+| `failed to prepare the review bundle locally … Read-only file system` | a LOCAL git error, not server connectivity; run from a checkout with a writable `.git` (bundle-free `findings list/show` needs no bundle unless the server demands full history) |
 | Job ID missing after restart | inspect persisted findings; the process-local registry cannot recover the job |
 | `verify-fix` rejects finding | mark it fixed first; the verification target is committed HEAD |
 

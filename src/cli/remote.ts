@@ -4,6 +4,12 @@ import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
 import type { JobView } from "./jobs.js";
 
+/**
+ * createBundle failed before any bytes left the machine (#44): a local git
+ * problem (read-only .git, missing objects), never a connectivity one.
+ */
+export class BundlePrepError extends Error {}
+
 export interface RemoteOptions {
   token?: string;
   insecure?: boolean;
@@ -157,9 +163,20 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   const { createBundle } = await import("../app/repos.js");
 
   const send = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<Response> => {
-    const bundle = opts.noBundle
-      ? Buffer.alloc(0)
-      : await createBundle(cwd, { base: opts.withBase ? base : null, head });
+    let bundle: Buffer;
+    if (opts.noBundle) {
+      bundle = Buffer.alloc(0);
+    } else {
+      try {
+        bundle = await createBundle(cwd, { base: opts.withBase ? base : null, head });
+      } catch (err) {
+        // #44: bundle preparation is local git work that happens before any
+        // network IO — reporting it as an unreachable server sent users
+        // hunting for connectivity problems while the real cause was e.g. a
+        // read-only .git.
+        throw new BundlePrepError(err instanceof Error ? err.message : String(err));
+      }
+    }
     return fetch(new URL("/v1/review", url), {
       method: "POST",
       // undici's default 300 s headersTimeout would kill any review queued
@@ -183,21 +200,68 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     });
   };
 
-  const submit = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<number> => {
+  /**
+   * Transient bundle-free read failures retry the SAME request (#45): a busy
+   * or broken server cannot be fixed by uploading full history, so the
+   * bundle-free lane never "upgrades" to a bundle for 429/5xx.
+   */
+  const NO_BUNDLE_RETRIES = 2;
+
+  const submit = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }, attempt = 0): Promise<number> => {
     let response: Response;
     try {
       response = await send(opts);
     } catch (err) {
+      if (err instanceof BundlePrepError) {
+        process.stderr.write(reportBundlePrepFailure(err));
+        return 3;
+      }
       process.stderr.write(reportUnreachable(url.origin, err));
       return 3;
     }
-    let payload = (await response.json().catch(() => ({}))) as { needFull?: boolean; jobId?: string } & RelayResult;
-    // A refused bundle-free read (first contact: db not created yet; or an
-    // old server that tried to materialize the empty bundle and 400'd)
-    // retries with the real bundle instead of surfacing the refusal.
-    const refusedNoBundle = opts.noBundle === true && (!response.ok || payload.needFull === true);
+    // Response-decoding stage (#44): an ok response that is not JSON is a
+    // broken contract, not an empty success to relay.
+    const raw = await response.text().catch(() => "");
+    let payload = {} as { needFull?: boolean; jobId?: string } & RelayResult;
+    try {
+      payload = JSON.parse(raw) as { needFull?: boolean; jobId?: string } & RelayResult;
+    } catch {
+      if (response.ok) {
+        process.stderr.write(
+          `pir: server response was not valid JSON (response-decoding stage): ${raw.slice(0, 200) || "(empty body)"}\n`,
+        );
+        return 3;
+      }
+      // Non-ok bodies are reported by status below; keep the empty payload.
+    }
+    if (response.status === 401 || response.status === 403) {
+      // Auth failures can never be fixed by a bundle resend or a retry (#45).
+      process.stderr.write(`pir: server rejected the request (${response.status}); check --token\n`);
+      return 3;
+    }
+    if (
+      opts.noBundle === true &&
+      !response.ok &&
+      (response.status === 429 || response.status >= 500) &&
+      attempt < NO_BUNDLE_RETRIES
+    ) {
+      const waitMs = retryDelayMs(response, attempt);
+      process.stderr.write(
+        `pir: server answered ${response.status}; retrying the bundle-free request in ${Math.round(waitMs / 1000)}s ` +
+          `(attempt ${attempt + 2} of ${NO_BUNDLE_RETRIES + 1})\n`,
+      );
+      await sleep(waitMs);
+      return await submit(opts, attempt + 1);
+    }
+    // A refused bundle-free read retries with the real bundle: an explicit
+    // needFull from a current server, or the empty-bundle materialization
+    // failure (HTTP 400) of a server predating the bundle-free lane (#45).
+    // Usage errors never reach this branch on either server generation —
+    // both answer them 200 with code 2 — so a 400 here is a recognized
+    // compatibility response, not a usage problem.
+    const refusedNoBundle = opts.noBundle === true && (payload.needFull === true || response.status === 400);
     if (!response.ok && !refusedNoBundle) {
-      const text = JSON.stringify(payload).slice(0, 300);
+      const text = raw.slice(0, 300) || JSON.stringify(payload);
       process.stderr.write(`pir: server error ${response.status}: ${text}\n`);
       return 3;
     }
@@ -348,4 +412,23 @@ export function stripClientFlags(argv: string[]): string[] {
     out.push(token);
   }
   return out;
+}
+
+/**
+ * #44: a bundle-preparation failure names the local stage and keeps the git
+ * cause. It must never say "cannot reach" or suggest raising PIR_REMOTE_TIMEOUT.
+ */
+export function reportBundlePrepFailure(err: BundlePrepError): string {
+  return `pir: failed to prepare the review bundle locally — a local git error, not a server connectivity problem: ${err.message}\n`;
+}
+
+/** Backoff for the bounded bundle-free retry (#45): 1s then 5s, honoring Retry-After capped at 30s. */
+function retryDelayMs(response: Response, attempt: number): number {
+  const header = Number(response.headers.get("retry-after"));
+  if (Number.isFinite(header) && header >= 0) return Math.min(header * 1000, 30_000);
+  return attempt === 0 ? 1_000 : 5_000;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

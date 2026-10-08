@@ -6,8 +6,10 @@ import {
   UsageError,
   configPath,
   deleteUserConfig,
+  isSecretKey,
   loadUserConfig,
   maskSecret,
+  redactConfig,
   resolveTransport,
   runWizard,
   saveUserConfig,
@@ -18,6 +20,7 @@ import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
 import {
+  countFindings,
   feedback,
   feedbackPriority,
   listFindings,
@@ -36,7 +39,12 @@ import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
 export { UsageError } from "./config.js";
 
-export const USAGE = `pir — pi-based code review with repository memory
+/**
+ * The reference text, split into sections so `--help` can show one command's
+ * slice (#43). USAGE re-joins them; the full text stays the single source.
+ */
+const USAGE_SECTIONS = {
+  header: `pir — pi-based code review with repository memory
 
 Usage:
   pir find [options]                     run the finding loop over a change range
@@ -46,7 +54,7 @@ Usage:
   pir feedback <id> <decision> [--note]  record user feedback on a finding
   pir feedback <id> priority <P0-P3>     set finding priority
   pir remember <scope> <target> <kind> --text "..."   store code knowledge
-  pir findings [list [--status <s>]]     list stored findings
+  pir findings [list [options]]        list stored findings
   pir findings show <id>                 show one finding
   pir models [search] [--all] [--ids] [--provider <p>]   list pi models
   pir verify-fix <id>                    verify a reported fix
@@ -57,9 +65,9 @@ Usage:
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
   pir skill [path|install|print]         locate / install the LLM skill for pir
   pir plugins list                      list language packs and what this repo activates
-  pir version
+  pir version`,
 
-Find options:
+  find: `Find options:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    discovery/verification loop rounds (default 2)
@@ -78,9 +86,9 @@ Find options:
                       packs follow): comma-separated names, "none" to
                       disable, or "auto" to detect from marker files at
                       head (default)
-  --no-sync-index     skip codegraph index sync
+  --no-sync-index     skip codegraph index sync`,
 
-Audit options (current-state review; no diff, no change attribution):
+  audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
                       repeatable (union). Default: whole committed tree
   --skip <glob>...    exclude paths from the selection; repeatable. Globs
@@ -92,23 +100,41 @@ Audit options (current-state review; no diff, no change attribution):
   --max-findings <n>  whole-run cap on reported findings (default 10)
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
   Coverage is process accounting: "reviewed" means the allotted sessions
-  completed. Budget stops leave files unreviewed and exit incomplete.
+  completed. Budget stops leave files unreviewed and exit incomplete.`,
 
-Models options:
+  jobs: `Jobs options:
+  list                jobs on the server, oldest first
+  status <id>         one job's record: state, timing, last log lines
+  wait <id>           poll until it settles, streaming new log lines
+                      (Ctrl-C detaches; re-run later to continue)
+  fetch <id>          relay a completed job's captured result
+  <id>                an 8-char prefix is enough; the registry is in-memory
+                      and empty after a server restart`,
+
+  findings: `Findings options (stored-findings queries; page size is separate
+  from a review's --max-findings cap):
+  list [--status <s>]  filter by status (confirmed|rejected|uncertain)
+  --limit <n>          page size (default 100)
+  --offset <n>         page position, 0-based
+  --all                fetch every page up front (no truncation)
+  JSON output reports total, returned, hasMore and nextOffset so a
+  partial page is never mistaken for the complete set (#47).`,
+
+  models: `Models options:
   [search]            case-insensitive substring over provider/id/name
   --all               full pi catalog, not just authenticated providers
   --ids               one provider/model per line (script-friendly)
-  --provider <p>      restrict the listing to one provider
+  --provider <p>      restrict the listing to one provider`,
 
-Memory sync options:
+  memorySync: `Memory sync options:
   pir memory sync merges this project's memory DB with a pir serve instance
   (server from --server/PIR_SERVER_URL/config). It always runs locally, even
   in remote mode — both DBs converge; nothing is ever deleted. Conflicts on
   the same record: the newer write wins, and user knowledge (user_explicit /
   verified_fix) always beats agent summaries.
-  --dry-run           report what would change without writing either side
+  --dry-run           report what would change without writing either side`,
 
-Serve options:
+  serve: `Serve options:
   --host <h>          bind address (default 0.0.0.0)
   --port <p>          port (default 8790)
   --cert <p> --key <p>  TLS cert/key (PEM). Falls back to PIR_TLS_CERT /
@@ -117,24 +143,28 @@ Serve options:
   --token <t>         require "Authorization: Bearer <t>" (default PIR_SERVER_TOKEN)
   --web               also serve the read-only run explorer at / (env
                       PIR_WEB_UI=1; viewer token PIR_WEB_UI_TOKEN, required
-                      off loopback; transcripts default on)
+                      off loopback; transcripts default on)`,
 
-Global options:
+  global: `Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
+  --help              print help locally and exit 0 — answered before any
+                      config, wizard, transport, git or network work, so it
+                      works offline, outside a repository and with a
+                      read-only .git (#43)
   --flag=value        value flags (--base, --repo, ...) also accept the
-                      --flag=value form
+                      --flag=value form`,
 
-Modes:
+  modes: `Modes:
   Local by default. The first interactive run starts a setup wizard and
   writes ~/.pir/config.json (mode local|remote, server url/token, default
   model; re-run with \`pir config\`). In remote mode every command is
   forwarded to a pir serve instance — except serve/config/skill/plugins/
   version, which always run locally (plugins inspects the local checkout). Precedence: --server flag > --local flag >
-  PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.
+  PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.`,
 
-Remote mode:
+  remote: `Remote mode:
   --server <url>      execute on a remote pir serve instance
   --token <t>         bearer token for the remote
   --insecure          accept self-signed TLS certificates
@@ -145,15 +175,54 @@ Remote mode:
   result; Ctrl-C detaches and \`pir jobs fetch <id>\` picks it up later.
   PIR_REMOTE_ASYNC=1 forces async submission for any review command.
   Remote \`findings list|show\` is answered bundle-free and never waits
-  behind an in-flight audit.
+  behind an in-flight audit.`,
 
-Config keys (pir config set <key> <value>):
+  config: `Config keys (pir config set <key> <value>):
   mode local|remote   model <provider/model>|""
-  server.url <url>    server.token <t>|""      server.insecure true|false
+  server.url <url>    server.token <t>|""      server.insecure true|false`,
 
-Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
+  footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
-Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime error`;
+Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime error`,
+};
+
+export const USAGE = [
+  USAGE_SECTIONS.header,
+  USAGE_SECTIONS.find,
+  USAGE_SECTIONS.audit,
+  USAGE_SECTIONS.findings,
+  USAGE_SECTIONS.jobs,
+  USAGE_SECTIONS.models,
+  USAGE_SECTIONS.memorySync,
+  USAGE_SECTIONS.serve,
+  USAGE_SECTIONS.global,
+  USAGE_SECTIONS.modes,
+  USAGE_SECTIONS.remote,
+  USAGE_SECTIONS.config,
+  USAGE_SECTIONS.footer,
+].join("\n\n");
+
+/** Commands that have their own USAGE section for contextual --help. */
+const HELP_SECTIONS: Record<string, string> = {
+  find: USAGE_SECTIONS.find,
+  audit: USAGE_SECTIONS.audit,
+  findings: USAGE_SECTIONS.findings,
+  jobs: USAGE_SECTIONS.jobs,
+  models: USAGE_SECTIONS.models,
+  memory: USAGE_SECTIONS.memorySync,
+  serve: USAGE_SECTIONS.serve,
+  config: USAGE_SECTIONS.config,
+};
+
+/**
+ * Contextual --help (#43): the command's own section plus the sections every
+ * command shares. Unknown or absent commands get the full reference.
+ */
+export function helpFor(command: string | undefined): string {
+  const section = command === undefined ? undefined : HELP_SECTIONS[command];
+  if (section === undefined) return `${USAGE}\n`;
+  return [USAGE_SECTIONS.header, section, USAGE_SECTIONS.global, USAGE_SECTIONS.footer].join("\n\n") + "\n";
+}
 
 export interface ExecResult {
   code: number;
@@ -208,6 +277,8 @@ export const VALUE_FLAGS = new Set([
   "--dir",
   "--server",
   "--token",
+  "--limit",
+  "--offset",
   "--plugins",
   "--path",
   "--skip",
@@ -324,6 +395,18 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   const emit = (text: string) => out.push(text);
   const log = (message: string) => opts.onLog?.(message);
 
+  // Help first (#43): no --repo materialization, no --uncommitted snapshot,
+  // no context or db — a forwarded `pir findings list --help` must not make
+  // the server touch git before answering with usage text.
+  if (!command || command === "help") {
+    emit(`${USAGE}\n`);
+    return { code: 0, output: out.join("") };
+  }
+  if (flags.get("--help")) {
+    emit(helpFor(command));
+    return { code: 0, output: out.join("") };
+  }
+
   if (command === "repos") {
     return await cmdRepos(positional.slice(1), flags, json, emit, out);
   }
@@ -399,10 +482,6 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, materialized);
   }
 
-  if (!command || command === "help" || flags.get("--help")) {
-    emit(`${USAGE}\n`);
-    return { code: 0, output: out.join("") };
-  }
   if (command === "version") {
     emit(json ? envelope("version", { version: readVersion() }) : `pir ${readVersion()}\n`);
     return { code: 0, output: out.join("") };
@@ -617,6 +696,20 @@ function positiveIntFlag(flags: Map<string, string | boolean>, name: string): nu
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     throw new UsageError(`invalid ${name}: ${raw} (positive integer required)`);
+  }
+  return value;
+}
+
+/** Non-negative-integer flag — same as positiveIntFlag but 0 is a valid page offset. */
+function nonNegativeIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+  const raw = flags.get(name);
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError(`invalid ${name}: a value is required (non-negative integer)`);
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new UsageError(`invalid ${name}: ${raw} (non-negative integer required)`);
   }
   return value;
 }
@@ -1048,8 +1141,39 @@ async function cmdFindings(
   }
   if (sub === "list") {
     const status = flags.get("--status") as string | undefined;
-    const findings = listFindings(ctx, { status });
-    emit(json ? `${envelope("findings.list", { findings })}\n` : `${JSON.stringify(findings, null, 2)}\n`);
+    // Pagination (#47): the store caps pages (default 100) — the CLI reports
+    // what it returned against the filtered total instead of silently
+    // truncating. This page size is unrelated to a review's --max-findings
+    // cap (a limit on what a run reports, set when the run starts).
+    const all = flags.get("--all") === true;
+    const limit = positiveIntFlag(flags, "--limit");
+    const offset = nonNegativeIntFlag(flags, "--offset");
+    if (all && (limit !== undefined || offset !== undefined)) {
+      throw new UsageError("--all cannot be combined with --limit/--offset (it fetches every page)");
+    }
+    const total = countFindings(ctx, { status });
+    const query = all
+      ? { status, limit: Math.max(total, 1) }
+      : { status, ...(limit !== undefined ? { limit } : {}), ...(offset !== undefined ? { offset } : {}) };
+    const findings = listFindings(ctx, query);
+    const returned = findings.length;
+    const nextOffset = offset ?? 0;
+    const hasMore = all ? false : nextOffset + returned < total;
+    const page = {
+      findings,
+      total,
+      returned,
+      hasMore,
+      ...(hasMore ? { nextOffset: nextOffset + returned } : { nextOffset: null }),
+    };
+    if (json) {
+      emit(`${envelope("findings.list", page)}\n`);
+    } else {
+      emit(`${JSON.stringify(findings, null, 2)}\n`);
+      if (hasMore) {
+        log(`pir: showing ${returned} of ${total} findings — pass --all, or --offset ${page.nextOffset} for the next page`);
+      }
+    }
     return 0;
   }
   throw new UsageError(`unknown findings subcommand: ${sub}`);
@@ -1079,7 +1203,7 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
   if (sub === "show") {
     const config = loadUserConfig();
     if (json) {
-      emit(`${envelope("config.show", { path: configPath(), config })}\n`);
+      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }) })}\n`);
     } else if (!config) {
       emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n`);
     } else {
@@ -1090,7 +1214,7 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
 
   if (sub === "wizard" || sub === "setup") {
     const config = await runWizard();
-    emit(json ? `${envelope("config.wizard", { config })}\n` : renderConfig(config, configPath()));
+    emit(json ? `${envelope("config.wizard", { config: redactConfig(config) })}\n` : renderConfig(config, configPath()));
     return { code: 0, output: out.join("") };
   }
 
@@ -1101,8 +1225,10 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
     const config = loadUserConfig() ?? { schemaVersion: 1, mode: "local" };
     const updated = setConfigValue(config, key, value);
     const file = saveUserConfig(updated);
-    const shown = key.endsWith("token") ? maskSecret(value) : value;
-    emit(json ? `${envelope("config.set", { key, value, config: updated })}\n` : `${key} = ${shown}\nsaved ${file}\n`);
+    // #51: JSON output is captured into logs and bug reports just like text
+    // — the new value and the stored config are masked on both channels.
+    const shown = isSecretKey(key) ? maskSecret(value) : value;
+    emit(json ? `${envelope("config.set", { key, value: shown, config: redactConfig(updated) })}\n` : `${key} = ${shown}\nsaved ${file}\n`);
     return { code: 0, output: out.join("") };
   }
 

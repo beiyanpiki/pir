@@ -65,10 +65,11 @@ pir find --uncommitted --base HEAD --json
 已有 `pir serve` 实例时，客户端只需要配置连接：
 
 ```bash
-pir config set server.url https://pir.example:8790
+pir config set server.url https://pir.example.com:8790
 pir config set server.token '<service-token>'
 pir config set server.insecure true   # 仅用于自签名证书
 pir config set mode remote
+pir config show                        # 查看生效配置;token 打码,文本与 --json 一致
 pir find --uncommitted --base HEAD --json
 ```
 
@@ -88,7 +89,7 @@ pir --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN" --insecure \
   find --uncommitted --base HEAD --json
 ```
 
-运行方式的优先级是 `--server`、`--local`、`PIR_SERVER_URL`、`PIR_MODE`，然后是 `~/.pir/config.json`。`serve`、`config`、`skill`、`plugins`、`version` 和 `memory sync` 始终在客户端执行。`--server` 与 `--local` 不能同时使用。客户端的默认模型不会转发给服务端；单次远程评审可以用 `--model` 覆盖服务端的选择。
+运行方式的优先级是 `--server`、`--local`、`PIR_SERVER_URL`、`PIR_MODE`，然后是 `~/.pir/config.json`。`serve`、`config`、`skill`、`plugins`、`version` 和 `memory sync` 始终在客户端执行。`--server` 与 `--local` 不能同时使用。客户端的默认模型不会转发给服务端；单次远程评审可以用 `--model` 覆盖服务端的选择。`--help` 出现在命令行任意位置都会在本地立即回答并退出 0——先于配置校验、传输解析、git 与网络,按子命令给出上下文帮助,因此离线、仓库外、只读 `.git`、配置损坏时均可使用。
 
 需要自己托管服务时，在配置了模型访问的机器上运行：
 
@@ -127,6 +128,7 @@ pir audit --path src/auth --path src/payments --json
 pir audit --skip '**/generated/**' --json
 
 pir findings list --status candidate
+pir findings list --all --json        # 全量存储 findings(--limit/--offset 分页查询)
 pir findings show F-12
 pir feedback F-12 expected --note "retry_count counts attempts by design"
 pir feedback F-12 priority P1
@@ -140,7 +142,7 @@ pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 ```
 
-`--max-findings` 是报告上限，不是要凑满的数量。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。
+`--max-findings` 是报告上限，不是要凑满的数量。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
 
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。
 

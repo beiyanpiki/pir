@@ -2,7 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { pinRefsToShas, UsageError } from "../../dist/cli/executor.js";
-import { isBundleFreeRead, stripClientFlags, wantsAsyncSubmit, wantsBundle } from "../../dist/cli/remote.js";
+import {
+  BundlePrepError,
+  isBundleFreeRead,
+  reportBundlePrepFailure,
+  stripClientFlags,
+  wantsAsyncSubmit,
+  wantsBundle,
+} from "../../dist/cli/remote.js";
 import { describeTransportError, remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "../../dist/cli/remote-fetch.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -235,40 +242,36 @@ test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async n
       const body = JSON.parse(init.body);
       posts.push(body);
       const first = posts.length === 1;
+      const payload = first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" };
       return {
         status: 202,
         ok: true,
-        json: async () => (first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" }),
+        text: async () => JSON.stringify(payload),
+        json: async () => payload,
       };
     }
     if (url.includes("/v1/jobs/job-thin")) {
-      return {
-        status: 200,
-        ok: true,
-        json: async () => ({
-          job: {
-            jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
-            createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
-            result: null,
-            error: "needFull: the shipped thin bundle could not be applied; resend full history",
-            clientGone: false,
-          },
-        }),
+      const payload = {
+        job: {
+          jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
+          createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
+          result: null,
+          error: "needFull: the shipped thin bundle could not be applied; resend full history",
+          clientGone: false,
+        },
       };
+      return { status: 200, ok: true, text: async () => JSON.stringify(payload), json: async () => payload };
     }
     if (url.includes("/v1/jobs/job-full")) {
-      return {
-        status: 200,
-        ok: true,
-        json: async () => ({
-          job: {
-            jobId: "job-full", command: "find", argv: ["find"], status: "completed",
-            createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
-            result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
-            error: null, clientGone: false,
-          },
-        }),
+      const payload = {
+        job: {
+          jobId: "job-full", command: "find", argv: ["find"], status: "completed",
+          createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
+          result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
+          error: null, clientGone: false,
+        },
       };
+      return { status: 200, ok: true, text: async () => JSON.stringify(payload), json: async () => payload };
     }
     throw new Error(`unexpected fetch in test: ${url}`);
   };
@@ -292,4 +295,159 @@ test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async n
     else process.env.PIR_REMOTE_ASYNC = savedAsync;
     repo.cleanup();
   }
+});
+
+// --- #44/#45: bundle-free error classification and fallback discipline ---
+
+test("reportBundlePrepFailure names the local stage, never connectivity (#44)", () => {
+  const msg = reportBundlePrepFailure(
+    new BundlePrepError("git update-ref refs/pir/bundle-head 1234 failed: fatal: ...: Read-only file system"),
+  );
+  assert.match(msg, /failed to prepare the review bundle locally/);
+  assert.match(msg, /local git error, not a server connectivity problem/);
+  assert.match(msg, /Read-only file system/);
+  assert.doesNotMatch(msg, /cannot reach/);
+  assert.doesNotMatch(msg, /PIR_REMOTE_TIMEOUT/);
+});
+
+/** Capture process.stderr.write during fn; the remote client reports errors there. */
+async function captureStderr(fn) {
+  const chunks = [];
+  const original = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    return true;
+  };
+  try {
+    return { result: await fn(), stderr: chunks.join("") };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+/**
+ * Run a bundle-free `findings list` against a scripted /v1/review responder.
+ * `respond(n, body)` returns { status, headers?, body } for the nth POST;
+ * retry tests pass "retry-after: 0" so the bounded backoff is instant.
+ */
+async function withBundleFreeScenario(t, respond) {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  const { createTempGitRepo } = await import("../fixtures/helpers.js");
+  const repo = createTempGitRepo("pir-bfree-");
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("/v1/review")) {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      const next = respond(posts.length, body);
+      return {
+        status: next.status,
+        ok: next.status >= 200 && next.status < 300,
+        headers: new Map(Object.entries(next.headers ?? {})),
+        text: async () => (typeof next.body === "string" ? next.body : JSON.stringify(next.body ?? {})),
+      };
+    }
+    throw new Error(`unexpected fetch in test: ${String(input)}`);
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    repo.cleanup();
+  });
+  const run = async () => captureStderr(() => remoteExec("https://pir.invalid", ["--cwd", repo.dir, "findings", "list", "--json"], {}));
+  return { posts, run };
+}
+
+const RELAY_OK = { status: 200, body: { code: 0, output: "[]\n", log: [] } };
+
+test("#45: 401 on a bundle-free read fails fast — no bundle resend, no retry", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 401,
+    body: { error: "missing or invalid bearer token" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 1, "auth failure must not trigger a second request");
+  assert.equal(posts[0].noBundle, true);
+  assert.match(stderr, /rejected the request \(401\)/);
+  assert.match(stderr, /check --token/);
+  assert.doesNotMatch(stderr, /resending/);
+});
+
+test("#45: 429 retries the same bundle-free request, then succeeds", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 429, headers: { "retry-after": "0" }, body: { error: "busy" } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2, "one bounded retry of the same request");
+  for (const post of posts) {
+    assert.equal(post.noBundle, true, "retry must not upgrade to a bundle");
+    assert.equal(post.bundleBase64, "", "no history may be uploaded for a transient failure");
+  }
+  assert.match(stderr, /retrying the bundle-free request/);
+});
+
+test("#45: persistent 429 exhausts the bounded retry and surfaces the original error", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 429,
+    headers: { "retry-after": "0" },
+    body: { error: "rate limited" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 3, "initial attempt plus two retries");
+  assert.ok(posts.every((p) => p.noBundle === true && p.bundleBase64 === ""));
+  assert.match(stderr, /server error 429/);
+  assert.match(stderr, /rate limited/);
+});
+
+test("#45: 5xx on the bundle-free lane retries the same request, never converts to a bundle", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 503,
+    headers: { "retry-after": "0" },
+    body: { error: "overloaded" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 3);
+  assert.ok(posts.every((p) => p.noBundle === true && p.bundleBase64 === ""));
+  assert.match(stderr, /server error 503/);
+});
+
+test("#45: explicit needFull still falls back to one bundled resend", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 200, body: { needFull: true } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2);
+  assert.ok(posts[1].bundleBase64.length > 0, "the resend carries real history");
+  assert.notEqual(posts[1].noBundle, true);
+  assert.match(stderr, /needs full history, resending/);
+});
+
+test("#45: a 400 refusal (pre-bundle-free server) falls back to one bundled resend", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 400, body: { error: "fatal: empty bundle" } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2);
+  assert.ok(posts[1].bundleBase64.length > 0);
+  assert.match(stderr, /refused the bundle-free request, resending with bundle/);
+});
+
+test("#44: an ok response that is not JSON is a decoding-stage error, not an empty success", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({ status: 200, body: "<html>gateway error page</html>" }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 1);
+  assert.match(stderr, /response-decoding stage/);
+  assert.match(stderr, /not valid JSON/);
 });

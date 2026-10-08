@@ -135,6 +135,40 @@ export function maskSecret(secret: string | undefined): string {
   return `${secret.slice(0, 4)}…${secret.slice(-4)}`;
 }
 
+/** Keys whose values are credentials anywhere they appear in the config tree. */
+const SECRET_KEY_RE = /token|secret|credential/i;
+
+/** True when a (dotted or plain) config key names a credential (#51). */
+export function isSecretKey(key: string): boolean {
+  return SECRET_KEY_RE.test(key);
+}
+
+/**
+ * A config safe to print (#51): credential values are masked wherever they
+ * sit in the tree, with presence kept as explicit metadata. Raw values stay
+ * in the private file and in Authorization headers — never in show/set/
+ * wizard output, JSON included; agents capture JSON for diagnostics just
+ * like humans read text, and both get the same masking.
+ */
+export function redactConfig(config: UserConfig): Record<string, unknown> {
+  const redacted = redactValues(config) as Record<string, unknown>;
+  const server = redacted.server as Record<string, unknown> | undefined;
+  if (server) server.tokenConfigured = Boolean(config.server?.token);
+  return redacted;
+}
+
+function redactValues(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValues);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = isSecretKey(key) && typeof val === "string" ? maskSecret(val) : redactValues(val);
+    }
+    return out;
+  }
+  return value;
+}
+
 /**
  * Decide where this invocation runs. Pure — no IO — so precedence is testable:
  * --server flag > --local flag > PIR_SERVER_URL > PIR_MODE > config file > local.

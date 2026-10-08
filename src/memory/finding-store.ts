@@ -195,21 +195,41 @@ export class FindingStore {
     );
   }
 
-  list(opts: { status?: string; limit?: number } = {}): FindingRow[] {
+  /**
+   * Newest-first page of stored findings. Ordering ties break on id so pages
+   * are stable (#47): bulk inserts share created_at, and a non-deterministic
+   * ORDER BY would drop or duplicate those rows across offsets.
+   */
+  list(opts: { status?: string; limit?: number; offset?: number } = {}): FindingRow[] {
     const limit = opts.limit ?? 100;
+    const offset = opts.offset ?? 0;
     const rows = opts.status
       ? this.store.all<Record<string, unknown>>(
-          "SELECT * FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+          "SELECT * FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
           this.projectId,
           opts.status,
           limit,
+          offset,
         )
       : this.store.all<Record<string, unknown>>(
-          "SELECT * FROM findings WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+          "SELECT * FROM findings WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
           this.projectId,
           limit,
+          offset,
         );
     return rows.map(rawToRow);
+  }
+
+  /** Total stored findings under the same filter `list` pages over (#47). */
+  count(opts: { status?: string } = {}): number {
+    const row = opts.status
+      ? this.store.get<{ total: number }>(
+          "SELECT COUNT(*) AS total FROM findings WHERE project_id = ? AND status = ?",
+          this.projectId,
+          opts.status,
+        )
+      : this.store.get<{ total: number }>("SELECT COUNT(*) AS total FROM findings WHERE project_id = ?", this.projectId);
+    return row?.total ?? 0;
   }
 
   evidence(findingId: string): FindingEvidence[] {

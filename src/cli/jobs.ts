@@ -1,5 +1,5 @@
 import process from "node:process";
-import { UsageError, parseArgs } from "./executor.js";
+import { UsageError, helpFor, parseArgs } from "./executor.js";
 import { describeTransportError, remoteDispatcher } from "./remote-fetch.js";
 
 /**
@@ -138,6 +138,13 @@ function ago(ts: number | null): string {
 export async function runJobsCommand(argv: string[], target: RemoteTarget): Promise<number> {
   const { positional, flags } = parseArgs(argv);
   const json = Boolean(flags.get("--json"));
+  // Defense in depth for library callers (#43): cli.ts already answers
+  // --help before dispatching jobs; nothing past this point may touch the
+  // network when help was asked for.
+  if (flags.get("--help") === true) {
+    process.stdout.write(helpFor("jobs"));
+    return 0;
+  }
   const sub = positional[1] ?? "list";
   if (!["list", "status", "wait", "fetch"].includes(sub)) {
     throw new UsageError(`unknown jobs subcommand: ${sub} (expected list | status | wait | fetch)`);

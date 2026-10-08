@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, parseArgs } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs } from "./executor.js";
 import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
@@ -18,6 +18,17 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // --help is answered locally before anything else (#43): no config load,
+  // no wizard, no transport resolution, no git, no network — so help works
+  // offline, outside a repository, with a read-only .git and with a missing
+  // or corrupt config.json. A parse error falls through to the normal path,
+  // which reports it with full context.
+  const localHelp = helpOnly(argv);
+  if (localHelp !== null) {
+    process.stdout.write(localHelp);
+    return 0;
+  }
+
   const command = firstPositional(argv);
   let config: UserConfig | null = null;
   try {
@@ -101,6 +112,24 @@ async function main(argv: string[]): Promise<number> {
   });
   process.stdout.write(result.output);
   return result.code;
+}
+
+/**
+ * The help text to print when argv asks for --help, or null when it does not.
+ * parseArgs is the authority: a --help directly after a value flag
+ * (`pir findings list --status --help`) is that flag's value, not a request.
+ */
+function helpOnly(argv: string[]): string | null {
+  let positional: string[];
+  let wantsHelp: boolean;
+  try {
+    const parsed = parseArgs(argv);
+    positional = parsed.positional;
+    wantsHelp = parsed.flags.get("--help") === true;
+  } catch {
+    return null;
+  }
+  return wantsHelp ? helpFor(positional[0]) : null;
 }
 
 function shouldRunWizard(argv: string[], command: string | undefined): boolean {
