@@ -218,3 +218,78 @@ test("stripClientFlags removes transport flags, keeps everything else", () => {
     ["find", "--base", "main"],
   );
 });
+
+
+test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async needFull job (dogfood F-30)", async () => {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  const { createTempGitRepo } = await import("../fixtures/helpers.js");
+  const repo = createTempGitRepo("pir-needfull-");
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("/v1/review")) {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      const first = posts.length === 1;
+      return {
+        status: 202,
+        ok: true,
+        json: async () => (first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" }),
+      };
+    }
+    if (url.includes("/v1/jobs/job-thin")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({
+          job: {
+            jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
+            createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
+            result: null,
+            error: "needFull: the shipped thin bundle could not be applied; resend full history",
+            clientGone: false,
+          },
+        }),
+      };
+    }
+    if (url.includes("/v1/jobs/job-full")) {
+      return {
+        status: 200,
+        ok: true,
+        json: async () => ({
+          job: {
+            jobId: "job-full", command: "find", argv: ["find"], status: "completed",
+            createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
+            result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
+            error: null, clientGone: false,
+          },
+        }),
+      };
+    }
+    throw new Error(`unexpected fetch in test: ${url}`);
+  };
+
+  const savedAsync = process.env.PIR_REMOTE_ASYNC;
+  process.env.PIR_REMOTE_ASYNC = "1";
+  try {
+    const code = await remoteExec("https://pir.invalid", ["--cwd", repo.dir, "find", "--json"], {});
+    assert.equal(code, 0, "the full-history retry must relay the completed job");
+    // Attempt 1: thin (base-limited) bundle, async. Attempt 2: full bundle.
+    assert.equal(posts.length, 2);
+    assert.notEqual(posts[0].base, null, "first attempt ships the thin bundle");
+    assert.equal(posts[0].async, true);
+    assert.ok(posts[0].bundleBase64.length > 0, "thin attempt still carries a bundle");
+    assert.equal(posts[1].base, null, "retry ships full history");
+    assert.equal(posts[1].async, true, "retry stays async");
+    assert.ok(posts[1].bundleBase64.length > posts[0].bundleBase64.length, "retry bundle must be the full one");
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (savedAsync === undefined) delete process.env.PIR_REMOTE_ASYNC;
+    else process.env.PIR_REMOTE_ASYNC = savedAsync;
+    repo.cleanup();
+  }
+});

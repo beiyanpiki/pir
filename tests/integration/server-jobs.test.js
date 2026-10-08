@@ -133,6 +133,86 @@ test("jobs: a failed async job reports its error instead of vanishing", async (t
   assert.match(job.error, /bundle does not contain the claimed head/);
 });
 
+test("jobs: a sync needFull settles its job instead of leaving it running forever (dogfood F-29)", async (t) => {
+  const { base, repo } = await withServer(t);
+  // First contact + a thin (base-limited) bundle the server cannot apply:
+  // the sync response is needFull, and the job behind it must settle — an
+  // unsettled "running" record would never evict (registry growth) and would
+  // lie about server activity in `pir jobs list`.
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+  const { createBundle } = await import("../../dist/app/repos.js");
+  const { getRootCommit, getRemoteUrl, getHeadCommit } = await import("../../dist/changes/git.js");
+  const head = await getHeadCommit(repo.dir);
+  const baseCommit = (await import("node:child_process")).execSync("git rev-parse HEAD^", { cwd: repo.dir, encoding: "utf8" }).trim();
+  const bundle = await createBundle(repo.dir, { base: baseCommit, head });
+  const response = await postReview(base, {
+    remoteUrl: await getRemoteUrl(repo.dir),
+    rootCommit: await getRootCommit(repo.dir),
+    base: baseCommit,
+    head,
+    bundleBase64: bundle.toString("base64"),
+    argv: ["find", "--json"],
+  });
+  assert.equal((await response.json()).needFull, true);
+
+  const listed = await (await fetch(`${base}/v1/jobs`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  assert.equal(listed.jobs.length, 1, "the needFull attempt is a job");
+  const job = listed.jobs[0];
+  assert.equal(job.status, "failed", "needFull attempts settle (never stuck at running)");
+  assert.match(job.error, /^needFull:/);
+  assert.notEqual(job.finishedAt, null);
+});
+
+test("jobs: the list endpoint is a summary projection; single-job views carry the payload (dogfood F-31)", async (t) => {
+  const { base, repo } = await withServer(t);
+  const body = await buildReviewBody(repo, ["memory", "status", "--json"], { async: true });
+  const { jobId } = await (await postReview(base, body)).json();
+  await waitForTerminal(base, jobId);
+
+  const listed = await (await fetch(`${base}/v1/jobs`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  assert.equal(listed.jobs.length, 1);
+  const summary = listed.jobs[0];
+  // A listing must never ship every job's retained output/log (up to 100
+  // settled jobs x 32 MB).
+  assert.equal("result" in summary, false);
+  assert.equal("log" in summary, false);
+  assert.equal(summary.jobId, jobId);
+  assert.equal(summary.status, "completed");
+  assert.equal(typeof summary.logTotal, "number");
+
+  const full = await getJob(base, jobId);
+  assert.ok(Array.isArray(full.log));
+  assert.equal(full.result.code, 0);
+  assert.ok(full.result.output.length > 0);
+});
+
+test("jobs: async usage errors keep the code-2 + usage-text contract (dogfood F-32)", async (t) => {
+  const { base, repo } = await withServer(t);
+  // audit --base is a usage error; the async lane must surface it as a
+  // COMPLETED job with code 2 and the usage text on the log channel —
+  // exactly what the sync path relays — not a runtime failure.
+  const body = await buildReviewBody(repo, ["audit", "--base", "HEAD^", "--json"]);
+  const response = await postReview(base, { ...body, async: true });
+  assert.equal(response.status, 202);
+  const { jobId } = await response.json();
+  const job = await waitForTerminal(base, jobId);
+  assert.equal(job.status, "completed");
+  assert.equal(job.result.code, 2);
+  assert.ok(job.result.log.some((line) => line.includes("audit has no comparison base")));
+  assert.ok(job.result.log.some((line) => line.includes("pir — pi-based code review")));
+
+  // End to end: the remote client exits 2 (usage), not 3.
+  const err = await execFileAsync(
+    process.execPath,
+    [path.resolve("dist/cli/cli.js"), "--server", base, "--token", TOKEN, "--insecure", "audit", "--base", "HEAD^", "--json", "--cwd", repo.dir],
+    { env: { ...process.env, PIR_NO_WIZARD: "1" }, encoding: "utf8" },
+  ).catch((failure) => failure);
+  assert.equal(err.code, 2, "async usage errors must exit 2, not 3");
+  assert.equal(err.stdout, "");
+  assert.match(err.stderr, /audit has no comparison base/);
+});
+
 test("jobs: unknown job ids 404 with the restart explanation", async (t) => {
   const { base } = await withServer(t);
   const response = await fetch(`${base}/v1/jobs/00000000-0000-0000-0000-000000000000`, {

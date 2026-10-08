@@ -56,6 +56,14 @@ function isBundleFreeReadArgv(argv: string[]): boolean {
 }
 
 /**
+ * Terminal failure marker for a thin bundle the server could not apply. The
+ * async client matches this prefix and resends full history instead of
+ * surfacing the failure (dogfood F-30); the sync client gets the usual
+ * `{needFull:true}` body and never sees the string.
+ */
+export const NEEDFULL_MARKER = "needFull: the shipped thin bundle could not be applied; resend full history";
+
+/**
  * Commands the executor runs inside a repo context (runInContext →
  * createAppContext). Keep in sync with that dispatch: /v1/exec requests for
  * these against a non-git cwd fail with guidance instead of the raw
@@ -201,24 +209,7 @@ export async function startServer(input: {
         res.end(JSON.stringify({ error: "missing or invalid bearer token" }));
         return;
       }
-      const jobId = url.pathname.slice("/v1/jobs/".length);
-      if (!jobId) {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ jobs: jobs.list() }));
-        return;
-      }
-      const record = jobs.get(jobId);
-      if (!record) {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            error: `unknown job: ${jobId} (the registry is in-memory; the server may have restarted since the job was submitted)`,
-          }),
-        );
-        return;
-      }
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ job: record }));
+      handleJobs(res, url.pathname.slice("/v1/jobs/".length));
       return;
     }
     if (
@@ -422,13 +413,22 @@ export async function startServer(input: {
         void runQueued().then(
           (outcome) => {
             if (outcome.needFull) {
-              job.fail("client sent a thin bundle the server could not apply; async reviews must ship full history");
+              // The "needFull:" prefix is the machine-readable retry marker
+              // the async client acts on by resending full history.
+              job.fail(NEEDFULL_MARKER);
               return;
             }
             job.finish({ code: outcome.code, output: outcome.output, log: logLines });
           },
           (err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
+            if (err instanceof UsageError) {
+              // Preserve the CLI contract on the async lane too: usage
+              // problems are exit code 2 with the usage text on the log
+              // channel, not a job failure (dogfood F-32).
+              job.finish({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] });
+              return;
+            }
             job.fail(message);
             log(`review job ${job.jobId} failed: ${message}`);
           },
@@ -451,14 +451,17 @@ export async function startServer(input: {
         outcome = await runQueued();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        job.fail(message);
         if (err instanceof UsageError) {
+          // Same contract on both delivery paths: usage problems are a
+          // completed job with code 2 and the usage text on the log channel.
+          job.finish({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] });
           if (!clientGone) {
             res.writeHead(200, { "content-type": "application/json" });
             res.end(JSON.stringify({ code: 2, output: "", log: [...logLines, `pir: ${message}`, USAGE] }));
           }
           return;
         }
+        job.fail(message);
         log(`review error: ${message}`);
         if (!clientGone) {
           res.writeHead(400, { "content-type": "application/json" });
@@ -467,6 +470,11 @@ export async function startServer(input: {
         return;
       }
       if (outcome.needFull) {
+        // Settle the job: an unsettled record would sit at "running" forever
+        // and, being non-terminal, never evict (dogfood F-29). The failure
+        // is this attempt's outcome — the client's full-history retry is a
+        // new job.
+        job.fail(NEEDFULL_MARKER);
         if (!clientGone) {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ needFull: true }));
@@ -488,6 +496,32 @@ export async function startServer(input: {
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     }
+  }
+
+  /**
+   * GET /v1/jobs[/<id>]: the list is a summary projection (no retained
+   * logs/results — up to 100 settled jobs × 32 MB payloads must never ride
+   * along on a listing, dogfood F-31); the single-job view carries the full
+   * record including the retained result for pickup.
+   */
+  function handleJobs(res: http.ServerResponse, jobId: string): void {
+    if (!jobId) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jobs: jobs.list() }));
+      return;
+    }
+    const record = jobs.get(jobId);
+    if (!record) {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error: `unknown job: ${jobId} (the registry is in-memory; the server may have restarted since the job was submitted)`,
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ job: record }));
   }
 
   /**

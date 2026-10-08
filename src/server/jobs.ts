@@ -48,6 +48,9 @@ const MAX_RESULT_BYTES = 32 * 1024 * 1024;
 /** Completed jobs kept for pickup; oldest finishedAt evicts first. */
 const MAX_COMPLETED_JOBS = 100;
 
+/** The list-projection of a job: everything except the heavy log/result payloads. */
+export type JobSummary = Omit<JobRecord, "log" | "result">;
+
 export class JobRegistry {
   private readonly jobs = new Map<string, JobRecord>();
 
@@ -77,10 +80,13 @@ export class JobRegistry {
   }
 
   /** Newest first — the natural "what happened lately" order. */
-  list(): JobRecord[] {
+  list(): JobSummary[] {
     return [...this.jobs.values()]
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((record) => this.copy(record));
+      .map((record) => {
+        const { log: _log, result: _result, ...summary } = record;
+        return summary;
+      });
   }
 
   private copy(record: JobRecord): JobRecord {

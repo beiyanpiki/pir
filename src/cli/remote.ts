@@ -2,6 +2,7 @@ import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
 import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
+import type { JobView } from "./jobs.js";
 
 export interface RemoteOptions {
   token?: string;
@@ -202,21 +203,39 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     }
     if (refusedNoBundle) {
       process.stderr.write(payload.needFull ? "pir: server needs full history, resending\n" : "pir: server refused the bundle-free request, resending with bundle\n");
-      try {
-        response = await send({ withBase: false, async: opts.async });
-      } catch (err) {
-        process.stderr.write(reportUnreachable(url.origin, err));
-        return 3;
-      }
-      if (!response.ok) {
-        const text = await response.text().catch(() => "");
-        process.stderr.write(`pir: server error ${response.status}: ${text.slice(0, 300)}\n`);
-        return 3;
-      }
-      payload = (await response.json()) as RelayResult;
+      return await submit({ withBase: false, async: opts.async });
     }
     if (payload.jobId) {
-      return await followJob(url, payload.jobId, options, argv);
+      let settled: JobView;
+      try {
+        settled = await followJob(url, payload.jobId, options, argv);
+      } catch (err) {
+        process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)}\n`);
+        return 3;
+      }
+      // A thin bundle the server could not apply reports failure with the
+      // needFull marker: resend full history instead of surfacing it (the
+      // async equivalent of the sync needFull retry, dogfood F-30). The
+      // resend is a full bundle, so it cannot needFull again.
+      if (settled.status === "failed" && (settled.error ?? "").startsWith("needFull") && opts.withBase) {
+        process.stderr.write("pir: server needs full history, resending\n");
+        return await submit({ withBase: false, async: opts.async });
+      }
+      if (settled.status === "failed") {
+        process.stderr.write(`pir: job ${settled.jobId.slice(0, 8)} failed: ${settled.error ?? "unknown error"}\n`);
+        return 3;
+      }
+      if (settled.result?.truncated) {
+        process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
+      }
+      // relay() prints the result's log channel — everything the polling
+      // already streamed is excluded, so only the tail (usage text on a
+      // code-2 finish, dogfood F-32) lands here.
+      const printedDuringPoll = Math.min(settled.logTotal, settled.result?.log.length ?? 0);
+      return relay(
+        { code: settled.result?.code ?? 0, output: settled.result?.output ?? "", log: settled.result?.log.slice(printedDuringPoll) ?? [] },
+        argv,
+      );
     }
     return relay(payload, argv);
   };
@@ -241,37 +260,25 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
 
 /**
  * Follow an async job to its end: stream progress lines as they arrive and
- * relay the result exactly as the sync path would have. No overall deadline —
- * Ctrl-C detaches, and the result stays fetchable via `pir jobs fetch`.
+ * hand the settled record back to the caller for relay/retry decisions. No
+ * overall deadline — Ctrl-C detaches, and the result stays fetchable via
+ * `pir jobs fetch`.
  */
-async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: string[]): Promise<number> {
+async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: string[]): Promise<JobView> {
   const { pollJobToEnd } = await import("./jobs.js");
   process.stderr.write(
     `pir: accepted as job ${jobId.slice(0, 8)} — polling ${url.origin} until it finishes (Ctrl-C detaches; fetch later with \`pir jobs fetch ${jobId.slice(0, 8)}\`)\n`,
   );
-  try {
-    const job = await pollJobToEnd(jobId, {
-      url: url.origin,
-      ...(options.token ? { token: options.token } : {}),
-      ...(options.insecure ? { insecure: true } : {}),
-      onLog: (lines) => {
-        if (!argv.includes("--quiet")) {
-          for (const line of lines) process.stderr.write(`${line}\n`);
-        }
-      },
-    });
-    if (job.status === "failed") {
-      process.stderr.write(`pir: job ${jobId.slice(0, 8)} failed: ${job.error ?? "unknown error"}\n`);
-      return 3;
-    }
-    if (job.result?.truncated) {
-      process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
-    }
-    return relay({ code: job.result?.code ?? 0, output: job.result?.output ?? "", log: [] }, argv);
-  } catch (err) {
-    process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)}\n`);
-    return 3;
-  }
+  return await pollJobToEnd(jobId, {
+    url: url.origin,
+    ...(options.token ? { token: options.token } : {}),
+    ...(options.insecure ? { insecure: true } : {}),
+    onLog: (lines) => {
+      if (!argv.includes("--quiet")) {
+        for (const line of lines) process.stderr.write(`${line}\n`);
+      }
+    },
+  });
 }
 
 async function forwardExec(url: URL, argv: string[], options: RemoteOptions): Promise<number> {

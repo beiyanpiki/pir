@@ -187,19 +187,20 @@ async function dispatchJobs(
 
   const jobIdArg = positional[2];
   if (!jobIdArg) throw new UsageError(`pir jobs ${sub} requires a job id (see \`pir jobs list\`)`);
-  // Full ids only for lookups; short prefixes are accepted for typing comfort.
-  const jobs = (await fetchJobs(target)) as JobView[];
-  const matches = jobs.filter((job) => job.jobId === jobIdArg || job.jobId.startsWith(jobIdArg));
+  // Resolve short id prefixes against the (cheap) summary list, then pull
+  // the full record for the one job that needs it (dogfood F-31: never
+  // download every job's retained output to look at one).
+  const summaries = (await fetchJobs(target)) as JobView[];
+  const matches = summaries.filter((job) => job.jobId === jobIdArg || job.jobId.startsWith(jobIdArg));
   if (matches.length === 0) {
     process.stderr.write(`pir: unknown job: ${jobIdArg} (the registry is in-memory; the server may have restarted)\n`);
     return 3;
   }
   if (matches.length > 1) throw new UsageError(`ambiguous job id: ${jobIdArg} matches ${matches.length} jobs`);
-  const job0 = matches[0]!;
-  const jobId = job0.jobId;
+  const jobId = matches[0]!.jobId;
 
   if (sub === "status") {
-    const job = job0;
+    const job = (await fetchJobs(target, jobId)) as JobView;
     if (json) {
       process.stdout.write(`${JSON.stringify({ schemaVersion: 1, command: "jobs.status", data: { job } })}\n`);
       return 0;
@@ -228,11 +229,12 @@ async function dispatchJobs(
       }
       return relayJob(job);
     }
-    if (job0.status !== "completed") {
-      process.stderr.write(`pir: job ${shortId(jobId)} is ${job0.status}; use \`pir jobs wait ${shortId(jobId)}\` to follow it\n`);
+    const job = (await fetchJobs(target, jobId)) as JobView;
+    if (job.status !== "completed") {
+      process.stderr.write(`pir: job ${shortId(jobId)} is ${job.status}; use \`pir jobs wait ${shortId(jobId)}\` to follow it\n`);
       return 3;
     }
-    return relayJob(job0);
+    return relayJob(job);
   }
 
   return 0;
