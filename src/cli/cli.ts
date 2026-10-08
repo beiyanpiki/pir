@@ -5,7 +5,7 @@ import { drainAndExit } from "./exit.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version", "runs", "receipts"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in
@@ -31,12 +31,23 @@ async function main(argv: string[]): Promise<number> {
 
   const command = firstPositional(argv);
   let config: UserConfig | null = null;
+  const webRoute = webFindingsRoute(argv);
   try {
     config = loadUserConfig();
   } catch (err) {
     // A corrupt config.json must not brick the whole CLI — least of all
-    // `pir config`, the documented way out. Other commands fail loudly.
-    if (command === "config" || command === "help" || command === undefined || command === "version") {
+    // `pir config`, the documented way out. The URL-keyed recovery commands
+    // (#48/#49/#52) tolerate it too: they carry their own server address
+    // and must keep working when the config is the broken part.
+    if (
+      command === "config" ||
+      command === "help" ||
+      command === undefined ||
+      command === "version" ||
+      command === "runs" ||
+      command === "receipts" ||
+      webRoute !== null
+    ) {
       process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)} (continuing; 'pir config reset' removes the file)\n`);
     } else {
       throw err;
@@ -82,6 +93,22 @@ async function main(argv: string[]): Promise<number> {
       ...(transport.token ? { token: transport.token } : {}),
       ...(transport.insecure ? { insecure: true } : {}),
     });
+  }
+  if (command === "runs") {
+    // The run URL (or --server/--project/--run) names the server itself, so
+    // this works regardless of the configured mode — including on a fresh
+    // machine that only has a pasted URL (#48).
+    const { runRunsCommand } = await import("./runs.js");
+    return runRunsCommand(argv, { env: process.env, config });
+  }
+  if (webRoute !== null) {
+    // findings routed at one remote run: intercepted before local execution
+    // AND before remote forwarding, so it never needs a repository, a
+    // readable .git, or a registered project (#48/#49).
+    const runs = await import("./runs.js");
+    return webRoute === "export"
+      ? runs.runFindingsExportCommand(argv, { env: process.env, config })
+      : runs.runWebFindingsCommand(argv, { env: process.env, config });
   }
   if (transport.mode === "remote" && forwardToServer) {
     const { remoteExec } = await import("./remote.js");
@@ -130,6 +157,24 @@ function helpOnly(argv: string[]): string | null {
     return null;
   }
   return wantsHelp ? helpFor(positional[0]) : null;
+}
+
+/**
+ * findings commands that route at one remote run (#48/#49): `--run` anywhere,
+ * or the export subcommand (which requires --run and fails fast without it).
+ * Null for every other argv.
+ */
+function webFindingsRoute(argv: string[]): "list" | "export" | null {
+  let positional: string[];
+  let flags: Map<string, string | boolean>;
+  try {
+    ({ positional, flags } = parseArgs(argv));
+  } catch {
+    return null;
+  }
+  if (positional[0] !== "findings") return null;
+  if (positional[1] === "export") return "export";
+  return flags.has("--run") ? "list" : null;
 }
 
 function shouldRunWizard(argv: string[], command: string | undefined): boolean {

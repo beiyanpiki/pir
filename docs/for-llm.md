@@ -142,6 +142,7 @@ Transport resolution:
 | --- | --- |
 | Mode/URL | `--server` > `--local` > `PIR_SERVER_URL` > `PIR_MODE` > config > local |
 | Bearer token | `--token` > `PIR_SERVER_TOKEN` > config `server.token` |
+| Viewer token (web tier) | `--viewer-token` > `PIR_VIEWER_TOKEN` > config `server.viewerToken`; bound to the configured origin |
 | Unverified TLS | enabled by any of `--insecure`, `PIR_INSECURE=1`, config `server.insecure: true` |
 
 `--server` and `--local` are mutually exclusive. `PIR_MODE=remote` still needs
@@ -154,13 +155,16 @@ with a read-only `.git`. A `--help` directly after a value flag is that
 flag's value (`--status --help`), not a help request.
 
 These commands always execute on the client: `serve`, `config`, `skill`,
-`plugins`, `help`, `version`, and `memory sync`. `jobs` contacts the remote job
-registry directly. Other commands are routed as follows:
+`plugins`, `help`, `version`, `receipts`, and `memory sync`. `jobs` contacts
+the remote job registry directly. `runs` and `findings --run` query a server's
+read-only web tier by URL (see the recovery subsection below). Other commands
+are routed as follows:
 
 | Request | Route |
 | --- | --- |
 | `find`, `audit`, `memory status/bootstrap/refresh`, `feedback`, `remember`, `verify-fix` from a checkout | git bundle to `/v1/review` |
 | `findings list/show` | identity-only `/v1/review`; full bundle fallback on first contact |
+| `findings list/show --run <url>`, `findings export --run <url>`, `runs status` | `GET /api/runs/…` (web tier, viewer token) |
 | `models`, `repos`, or commands using `--repo` | `/v1/exec` |
 | `memory sync` | local database plus `/v1/memory/sync` |
 
@@ -318,6 +322,38 @@ resumption is implemented.
 `findings list/show` can read the existing server database while an audit is
 running, without a bundle or queue wait. This first requires the project's
 database to exist and have the current schema.
+
+### Recovery after disconnect or restart
+
+Every accepted async submission also writes a local receipt to
+`~/.pir/receipts/` (origin, job id, project id, run id once known, the
+credential-free argv). `pir receipts list` and `pir receipts show <job-prefix>`
+print receipts with the exact follow-up commands — use them when a job id no
+longer resolves (restart) or the submitting client is gone.
+
+When the server runs the web tier (`--web`), a run URL alone recovers state
+from any machine — no checkout, no git access, no configured project:
+
+```bash
+pir runs status <origin>/runs/<projectId>/<runId> --json   # runs.status envelope
+pir findings list --run <run-url> --all --json
+pir findings show F-12 --run <run-url> --json
+pir findings export --run <run-url> --output findings.json # full-fidelity export
+```
+
+`findings export` fetches every page and every finding detail, retries
+transient failures, writes `<output>.tmp` then renames, and keeps a
+`<output>.checkpoint.json` for resume; a rerun skips already-fetched findings.
+A running run exports the current snapshot with `complete: false` plus
+`snapshotAt`; a finished run verifies the exported count equals the server's
+total and fails (exit 3, no output file) otherwise.
+
+Web-tier auth is a separate credential: `--viewer-token` > `PIR_VIEWER_TOKEN` >
+`server.viewerToken` — it is the server's `PIR_WEB_UI_TOKEN`, never the
+`--token` execution credential, and it is only sent to the origin it was
+configured for (a foreign run URL needs the explicit flag). Distinct errors:
+unknown run, server without the web tier, and missing viewer credentials are
+reported as different exit-3 messages.
 
 ## 5. Record feedback and knowledge
 
@@ -521,7 +557,10 @@ own 120-second request timeout.
 | Codegraph degraded | file/diff review remains available; optional index initialization is separate |
 | Sync request timeout | inspect jobs before retrying; increase `PIR_REMOTE_TIMEOUT` or use asynchronous submission |
 | `failed to prepare the review bundle locally … Read-only file system` | a LOCAL git error, not server connectivity; run from a checkout with a writable `.git` (bundle-free `findings list/show` needs no bundle unless the server demands full history) |
-| Job ID missing after restart | inspect persisted findings; the process-local registry cannot recover the job |
+| Job ID missing after restart | `pir receipts list` — the local receipt names the job, project and run; `pir jobs fetch` still works while the registry lives |
+| Run URL from the web UI | `pir runs status <run-url>` / `pir findings list --run <run-url>` / `pir findings export --run <run-url>` — no checkout needed |
+| Viewer auth required (401 on /api) | pass `--viewer-token` (the server's `PIR_WEB_UI_TOKEN`); it is independent of `--token` |
+| Interrupted export | rerun the same `findings export` command — `<output>.checkpoint.json` resumes it |
 | `verify-fix` rejects finding | mark it fixed first; the verification target is committed HEAD |
 
 ## Agent integration

@@ -9,7 +9,13 @@ export class UsageError extends Error {}
 
 export interface ServerSettings {
   url: string;
+  /** Execution credential for the server's /v1 API. */
   token?: string;
+  /**
+   * Viewer credential for the same server's web tier (/api, PIR_WEB_UI_TOKEN
+   * server-side) — a separate token that never substitutes for `token` (#50).
+   */
+  viewerToken?: string;
   insecure?: boolean;
 }
 
@@ -77,6 +83,7 @@ function validateUserConfig(value: unknown, file: string): UserConfig {
     if (url) {
       config.server = { url };
       if (typeof server.token === "string" && server.token) config.server.token = server.token;
+      if (typeof server.viewerToken === "string" && server.viewerToken) config.server.viewerToken = server.viewerToken;
       if (server.insecure === true) config.server.insecure = true;
     }
   }
@@ -153,7 +160,10 @@ export function isSecretKey(key: string): boolean {
 export function redactConfig(config: UserConfig): Record<string, unknown> {
   const redacted = redactValues(config) as Record<string, unknown>;
   const server = redacted.server as Record<string, unknown> | undefined;
-  if (server) server.tokenConfigured = Boolean(config.server?.token);
+  if (server) {
+    server.tokenConfigured = Boolean(config.server?.token);
+    server.viewerTokenConfigured = Boolean(config.server?.viewerToken);
+  }
   return redacted;
 }
 
@@ -301,7 +311,8 @@ export async function runWizard(): Promise<UserConfig> {
 
 /**
  * `pir config set <key> <value>` — dotted keys: mode, model, server.url,
- * server.token, server.insecure. Empty string clears model/server.token.
+ * server.token, server.viewerToken, server.insecure. Empty string clears
+ * model/server.token/server.viewerToken.
  */
 export function setConfigValue(config: UserConfig, key: string, value: string): UserConfig {
   const next: UserConfig = { schemaVersion: 1, mode: config.mode, ...(config.model ? { model: config.model } : {}) };
@@ -329,6 +340,7 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       if (!url) throw new UsageError("server.url cannot be empty");
       const server: ServerSettings = { url };
       if (next.server?.token) server.token = next.server.token;
+      if (next.server?.viewerToken) server.viewerToken = next.server.viewerToken;
       if (next.server?.insecure) server.insecure = true;
       next.server = server;
       return next;
@@ -340,6 +352,19 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       const server: ServerSettings = { url: next.server.url };
       const trimmed = value.trim();
       if (trimmed) server.token = trimmed;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
+      if (next.server.insecure) server.insecure = true;
+      next.server = server;
+      return next;
+    }
+    case "server.viewerToken": {
+      if (!next.server?.url) {
+        throw new UsageError("set server.url before server.viewerToken");
+      }
+      const server: ServerSettings = { url: next.server.url };
+      const trimmed = value.trim();
+      if (trimmed) server.viewerToken = trimmed;
+      if (next.server.token) server.token = next.server.token;
       if (next.server.insecure) server.insecure = true;
       next.server = server;
       return next;
@@ -354,12 +379,13 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       }
       const server: ServerSettings = { url: next.server.url, insecure: ["true", "1", "yes"].includes(normalized) };
       if (next.server.token) server.token = next.server.token;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
       next.server = server;
       return next;
     }
     default:
       throw new UsageError(
-        `unknown config key: ${key} (expected mode, model, server.url, server.token or server.insecure)`,
+        `unknown config key: ${key} (expected mode, model, server.url, server.token, server.viewerToken or server.insecure)`,
       );
   }
 }

@@ -59,6 +59,8 @@ Usage:
   pir models [search] [--all] [--ids] [--provider <p>]   list pi models
   pir verify-fix <id>                    verify a reported fix
   pir jobs list|status|wait|fetch <id>   inspect async review jobs on a server
+  pir runs status <run-url>            inspect a remote run via its web URL
+  pir receipts [list|show <id>]        local receipts of submitted async reviews
   pir serve [--host H --port P] [--cert C --key K] [--token T] [--web]   HTTPS service
       --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
              viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
@@ -117,8 +119,33 @@ Usage:
   --limit <n>          page size (default 100)
   --offset <n>         page position, 0-based
   --all                fetch every page up front (no truncation)
+  --run <run-url>      query one remote run over the server's read-only web
+                      API instead of the local db — works outside any
+                      repository, needs no git access (viewer auth via
+                      --viewer-token, see Remote mode)
+  export --run <url>   full-fidelity export of one run's findings: every
+                      page plus every finding's detail, provenance envelope,
+                      atomic --output <file>, checkpoint resume on rerun
+                      ([--status <s>] [--format json]); a live run exports
+                      the current snapshot (complete:false)
   JSON output reports total, returned, hasMore and nextOffset so a
   partial page is never mistaken for the complete set (#47).`,
+
+  runs: `Runs options (recover a run from its web URL; no local git needed):
+  status <run-url>     <origin>/runs/<projectId>/<runId> — the URL the web
+                      UI shows; or --server <url> --project <id> --run <id>
+  --json               runs.status envelope: run metadata, stopReason,
+                      coverage summary, finding counts, live state (#48)
+  Errors stay distinct: unknown run vs a server without the web tier
+  (\`pir serve --web\`) vs missing viewer credentials.`,
+
+  receipts: `Receipts options (local records of accepted async submissions):
+  list                 receipts in ~/.pir/receipts, newest first
+  show <job-id-prefix> one receipt plus the recovery commands
+  A receipt is written whenever a server accepts an async review; it
+  survives client disconnects and server restarts (the job registry does
+  not) and carries origin/jobId/projectId/runId — enough for
+  \`pir runs status\` and \`pir findings export --run\` (#52).`,
 
   models: `Models options:
   [search]            case-insensitive substring over provider/id/name
@@ -161,12 +188,22 @@ Usage:
   writes ~/.pir/config.json (mode local|remote, server url/token, default
   model; re-run with \`pir config\`). In remote mode every command is
   forwarded to a pir serve instance — except serve/config/skill/plugins/
-  version, which always run locally (plugins inspects the local checkout). Precedence: --server flag > --local flag >
+  version/receipts, which always run locally (plugins inspects the local
+  checkout; receipts reads ~/.pir). \`runs\` and \`findings --run\` are
+  client-side queries against a server's web API, whatever the mode.
+  Precedence: --server flag > --local flag >
   PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.`,
 
   remote: `Remote mode:
   --server <url>      execute on a remote pir serve instance
-  --token <t>         bearer token for the remote
+  --token <t>         bearer token for the remote (/v1 execution API)
+  --viewer-token <t>  bearer token for the server's web tier (/api, the
+                      PIR_WEB_UI_TOKEN the operator set) — a separate
+                      credential that never falls back to --token or vice
+                      versa; env PIR_VIEWER_TOKEN, config server.viewerToken.
+                      Env/config viewer tokens are only sent to the server
+                      they were configured for — a foreign run URL needs the
+                      explicit flag (#50)
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
 
@@ -179,7 +216,8 @@ Usage:
 
   config: `Config keys (pir config set <key> <value>):
   mode local|remote   model <provider/model>|""
-  server.url <url>    server.token <t>|""      server.insecure true|false`,
+  server.url <url>    server.token <t>|""      server.insecure true|false
+  server.viewerToken <t>|""  web-tier credential for runs/findings --run`,
 
   footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
@@ -192,6 +230,8 @@ export const USAGE = [
   USAGE_SECTIONS.audit,
   USAGE_SECTIONS.findings,
   USAGE_SECTIONS.jobs,
+  USAGE_SECTIONS.runs,
+  USAGE_SECTIONS.receipts,
   USAGE_SECTIONS.models,
   USAGE_SECTIONS.memorySync,
   USAGE_SECTIONS.serve,
@@ -208,6 +248,8 @@ const HELP_SECTIONS: Record<string, string> = {
   audit: USAGE_SECTIONS.audit,
   findings: USAGE_SECTIONS.findings,
   jobs: USAGE_SECTIONS.jobs,
+  runs: USAGE_SECTIONS.runs,
+  receipts: USAGE_SECTIONS.receipts,
   models: USAGE_SECTIONS.models,
   memory: USAGE_SECTIONS.memorySync,
   serve: USAGE_SECTIONS.serve,
@@ -277,6 +319,11 @@ export const VALUE_FLAGS = new Set([
   "--dir",
   "--server",
   "--token",
+  "--viewer-token",
+  "--run",
+  "--project",
+  "--output",
+  "--format",
   "--limit",
   "--offset",
   "--plugins",
@@ -422,6 +469,14 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
     return await cmdSkill(positional.slice(1), flags, json, emit, out);
+  }
+  // Receipts live in the caller's ~/.pir and never touch a repo or server
+  // (#52). They stream directly (like the jobs dispatcher); there is no
+  // captured output to relay.
+  if (command === "receipts") {
+    if (opts.cwdGuard) throw new UsageError("receipts is a client-side command; run it on your machine");
+    const { runReceiptsCommand } = await import("./receipts.js");
+    return { code: await runReceiptsCommand(argv), output: "" };
   }
   // memory sync merges the caller's own DB with a server — a pir serve
   // instance executing it would "sync" with itself.
@@ -685,7 +740,7 @@ async function cmdModels(
 }
 
 /** Positive-integer flag: same contract for every numeric CLI limit. */
-function positiveIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+export function positiveIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
   const raw = flags.get(name);
   if (raw === undefined) return undefined;
   // A boolean means the flag was parsed without a value; Number(true) === 1
@@ -701,7 +756,7 @@ function positiveIntFlag(flags: Map<string, string | boolean>, name: string): nu
 }
 
 /** Non-negative-integer flag — same as positiveIntFlag but 0 is a valid page offset. */
-function nonNegativeIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+export function nonNegativeIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
   const raw = flags.get(name);
   if (raw === undefined) return undefined;
   if (typeof raw !== "string") {
@@ -842,6 +897,7 @@ async function cmdFind(
         incomplete: result.incomplete,
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
+        runId: result.runId,
       })}\n`,
     );
   }
@@ -942,6 +998,7 @@ async function cmdAudit(
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
         suspectedDuplicates: result.suspectedDuplicates,
+        runId: result.runId,
       })}\n`,
     );
   }
@@ -1128,6 +1185,11 @@ async function cmdFindings(
   log: Log,
 ): Promise<number> {
   const sub = args[0] ?? "list";
+  if (sub === "export") {
+    // The web export is dispatched client-side (cli.ts) before this local
+    // path can ever see it; landing here means --run was missing.
+    throw new UsageError("findings export requires --run <run-url> (a remote web export)");
+  }
   if (sub === "show") {
     const id = args[1];
     if (!id) throw new UsageError("findings show requires an id");

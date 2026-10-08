@@ -66,6 +66,8 @@ export function renderFindResultText(input: {
   pendingCandidates?: number;
   incomplete?: boolean;
   transcriptDir?: string;
+  /** Stable run identifier — quoted by receipts and `pir runs status` (#52). */
+  runId?: string;
 }): string {
   const lines: string[] = [];
   if (input.degraded) {
@@ -84,6 +86,7 @@ export function renderFindResultText(input: {
   if (input.pendingCandidates) {
     lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
   }
+  if (input.runId) lines.push(`run id: ${input.runId}`);
   if (input.transcriptDir) {
     lines.push(`transcripts: ${input.transcriptDir}`);
   }
@@ -129,6 +132,8 @@ export function renderAuditResultText(input: {
   incompleteReasons: string[];
   pendingCandidates?: number;
   transcriptDir?: string;
+  /** Stable run identifier — quoted by receipts and `pir runs status` (#52). */
+  runId?: string;
   /** Advisory: reported findings that may describe the same defect. */
   suspectedDuplicates?: Array<{ representative: string; members: string[]; reason: string }>;
 }): string {
@@ -156,6 +161,7 @@ export function renderAuditResultText(input: {
   if (input.pendingCandidates) {
     lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
   }
+  if (input.runId) lines.push(`run id: ${input.runId}`);
   if (input.transcriptDir) {
     lines.push(`transcripts: ${input.transcriptDir}`);
   }

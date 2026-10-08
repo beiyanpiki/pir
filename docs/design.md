@@ -240,12 +240,36 @@ loses the registry and interrupts running work; it does not erase checkpointed
 SQLite records. A job status of `completed` means command delivery completed;
 its result code can still be nonzero.
 
+Because that registry is volatile, every accepted async submission also writes
+a client-side receipt under `~/.pir/receipts/` (0600, following
+`PIR_CONFIG_DIR`): origin, job id, the locally computed project identity, the
+pinned base/head, and the credential-free argv. Once the job settles, the run
+id is copied from the result envelope's `data.run.id` — authoritative, never
+guessed from the head. `pir receipts list/show` read them and print the exact
+recovery commands; `pir jobs` surfaces them when an id no longer resolves.
+
+Run-scoped recovery commands (`pir runs status`, `pir findings
+list|show|export --run <url>`) talk to the server's read-only web tier
+directly, keyed on the `<origin>/runs/<projectId>/<runId>` URL the web UI and
+the receipts hand out. They perform no local git work, so they function from
+any directory on an unconfigured machine. `findings export` walks all finding
+pages and details with bounded concurrency and per-item retries, writes via a
+temp file plus rename, and checkpoints completed findings next to the output
+so an interrupted run resumes; a live run exports a snapshot marked
+`complete: false`.
+
 ### Authentication and TLS
 
 `PIR_SERVER_TOKEN` or `serve --token` protects execution, synchronization, and
 job endpoints with bearer authentication. `/health` is public. TLS comes from
 an explicit certificate/key pair or an automatically generated self-signed
 pair. If generation is unavailable, plain HTTP requires `PIR_ALLOW_HTTP=1`.
+
+The web tier's viewer credential is deliberately separate from the execution
+token: `--viewer-token` > `PIR_VIEWER_TOKEN` > `server.viewerToken`, with no
+fallback in either direction. Env and config viewer tokens are bound to the
+configured server origin and are never sent to a foreign origin a run URL
+might name — only the explicit flag travels.
 
 Client `server.url` and token settings are independent of model credentials.
 A remote client can omit its local model configuration entirely. The client's

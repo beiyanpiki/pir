@@ -67,6 +67,7 @@ pir find --uncommitted --base HEAD --json
 ```bash
 pir config set server.url https://pir.example.com:8790
 pir config set server.token '<service-token>'
+pir config set server.viewerToken '<web-token>'   # 可选:--web 界面 / runs 查询的凭据(#50)
 pir config set server.insecure true   # 仅用于自签名证书
 pir config set mode remote
 pir config show                        # 查看生效配置;token 打码,文本与 --json 一致
@@ -173,6 +174,24 @@ Audit 还返回覆盖率记录。范围内文件分别记为 `reviewed`、`parti
 从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。
 
 可选的只读浏览界面通过 `--web` 或 `PIR_WEB_UI=1` 开启，使用独立于 `PIR_SERVER_TOKEN` 的 `PIR_WEB_UI_TOKEN`。开启界面时，未设置的 `PIR_TRANSCRIPTS` 默认取 `1`，设置为 `0` 可以禁用转录。Compose 会传入这个变量，因此需要在 `.env` 中显式设置 `PIR_TRANSCRIPTS=1` 才能记录历史时间线。实时时间线覆盖 serve 进程中的评审；历史转录也能显示提示词、工具调用和可用的 thinking 内容。界面开发方式见 [web 文档](../web/README.md)。
+
+### 按 URL 恢复运行
+
+服务端接受异步评审时，客户端会在 `~/.pir/receipts/` 写入一张回执，记录服务器、任务 id、项目 id，以及任务落定后的 run id。`pir receipts list` 和 `pir receipts show <任务前缀>` 会列出回执和后续命令；回执在断连和服务端重启后依然可用（内存中的任务注册表则不能）。
+
+只要服务端开启了 web 层，一个 run URL（`<origin>/runs/<projectId>/<runId>`）就足以在任何机器上查看和导出，不需要仓库和 git 权限：
+
+```bash
+pir runs status https://pir.example:8790/runs/<projectId>/<runId> --json
+pir findings list --run https://pir.example:8790/runs/<projectId>/<runId> --all
+pir findings show F-12 --run https://pir.example:8790/runs/<projectId>/<runId>
+pir findings export --run https://pir.example:8790/runs/<projectId>/<runId> \
+  --status confirmed --output findings.json
+```
+
+`findings export` 会翻完所有分页并拉取每条 finding 的完整详情，瞬时失败自动重试，原子写入（`.tmp` + rename），并保留 `<output>.checkpoint.json` 供中断续传。仍在运行的 run 导出当前快照并标记 `complete: false` 和 `snapshotAt`；已结束的 run 会校验导出数量与服务端总数一致。
+
+web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIEWER_TOKEN` > 配置 `server.viewerToken`，两者绝不互为回退。env/配置中的 viewer token 只发送给它所属的服务器；指向别处的 run URL 需要显式传 `--viewer-token`。
 
 ## 状态与记忆
 

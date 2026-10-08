@@ -236,6 +236,39 @@ to record timelines there. Live timelines cover runs in the serve process; histo
 transcripts also show prompts, tool traffic, and available thinking. See the
 [web guide](web/README.md) for development of the explorer.
 
+### Recovering runs by URL
+
+When a server accepts an async review, the client writes a receipt to
+`~/.pir/receipts/` naming the server, job, project and — once the job settles —
+the run id. `pir receipts list` / `pir receipts show <job-prefix>` print them
+with the follow-up commands; they survive disconnects and server restarts,
+unlike the in-memory job registry.
+
+With the web tier enabled, a run URL (`<origin>/runs/<projectId>/<runId>`) is
+enough to inspect and export from any machine, no repository or git access
+required:
+
+```bash
+pir runs status https://pir.example:8790/runs/<projectId>/<runId> --json
+pir findings list --run https://pir.example:8790/runs/<projectId>/<runId> --all
+pir findings show F-12 --run https://pir.example:8790/runs/<projectId>/<runId>
+pir findings export --run https://pir.example:8790/runs/<projectId>/<runId> \
+  --status confirmed --output findings.json
+```
+
+`findings export` walks every page and every finding's detail, retries
+transient failures, writes atomically (`.tmp` + rename), and keeps a
+`<output>.checkpoint.json` so an interrupted export resumes instead of
+restarting. A still-running run exports the current snapshot with
+`complete: false` and a `snapshotAt` timestamp; a finished run validates that
+the export count matches the server's total.
+
+Web-tier credentials are separate from the execution token (#50):
+`--viewer-token` > `PIR_VIEWER_TOKEN` > `server.viewerToken` in the config,
+and neither kind ever substitutes for the other. Env/config viewer tokens are
+only sent to the server they were configured for; a run URL pointing
+elsewhere needs the explicit flag.
+
 ## State and memory
 
 Project identity comes from the normalized remote URL and root commit, so it

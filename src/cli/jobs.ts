@@ -1,6 +1,8 @@
 import process from "node:process";
+import path from "node:path";
 import { UsageError, helpFor, parseArgs } from "./executor.js";
 import { describeTransportError, remoteDispatcher } from "./remote-fetch.js";
+import { findReceipts, receiptRecoveryCommands, updateReceiptFromResult } from "./receipts.js";
 
 /**
  * Client side of the server's job contract (#38): `pir jobs` inspects and
@@ -200,7 +202,13 @@ async function dispatchJobs(
   const summaries = (await fetchJobs(target)) as JobView[];
   const matches = summaries.filter((job) => job.jobId === jobIdArg || job.jobId.startsWith(jobIdArg));
   if (matches.length === 0) {
+    // #52: a restarted serve loses the in-memory registry, but the local
+    // receipt still names the submission — surface it instead of a dead end.
     process.stderr.write(`pir: unknown job: ${jobIdArg} (the registry is in-memory; the server may have restarted)\n`);
+    for (const { file, receipt } of findReceipts(jobIdArg)) {
+      process.stderr.write(`pir: local receipt ${path.basename(file)} (${receipt.kind} of ${receipt.head.slice(0, 8)}, submitted ${receipt.submittedAt})\n`);
+      for (const command of receiptRecoveryCommands(receipt)) process.stderr.write(`    ${command}\n`);
+    }
     return 3;
   }
   if (matches.length > 1) throw new UsageError(`ambiguous job id: ${jobIdArg} matches ${matches.length} jobs`);
@@ -255,5 +263,13 @@ function relayJob(job: JobView): number {
     process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
   }
   process.stdout.write(job.result?.output ?? "");
+  // Pickup after a detach (#52): this is where the run id finally becomes
+  // known, so the receipt written at submission gets its authoritative
+  // update. No receipt for this job (or unparseable output) is a no-op.
+  try {
+    updateReceiptFromResult(job.jobId, job.result?.output ?? "");
+  } catch {
+    // Receipt bookkeeping must never fail the pickup itself.
+  }
   return job.result?.code ?? 0;
 }

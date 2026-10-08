@@ -278,6 +278,32 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       return await submit({ withBase: false, async: opts.async });
     }
     if (payload.jobId) {
+      // #52: an accepted ASYNC submission (HTTP 202) gets a local receipt
+      // before any waiting starts — after a disconnect or a serve restart
+      // this is the only record naming origin, job, project and (once known)
+      // run id. Sync responses carry a jobId too, but the result is already
+      // in hand; a receipt there is pure noise.
+      let receiptFile: string | null = null;
+      if (response.status === 202) {
+        const { writeSubmissionReceipt } = await import("./receipts.js");
+        const { projectIdFor } = await import("../app/repos.js");
+        receiptFile = writeSubmissionReceipt({
+          kind: command ?? "review",
+          origin: url.origin,
+          jobId: payload.jobId,
+          // Same formula the server's materializeFromBundle uses, so the id
+          // in the receipt is the id the run lands under.
+          projectId: projectIdFor(remoteUrl, rootCommit),
+          base,
+          head,
+          argv,
+        });
+        if (receiptFile !== null && !argv.includes("--quiet")) {
+          process.stderr.write(
+            `pir: receipt saved (${path.basename(receiptFile)}) — \`pir receipts list\` recovers this submission after a disconnect\n`,
+          );
+        }
+      }
       let settled: JobView;
       try {
         settled = await followJob(url, payload.jobId, options, argv);
@@ -299,6 +325,13 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       }
       if (settled.result?.truncated) {
         process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
+      }
+      // Authoritative run id (#52): read it out of the result envelope the
+      // server produced — never guess by head. Non-JSON or run-less output
+      // (memory status, usage errors) keeps the receipt's null.
+      if (receiptFile !== null) {
+        const { updateReceiptFromResult } = await import("./receipts.js");
+        updateReceiptFromResult(payload.jobId, settled.result?.output ?? "");
       }
       // relay() prints the result's log channel — everything the polling
       // already streamed is excluded, so only the tail (usage text on a
@@ -398,16 +431,16 @@ function relay(result: RelayResult, argv: string[]): number {
   return result.code ?? 0;
 }
 
-/** Remove transport-only flags (--server URL, --token VALUE, --insecure, --local, --no-wizard) before forwarding. */
+/** Remove transport-only flags (--server URL, --token VALUE, --viewer-token VALUE, --insecure, --local, --no-wizard) before forwarding. */
 export function stripClientFlags(argv: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
-    if (token === "--server" || token === "--token") {
+    if (token === "--server" || token === "--token" || token === "--viewer-token") {
       i += 1; // skip the flag and its value
       continue;
     }
-    if (token.startsWith("--server=") || token.startsWith("--token=")) continue;
+    if (token.startsWith("--server=") || token.startsWith("--token=") || token.startsWith("--viewer-token=")) continue;
     if (token === "--insecure" || token === "--local" || token === "--no-wizard") continue;
     out.push(token);
   }
