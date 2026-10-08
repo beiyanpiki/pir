@@ -304,9 +304,18 @@ test("jobs: a sync client that disconnects mid-wait leaves a fetchable result", 
     body: JSON.stringify(body),
     signal: controller.signal,
   });
-  // Abort after the body is uploaded but well before the job settles —
-  // the #32/#38 signature: client gave up waiting.
-  setTimeout(() => controller.abort(), 150);
+  // Abort the moment the server has REGISTERED the job: the body is fully
+  // uploaded (the job is created after readBody) and the response provably
+  // hasn't been sent (sync responses only go out after the job settles) —
+  // the #32/#38 signature of a client that gave up waiting, without racing
+  // a fixed timer against machine-speed task completion.
+  const registered = Date.now() + 15000;
+  for (;;) {
+    const listed = await (await fetch(`${base}/v1/jobs`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+    if (listed.jobs.length > 0 || Date.now() > registered) break;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  controller.abort();
   await assert.rejects(request, (err) => err.name === "AbortError");
 
   const deadline = Date.now() + 15000;
