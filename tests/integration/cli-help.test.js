@@ -47,7 +47,10 @@ test("#43: --help works in remote mode without contacting the server or needing 
   const res = await pir(["findings", "list", "--help"], { configDir, cwd: emptyDir });
   assert.equal(res.code, 0);
   assert.match(res.stdout, /Findings options/);
-  assert.equal(res.stderr, "");
+  // No pir diagnostics may appear — no server contact, no wizard, no repo
+  // prep. (Node's own ExperimentalWarning for node:sqlite may precede them
+  // on some versions; only pir's output proves the dispatch path.)
+  assert.doesNotMatch(res.stderr, /pir:|wizard|reach|server/);
 });
 
 test("#43: --help works with a corrupt config.json", async () => {
@@ -56,7 +59,7 @@ test("#43: --help works with a corrupt config.json", async () => {
   const res = await pir(["audit", "--help"], { configDir });
   assert.equal(res.code, 0);
   assert.match(res.stdout, /Audit options/);
-  assert.equal(res.stderr, "");
+  assert.doesNotMatch(res.stderr, /pir:|wizard|reach|server/);
 });
 
 test("#43: contextual help shows the command's section, not the whole reference", async () => {
