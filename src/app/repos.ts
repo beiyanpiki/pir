@@ -457,15 +457,27 @@ export async function createBundle(
   const objectsDir = path.resolve(repoRoot, commonDirRaw, "objects");
   // A bare init would otherwise inherit the machine's init.defaultObjectFormat
   // (usually sha1); pointing alternates at a sha256 store from a sha1 repo
-  // cannot resolve anything (dogfood F-52).
-  const objectFormat = (await git(repoRoot, ["rev-parse", "--show-object-format"])).trim();
+  // cannot resolve anything (dogfood F-52). The flag is passed ONLY for
+  // sha256 sources: --object-format needs Git 2.29, and a sha256 repository
+  // cannot exist without it, while sha1 is every git's default (dogfood F-53).
+  let objectFormat = "sha1";
+  try {
+    objectFormat = (await git(repoRoot, ["rev-parse", "--show-object-format"])).trim();
+  } catch {
+    // --show-object-format needs Git 2.22; older gits predate sha256 entirely.
+  }
   if (objectFormat !== "sha1" && objectFormat !== "sha256") {
     throw new Error(`unsupported source object format: ${objectFormat || "(empty)"}`);
   }
   const tempRepo = mkdtempSync(path.join(tmpdir(), "pir-bundle-repo-"));
   try {
     try {
-      await git(tempRepo, ["init", "--quiet", "--bare", `--object-format=${objectFormat}`]);
+      await git(tempRepo, [
+        "init",
+        "--quiet",
+        "--bare",
+        ...(objectFormat === "sha256" ? [`--object-format=${objectFormat}`] : []),
+      ]);
       // An alternates line makes the temp repo resolve every source object
       // without copying it; missing line or wrong path fails the bundle step
       // below, never silently producing an empty bundle.
