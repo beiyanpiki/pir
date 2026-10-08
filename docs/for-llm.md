@@ -187,26 +187,124 @@ npm i -g github:beiyanpiki/pir               # persistent `pir`
 `incomplete` is true whenever any in-scope file did not finish — treat that
 as "not fully audited", never as a clean sweep. Exit codes match `find`.
 
-### 3.1 Modes & first-run config
+### 3.1 Client configuration (modes, config file, precedence, env)
 
-The first interactive run starts a setup wizard writing `~/.pir/config.json`
-(chmod 600): **local** (default — review in the current repo with the user's
-pi credentials) or **remote** (forward to a `pir serve` instance). Non-TTY
-runs (yours, usually) fall back to local defaults with a stderr hint — set
-`PIR_NO_WIZARD=1` or pass `--no-wizard` to silence it. Inspect and drive it
-deterministically:
+One binary, two modes. **local** (default) reviews in the current repo with
+the user's own pi credentials; **remote** forwards commands to a
+`pir serve` instance. This section is the complete client-side
+configuration surface — file, wizard, `pir config`, flags, environment —
+with the exact precedence the CLI applies.
 
-```bash
-pir config show                                   # effective config, token masked
-pir config set server.url https://host:8790
-pir config set server.token <from Q1>
-pir config set server.insecure true               # Q4 = self
-pir config set mode remote
+#### 3.1.1 The config file
+
+`~/.pir/config.json` (directory chmod 700, file chmod 600 — it may hold a
+bearer token). `PIR_CONFIG_DIR` relocates the directory. Shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "mode": "local",
+  "server": { "url": "https://host:8790", "token": "…", "insecure": true },
+  "model": "provider/model"
+}
 ```
 
-Precedence: `--server <url>` > `--local` > `PIR_SERVER_URL` >
-`PIR_MODE=local|remote` > config file. `serve`/`config`/`skill`/`version`
-always execute locally. `PIR_CONFIG_DIR` relocates the config dir.
+| Key | Rules |
+|---|---|
+| `mode` | `local` or `remote`; `remote` requires `server.url`, else load fails (exit 2) |
+| `server.url` | must be `http(s)://…`; trailing slashes stripped on load |
+| `server.token` | optional — omit when the server runs without auth |
+| `server.insecure` | `true` accepts a self-signed certificate (default: TLS verified) |
+| `model` | optional default model, **local sessions only** (see 3.1.5) |
+
+A missing file is normal (local defaults apply). A malformed file is an
+error, never a silent fallback: commands exit 2 naming the file — except
+`config`/`help`/`version` and a bare `pir`, which continue on local defaults
+so that `pir config reset` (delete the file) always works. The minimum
+viable manual file is `{"schemaVersion":1,"mode":"local"}`.
+
+#### 3.1.2 First-run wizard
+
+The first run with no config file yet, on an interactive terminal (stdin
+AND stdout are TTYs; no `--json`; command not local-only; not suppressed by
+`PIR_NO_WIZARD=1` / `--no-wizard`) starts a short wizard. It asks: mode →
+server URL (validated http(s); remote only) → bearer token (may be empty;
+input is echoed) → accept self-signed certificate (opt-in, default N) →
+default model (may be empty). Non-interactive runs — yours, usually — never
+prompt: they fall back to local defaults and print one stderr hint,
+silenced by `PIR_NO_WIZARD=1`, `--no-wizard` or `--quiet`. Re-run later
+with `pir config wizard` (interactive only; non-TTY exits 2 and prints the
+minimum-JSON hint above).
+
+#### 3.1.3 `pir config` — inspect and edit deterministically
+
+| Subcommand | Effect |
+|---|---|
+| `show` (default) | effective config, token masked in human output; `--json` returns the full config including the token (reuse it for `--token`) |
+| `wizard` (alias `setup`) | re-run the interactive wizard |
+| `set <key> <value>` | update one key; works from scratch — no prior file needed |
+| `reset` | delete the config file; back to local defaults |
+
+`set` keys and validation:
+
+| Key | Value | Notes |
+|---|---|---|
+| `mode` | `local` \| `remote` | `remote` requires `server.url` already set (else exit 2) |
+| `model` | `<provider>/<model>` or `""` | empty string clears it |
+| `server.url` | http(s) URL | must be set before token/insecure/`mode remote` |
+| `server.token` | token or `""` | empty string clears it |
+| `server.insecure` | `true`/`false`/`1`/`0`/`yes`/`no` | |
+
+No wizard needed — the canonical agent setup against the server you
+deployed in Part 2:
+
+```bash
+pir config set server.url https://host:8790
+pir config set server.token <from Q1>
+pir config set server.insecure true               # Q4 = self-signed
+pir config set mode remote
+pir config show                                   # verify: mode remote, token masked
+```
+
+#### 3.1.4 Transport precedence (exact, per invocation)
+
+| Decision | Order — first match wins |
+|---|---|
+| where this run executes | `--server <url>` flag > `--local` flag > `PIR_SERVER_URL` env > `PIR_MODE` env > config `mode` > local |
+| bearer token | `--token` flag > `PIR_SERVER_TOKEN` env > config `server.token` |
+| accept self-signed TLS | any **one** of `--insecure` / `PIR_INSECURE=1` / config `server.insecure` enables it |
+
+`--server` and `--local` together are a usage error (exit 2). A remote
+resolution with no URL anywhere fails exit 2 with fix hints. Client-only
+flags (`--server`, `--token`, `--insecure`, `--local`, `--no-wizard`, in
+both `--flag value` and `--flag=value` forms) are stripped before anything
+is forwarded — the server never sees them.
+
+These commands always execute locally, whatever the configured mode:
+`serve`, `config`, `skill`, `plugins` (inspects the caller's own checkout),
+`version`, `help`, a bare `pir` — plus `memory sync`, which merges the
+caller's own memory db and resolves its server through the same precedence
+above.
+
+#### 3.1.5 Client environment variables
+
+| Variable | Effect |
+|---|---|
+| `PIR_CONFIG_DIR` | relocate the config directory (default `~/.pir`) |
+| `PIR_NO_WIZARD=1` | suppress the wizard and the no-config stderr hint (same as `--no-wizard`) |
+| `PIR_SERVER_URL` | remote target for this run (implies remote mode) |
+| `PIR_MODE=local\|remote` | mode override below the flags |
+| `PIR_SERVER_TOKEN` | bearer token when flag/config lack one |
+| `PIR_INSECURE=1` | accept the server's self-signed certificate |
+| `PIR_REMOTE_TIMEOUT` | seconds the client waits for a server answer (default 1800; `0` = unlimited). Governs `/v1/review`, `/v1/exec` and `jobs` polling. A non-integer value is a usage error (exit 2), never a silent default |
+| `PIR_REMOTE_ASYNC=1` | submit every review command as an async job (audits already are by default) |
+| `PIR_MODEL` | default model for **local** sessions; remote runs execute on the server with the server's model (`PI_DEFAULT_*` from Part 2) unless you pass `--model <provider>/<model>` explicitly |
+
+Model precedence, applied where the session actually runs: `--model` flag >
+`PIR_MODEL` env > config `model` > pi settings. On the client that chain
+steers local runs only — in remote mode `--model` is the one knob that
+reaches the server, and `pir --server … models` lists the server's catalog
+(what the server can actually run).
 
 ### 3.2 Remote usage
 
@@ -278,6 +376,8 @@ Use `--fail-on P1` + exit code `1` for gating decisions.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `pir: no config at ~/.pir/…` on stderr | first run, non-interactive | informational; `pir config wizard` to set up, or `PIR_NO_WIZARD=1` to silence |
+| `…/config.json is not valid JSON` (exit 2) | hand-edited config broke | `pir config reset` (works despite the corrupt file), then reconfigure via `pir config set` |
+| `--server and --local are mutually exclusive` (exit 2) | both transport flags passed | keep one; precedence is `--server` > `--local` (see 3.1.4) |
 | `401` on API calls | wrong/missing token | pass `--token` / fix `PIR_SERVER_TOKEN` |
 | TLS handshake error | self-signed cert | add `--insecure` (client) |
 | `pir: cannot reach …: fetch failed (UND_ERR_HEADERS_TIMEOUT…)` | a **sync** command took longer than the client wait | audits no longer hit this (async jobs); for long sync commands raise `PIR_REMOTE_TIMEOUT` (seconds, default 1800; `0` = unlimited) or set `PIR_REMOTE_ASYNC=1` |
