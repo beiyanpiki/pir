@@ -1,122 +1,30 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { apiGet, transcriptUrl } from "../../api";
+import { memo, useEffect, useRef, useState } from "react";
+import { cachedTranscript, fetchTranscript } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
-import type { RunEvent, SessionRef, SessionTranscript, SessionUsage } from "../../types";
+import { createLiveFold, type DerivedSession, type LiveFold, type LiveItem } from "../../live-fold";
+import type { RunEvent, SessionRef, SessionTranscript } from "../../types";
 import { LiveBadge, SessionKindBadge } from "../badges";
 import { TextBlockView, ThinkingRow, ToolRow, UserGoalCard } from "./blocks";
 import { TranscriptView } from "./TranscriptView";
 
-// ---------------------------------------------------------------------------
-// Live derivation: fold the event stream of one session into render items.
-// Deltas stream into a buffer; the authoritative session-block supersedes it.
-// ---------------------------------------------------------------------------
+/** Stateful wrapper: folds only the new tail of each liveEvents update. */
+function useLiveSessions(events: RunEvent[] | null, runId: string): DerivedSession[] {
+  const [sessions, setSessions] = useState<DerivedSession[]>([]);
+  const foldRef = useRef<{ runId: string; fold: LiveFold } | null>(null);
 
-type LiveItem =
-  | { type: "thinking"; text: string; streaming: boolean }
-  | { type: "text"; text: string; streaming: boolean }
-  | { type: "tool"; name: string; args: unknown; callId: string; result?: { text: string; isError: boolean; truncated: boolean }; running: boolean };
-
-interface DerivedSession {
-  sessionId: string;
-  kind: "reviewer" | "verifier";
-  role: string;
-  model: string | null;
-  round?: number;
-  unitId?: string;
-  attempt?: number;
-  displayId?: string;
-  prompt: string;
-  startedAt: number;
-  endedAt: number | null;
-  error?: string;
-  usage?: SessionUsage;
-  items: LiveItem[];
-}
-
-export function deriveLiveSessions(events: RunEvent[]): DerivedSession[] {
-  const sessions = new Map<string, DerivedSession>();
-  const buffers = new Map<string, { kind: "thinking" | "text"; text: string }>();
-
-  const flush = (sessionId: string): void => {
-    const buffer = buffers.get(sessionId);
-    if (!buffer) return;
-    buffers.delete(sessionId);
-    const session = sessions.get(sessionId);
-    if (session) session.items.push({ type: buffer.kind, text: buffer.text, streaming: false });
-  };
-
-  for (const event of events) {
-    if (event.kind === "session-start") {
-      sessions.set(event.sessionId, {
-        sessionId: event.sessionId,
-        kind: event.sessionKind,
-        role: event.role,
-        model: event.model,
-        ...(event.round !== undefined ? { round: event.round } : {}),
-        ...(event.unitId !== undefined ? { unitId: event.unitId } : {}),
-        ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
-        ...(event.displayId !== undefined ? { displayId: event.displayId } : {}),
-        prompt: event.prompt,
-        startedAt: event.ts,
-        endedAt: null,
-        items: [],
-      });
-    } else if (event.kind === "session-delta") {
-      const session = sessions.get(event.sessionId);
-      if (!session) continue;
-      const buffer = buffers.get(event.sessionId);
-      if (buffer && buffer.kind === event.deltaType) buffer.text += event.text;
-      else {
-        flush(event.sessionId);
-        buffers.set(event.sessionId, { kind: event.deltaType, text: event.text });
+  useEffect(() => {
+    if (events === null || events.length === 0) {
+      if (foldRef.current !== null) {
+        foldRef.current = null;
+        setSessions([]);
       }
-    } else if (event.kind === "session-block") {
-      const session = sessions.get(event.sessionId);
-      if (!session) continue;
-      const block = event.block;
-      if (block.type === "toolCall") {
-        flush(event.sessionId);
-        session.items.push({ type: "tool", name: block.name, args: block.arguments, callId: block.id, running: true });
-      } else {
-        const buffer = buffers.get(event.sessionId);
-        const kind = block.type === "thinking" ? "thinking" : "text";
-        if (!buffer || buffer.kind !== kind) flush(event.sessionId);
-        else buffers.delete(event.sessionId); // streamed content settles into the block
-        if (block.type === "thinking") {
-          session.items.push({ type: "thinking", text: block.text, streaming: false });
-        } else {
-          session.items.push({ type: "text", text: block.text, streaming: false });
-        }
-      }
-    } else if (event.kind === "session-tool-result") {
-      const session = sessions.get(event.sessionId);
-      if (!session) continue;
-      const open = [...session.items].reverse().find((item) => item.type === "tool" && item.callId === event.toolCallId);
-      if (open && open.type === "tool") {
-        open.result = { text: event.result, isError: event.isError, truncated: event.truncated };
-        open.running = false;
-      } else {
-        session.items.push({
-          type: "tool", name: event.name, args: {}, callId: event.toolCallId,
-          result: { text: event.result, isError: event.isError, truncated: event.truncated },
-          running: false,
-        });
-      }
-    } else if (event.kind === "session-end") {
-      const session = sessions.get(event.sessionId);
-      if (!session) continue;
-      flush(event.sessionId);
-      session.endedAt = event.ts;
-      if (event.error) session.error = event.error;
-      if (event.usage) session.usage = event.usage;
+      return;
     }
-  }
-  // Sessions still streaming keep their buffer as a live tail item.
-  for (const [sessionId, buffer] of buffers) {
-    const session = sessions.get(sessionId);
-    if (session) session.items.push({ type: buffer.kind, text: buffer.text, streaming: true });
-  }
-  return [...sessions.values()];
+    if (foldRef.current?.runId !== runId) foldRef.current = { runId, fold: createLiveFold() };
+    setSessions(foldRef.current.fold.append(events));
+  }, [events, runId]);
+
+  return sessions;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,7 +69,7 @@ function SessionDivider({
 }
 
 /** Activity stream of a live session (events already in memory). */
-function LiveSessionSection({ session }: { session: DerivedSession }) {
+const LiveSessionSection = memo(function LiveSessionSection({ session }: { session: DerivedSession }) {
   const state: "running" | "error" | "done" = session.endedAt === null ? "running" : session.error ? "error" : "done";
   const meta = [
     session.model ?? "",
@@ -190,7 +98,7 @@ function LiveSessionSection({ session }: { session: DerivedSession }) {
       </div>
     </section>
   );
-}
+});
 
 function LiveItemView({ item }: { item: LiveItem }) {
   if (item.type === "thinking") return <ThinkingRow text={item.text} streaming={item.streaming} />;
@@ -198,10 +106,17 @@ function LiveItemView({ item }: { item: LiveItem }) {
   return <ToolRow name={item.name} args={item.args} result={item.result} running={item.running} />;
 }
 
+/** Mount window: sections inside this band render content, outside they don't. */
+const NEAR_MARGIN = "1600px 0px 1600px 0px";
+/** Placeholder height before the section has ever been measured. */
+const UNVISITED_PLACEHOLDER_PX = 480;
+
 /**
- * One settled session: divider + activity stream. The transcript JSON is
- * fetched only when the section scrolls near the viewport — long runs have
- * many verifier sessions and nobody reads them all at once.
+ * One settled session: divider + activity stream. Content mounts only inside
+ * the near band — long runs have 100+ verifier sessions and nobody reads them
+ * at once; far sections collapse to a height-pinned placeholder so the
+ * scrollbar stays put, and the fetched transcript is cached for an instant
+ * remount (the server answers a refetch with a bodyless 304 anyway).
  */
 function TranscriptSessionSection({
   projectId,
@@ -212,32 +127,31 @@ function TranscriptSessionSection({
   runId: string;
   session: SessionRef;
 }) {
-  const [open] = useState(true);
-  const [visible, setVisible] = useState(false);
-  const [transcript, setTranscript] = useState<SessionTranscript | null | undefined>(undefined);
+  const [near, setNear] = useState(false);
+  const [transcript, setTranscript] = useState<SessionTranscript | null | undefined>(
+    () => cachedTranscript(projectId, runId, session.file),
+  );
+  const [contentHeight, setContentHeight] = useState<number | null>(null);
   const sectionRef = useRef<HTMLElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!open || visible || transcript !== undefined) return;
     const element = sectionRef.current;
     if (element === null) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisible(true);
-          observer.disconnect();
-        }
+        for (const entry of entries) setNear(entry.isIntersecting);
       },
-      { rootMargin: "400px" },
+      { rootMargin: NEAR_MARGIN },
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [open, visible, transcript]);
+  }, []);
 
   useEffect(() => {
-    if (!open || !visible || transcript !== undefined) return;
+    if (!near || transcript !== undefined) return;
     let cancelled = false;
-    apiGet<SessionTranscript>(transcriptUrl(projectId, runId, session.file))
+    fetchTranscript(projectId, runId, session.file)
       .then((data) => {
         if (!cancelled) setTranscript(data);
       })
@@ -247,7 +161,19 @@ function TranscriptSessionSection({
     return () => {
       cancelled = true;
     };
-  }, [projectId, runId, session.file, open, visible, transcript]);
+  }, [projectId, runId, session.file, near, transcript]);
+
+  // Pin the measured height onto the placeholder so unmounting far sections
+  // does not shift the scrollbar under the user.
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!near || element === null) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) setContentHeight(entry.target.getBoundingClientRect().height);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [near, transcript]);
 
   const meta = transcript?.usage
     ? `${fmtCount(transcript.usage.totalTokens)} tok · ${fmtCost(transcript.usage.cost)}`
@@ -261,8 +187,8 @@ function TranscriptSessionSection({
         meta={meta}
         state={transcript === null ? "error" : "done"}
       />
-      {open && (
-        <div className="session-flow">
+      {near ? (
+        <div className="session-flow" ref={contentRef}>
           {transcript === undefined && (
             <div className="py-6 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading session…</div>
           )}
@@ -271,6 +197,15 @@ function TranscriptSessionSection({
           )}
           {transcript !== null && transcript !== undefined && <TranscriptView transcript={transcript} />}
         </div>
+      ) : (
+        <div
+          className="session-flow-placeholder"
+          // minHeight, not height: the stylesheet floor on this class would
+          // beat an inline height for short sections and grow the placeholder
+          // past the real content (dogfood F-37).
+          style={{ minHeight: contentHeight ?? UNVISITED_PLACEHOLDER_PX }}
+          aria-hidden="true"
+        />
       )}
     </section>
   );
@@ -281,13 +216,16 @@ export function SessionTimeline({
   runId,
   sessions,
   liveEvents,
+  awaitingLive = false,
 }: {
   projectId: string;
   runId: string;
   sessions: SessionRef[];
   liveEvents: RunEvent[] | null;
+  /** Live run whose SSE replay has not landed yet: hold the spinner. */
+  awaitingLive?: boolean;
 }) {
-  const liveSessions = useMemo(() => (liveEvents ? deriveLiveSessions(liveEvents) : []), [liveEvents]);
+  const liveSessions = useLiveSessions(liveEvents, runId);
   const useLive = liveSessions.length > 0;
 
   if (useLive) {
@@ -296,6 +234,14 @@ export function SessionTimeline({
         {liveSessions.map((session) => (
           <LiveSessionSection key={session.sessionId} session={session} />
         ))}
+      </div>
+    );
+  }
+
+  if (awaitingLive) {
+    return (
+      <div className="loading-state is-compact" role="status">
+        <span className="pir-mini-spinner" /> Connecting to live stream…
       </div>
     );
   }

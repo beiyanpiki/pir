@@ -158,8 +158,18 @@ test("web ui: runs, run detail and transcripts are served read-only", async (t) 
   const detailBody = await detail.json();
   assert.equal(detailBody.manifest.plugins[0].name, "typescript");
   assert.equal(detailBody.sessions[0].file, "reviewer-r1.json");
-  assert.equal(detailBody.findings[0].displayId, "F-1");
-  assert.equal(detailBody.findings[0].evidence[0].path, "src/loop.ts");
+  // Findings are summary rows in the detail; heavy fields load per row.
+  assert.equal(detailBody.findings.total, 1);
+  assert.equal(detailBody.findings.items[0].displayId, "F-1");
+  assert.equal(detailBody.findings.items[0].evidenceCount, 1);
+  assert.equal(detailBody.findings.items[0].claim, undefined);
+
+  const findingDetail = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/findings/f1`, { headers: auth });
+  assert.equal(findingDetail.status, 200);
+  const finding = await findingDetail.json();
+  assert.equal(finding.displayId, "F-1");
+  assert.equal(finding.evidence[0].path, "src/loop.ts");
+  assert.equal(finding.verifierRationale, "checked the bound");
 
   const transcript = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/transcript/reviewer-r1.json`, { headers: auth });
   assert.equal(transcript.status, 200);

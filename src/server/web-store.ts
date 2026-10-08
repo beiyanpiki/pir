@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -46,6 +47,19 @@ export interface RunSummary {
   transcriptsAvailable: boolean;
 }
 
+export interface FindingSummary {
+  /** Enough to render a collapsed row; the detail fetch carries the rest. */
+  id: string;
+  displayId: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  round: number;
+  createdAt: number;
+  evidenceCount: number;
+}
+
 export interface FindingView {
   id: string;
   displayId: string;
@@ -88,7 +102,8 @@ export interface FeedbackEventView {
 
 export interface RunDetail {
   run: RunSummary;
-  findings: FindingView[];
+  /** Row summaries only — claim/evidence/rationale load per finding on demand. */
+  findings: { items: FindingSummary[]; total: number };
   manifest: RunManifest | null;
   sessions: SessionRef[];
   /** False when the run predates transcripts (nothing to replay). */
@@ -330,23 +345,17 @@ interface RawEvidenceRow {
   description: string | null;
 }
 
-function findingViews(db: DatabaseSync, runId: string): FindingView[] {
-  const rows = db.prepare("SELECT * FROM findings WHERE run_id = ? ORDER BY severity, created_at").all(runId) as unknown as RawFindingRow[];
-  const evidenceByFinding = new Map<string, RawEvidenceRow[]>();
-  for (const row of db.prepare("SELECT kind, path, start_line, end_line, excerpt, description, finding_id FROM finding_evidence WHERE finding_id IN (SELECT id FROM findings WHERE run_id = ?)").all(runId) as unknown as Array<RawEvidenceRow & { finding_id: string }>) {
-    const list = evidenceByFinding.get(row.finding_id) ?? [];
-    list.push(row);
-    evidenceByFinding.set(row.finding_id, list);
+function parseJsonArray(raw: string): unknown[] {
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
   }
-  const parseJsonArray = (raw: string): unknown[] => {
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  };
-  return rows.map((row) => ({
+}
+
+function toFindingView(row: RawFindingRow, evidenceRows: RawEvidenceRow[]): FindingView {
+  return {
     id: row.id,
     displayId: row.display_id,
     title: row.title,
@@ -358,7 +367,7 @@ function findingViews(db: DatabaseSync, runId: string): FindingView[] {
     featureKey: row.feature_key,
     entityKey: row.entity_key,
     anchors: parseJsonArray(row.anchors) as FindingView["anchors"],
-    evidence: (evidenceByFinding.get(row.id) ?? []).map((evidence) => ({
+    evidence: evidenceRows.map((evidence) => ({
       kind: evidence.kind,
       ...(evidence.path !== null ? { path: evidence.path } : {}),
       ...(evidence.start_line !== null ? { startLine: evidence.start_line } : {}),
@@ -369,7 +378,68 @@ function findingViews(db: DatabaseSync, runId: string): FindingView[] {
     verifierRationale: row.verifier_rationale,
     round: row.round,
     createdAt: row.created_at,
-  }));
+  };
+}
+
+interface RawSummaryRow {
+  id: string;
+  display_id: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  round: number;
+  created_at: number;
+}
+
+const FINDINGS_ORDER = "ORDER BY severity, created_at";
+
+/** Collapsed-row summaries for one run: one small query pair, no heavy text. */
+function findingSummaries(
+  db: DatabaseSync,
+  runId: string,
+  options: { limit?: number; offset?: number } = {},
+): { items: FindingSummary[]; total: number } {
+  const total = (db.prepare("SELECT COUNT(*) AS n FROM findings WHERE run_id = ?").get(runId) as { n: number }).n;
+  const limit = options.limit !== undefined ? Math.min(Math.max(options.limit, 1), 500) : -1;
+  const offset = options.offset !== undefined ? Math.max(options.offset, 0) : 0;
+  const rows = db
+    .prepare(`SELECT id, display_id, title, category, severity, status, round, created_at FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
+    .all(runId, limit, offset) as unknown as RawSummaryRow[];
+  const counts = new Map<string, number>();
+  for (const row of db
+    .prepare("SELECT finding_id, COUNT(*) AS n FROM finding_evidence WHERE finding_id IN (SELECT id FROM findings WHERE run_id = ?) GROUP BY finding_id")
+    .all(runId) as unknown as Array<{ finding_id: string; n: number }>) {
+    counts.set(row.finding_id, row.n);
+  }
+  return {
+    total,
+    items: rows.map((row) => ({
+      id: row.id,
+      displayId: row.display_id,
+      title: row.title,
+      category: row.category,
+      severity: row.severity,
+      status: row.status,
+      round: row.round,
+      createdAt: row.created_at,
+      evidenceCount: counts.get(row.id) ?? 0,
+    })),
+  };
+}
+
+function runExists(db: DatabaseSync, runId: string): boolean {
+  return db.prepare("SELECT 1 AS one FROM review_runs WHERE id = ?").get(runId) !== undefined;
+}
+
+/** One finding with its full evidence — the expand-a-row payload. */
+function findingView(db: DatabaseSync, runId: string, findingId: string): FindingView | null {
+  const row = db.prepare("SELECT * FROM findings WHERE run_id = ? AND id = ?").get(runId, findingId) as unknown as RawFindingRow | undefined;
+  if (!row) return null;
+  const evidence = db
+    .prepare("SELECT kind, path, start_line, end_line, excerpt, description FROM finding_evidence WHERE finding_id = ? ORDER BY created_at")
+    .all(findingId) as unknown as RawEvidenceRow[];
+  return toFindingView(row, evidence);
 }
 
 function sessionsFor(stateRoot: string, projectId: string, runId: string, manifest: RunManifest | null): SessionRef[] {
@@ -409,7 +479,7 @@ export function runDetail(projectId: string, runId: string, stateRoot = pirState
     const manifest = manifestFor(stateRoot, projectId, runId);
     return {
       run: toRunSummary(row, stateRoot, projectId),
-      findings: findingViews(db, runId),
+      findings: findingSummaries(db, runId),
       manifest,
       sessions: sessionsFor(stateRoot, projectId, runId, manifest),
       transcriptsAvailable: existsSync(path.join(stateRoot, projectId, "transcripts", runId)),
@@ -417,22 +487,67 @@ export function runDetail(projectId: string, runId: string, stateRoot = pirState
   });
 }
 
+/** Findings of one run as row summaries, optionally paginated. Null = unknown run. */
+export function listFindings(
+  projectId: string,
+  runId: string,
+  options: { limit?: number; offset?: number } = {},
+  stateRoot = pirStateBase(),
+): { items: FindingSummary[]; total: number } | null {
+  if (!isValidProjectId(projectId) || !/^[\w-]+$/.test(runId)) return null;
+  const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
+  return withDb(dbPath, (db) => {
+    if (!runExists(db, runId)) return null;
+    return findingSummaries(db, runId, options);
+  });
+}
+
+/** One finding with full evidence. Null = unknown run or finding. */
+export function findingById(
+  projectId: string,
+  runId: string,
+  findingId: string,
+  stateRoot = pirStateBase(),
+): FindingView | null {
+  if (!isValidProjectId(projectId) || !/^[\w-]+$/.test(runId) || !/^[\w-]+$/.test(findingId)) return null;
+  const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
+  return withDb(dbPath, (db) => {
+    if (!runExists(db, runId)) return null;
+    return findingView(db, runId, findingId);
+  });
+}
+
+export interface TranscriptFile {
+  payload: unknown;
+  /** Stat-based weak validator: transcripts are written once and never rewritten. */
+  etag: string;
+}
+
 /**
  * One session transcript. `file` is constrained to a bare .json name inside
  * the run's transcript directory — path traversal cannot escape it.
  */
-export function readTranscript(
+export async function readTranscript(
   projectId: string,
   runId: string,
   file: string,
   stateRoot = pirStateBase(),
-): unknown | null {
-  if (!isValidProjectId(projectId) || !/^[\w.-]+\.json$/.test(file)) return null;
+): Promise<TranscriptFile | null> {
+  if (!isValidProjectId(projectId) || !/^[\w-]+$/.test(runId) || !/^[\w.-]+\.json$/.test(file)) return null;
   const dir = path.join(stateRoot, projectId, "transcripts", runId);
   const resolved = path.resolve(dir, file);
-  if (!resolved.startsWith(`${dir}${path.sep}`) || !statSync(resolved, { throwIfNoEntry: false })?.isFile()) return null;
+  if (!resolved.startsWith(`${dir}${path.sep}`)) return null;
+  let stats;
   try {
-    return JSON.parse(readFileSync(resolved, "utf8"));
+    stats = await stat(resolved);
+  } catch {
+    return null;
+  }
+  if (!stats.isFile()) return null;
+  const etag = `"tx-${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
+  try {
+    const payload = JSON.parse(await readFile(resolved, "utf8"));
+    return { payload, etag };
   } catch {
     return null;
   }

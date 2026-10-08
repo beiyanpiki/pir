@@ -23,6 +23,7 @@ import {
 import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
+import { mergeEvents } from "../live-fold";
 import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
 import { SessionTimeline, sessionDomId } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
@@ -55,22 +56,21 @@ export function RunDetailPage() {
   const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamSticky = useStickToBottom({ initial: "smooth", resize: "smooth" });
 
+  // Live events arrive over SSE only (the REST detail ships metadata, not the
+  // replay buffer), so switching runs must reset the sequence cursor — a stale
+  // high-water mark would silently drop the next run's early events.
   useEffect(() => {
-    if (!detail.data) return;
-    const events = detail.data.live ? detail.data.live.events : null;
-    maxSeqRef.current = events ? events.reduce((max, event) => Math.max(max, (event as { seq?: number }).seq ?? 0), 0) : 0;
-    setLiveEvents(events ? compactLiveEvents(events) : null);
-  }, [detail.data]);
+    maxSeqRef.current = 0;
+    pendingLiveEventsRef.current = [];
+    setLiveEvents(null);
+  }, [runId]);
 
   const flushLiveEvents = useCallback(() => {
     liveFlushTimerRef.current = null;
     const pending = pendingLiveEventsRef.current;
     if (pending.length === 0) return;
     pendingLiveEventsRef.current = [];
-    setLiveEvents((previous) => pending.reduce<RunEvent[]>(
-      (events, event) => appendLiveEvent(events, event),
-      previous ?? [],
-    ));
+    setLiveEvents((previous) => mergeEvents(previous ?? [], pending));
   }, []);
 
   const sseStatus = useRunEvents(ongoing ? runId : null, true, (event) => {
@@ -93,6 +93,9 @@ export function RunDetailPage() {
   const now = useTicker(ongoing ? 1000 : 0);
   const displayStatus = deriveStatus(run, live, sseStatus);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
+  // While the SSE replay has not landed yet, hold the stream on a spinner
+  // instead of flashing the settled "no transcripts" state for a live run.
+  const awaitingLive = ongoing && liveEvents === null && sseStatus !== "unavailable" && sseStatus !== "error";
 
   if (detail.loading && !detail.data) {
     return <div className="page-shell"><div className="loading-state is-page"><span className="pir-mini-spinner" /> Loading review run…</div></div>;
@@ -165,6 +168,7 @@ export function RunDetailPage() {
                 runId={runId}
                 sessions={detail.data.sessions}
                 liveEvents={liveEvents}
+                awaitingLive={awaitingLive}
               />
             </div>
           </div>
@@ -193,7 +197,7 @@ export function RunDetailPage() {
               className={inspectorTab === "findings" ? "is-active" : ""}
               onClick={() => setInspectorTab("findings")}
             >
-              <ShieldAlert size={14} /> Findings <span>{detail.data.findings.length}</span>
+              <ShieldAlert size={14} /> Findings <span>{detail.data.findings.total}</span>
             </button>
             {isAudit && (
               <button
@@ -220,7 +224,7 @@ export function RunDetailPage() {
             </button>
           </div>
           <div className="inspector-content">
-            {inspectorTab === "findings" && <FindingsTab findings={detail.data.findings} />}
+            {inspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} />}
             {inspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
             {inspectorTab === "details" && <RunDetails detail={detail.data} />}
           </div>
@@ -312,30 +316,6 @@ function useTicker(intervalMs: number): number {
     return () => clearInterval(timer);
   }, [intervalMs]);
   return now;
-}
-
-function appendLiveEvent(events: RunEvent[], event: RunEvent): RunEvent[] {
-  const previous = events[events.length - 1];
-  if (
-    event.kind === "session-delta" &&
-    previous?.kind === "session-delta" &&
-    previous.sessionId === event.sessionId &&
-    previous.deltaType === event.deltaType
-  ) {
-    const next = events.slice();
-    next[next.length - 1] = {
-      ...previous,
-      text: previous.text + event.text,
-      seq: event.seq,
-      ts: event.ts,
-    };
-    return next;
-  }
-  return [...events, event];
-}
-
-function compactLiveEvents(events: RunEvent[]): RunEvent[] {
-  return events.reduce<RunEvent[]>(appendLiveEvent, []);
 }
 
 function ActivityLog({ events }: { events: RunEvent[] }) {

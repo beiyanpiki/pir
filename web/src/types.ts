@@ -51,6 +51,19 @@ export interface FindingEvidence {
   description?: string;
 }
 
+export interface FindingSummary {
+  /** Collapsed-row fields; claim/evidence/rationale load on demand. */
+  id: string;
+  displayId: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  round: number;
+  createdAt: number;
+  evidenceCount: number;
+}
+
 export interface FindingView {
   id: string;
   displayId: string;
@@ -181,13 +194,17 @@ export interface LiveRunState {
   end: LiveRunEnd | null;
 }
 
+/** The REST run detail embeds live metadata only — event replay rides SSE. */
+export type LiveRunMeta = Omit<LiveRunState, "events">;
+
 export interface RunDetail {
   run: RunSummary;
-  findings: FindingView[];
+  /** Row summaries; the full findings load per row on demand. */
+  findings: { items: FindingSummary[]; total: number };
   manifest: RunManifest | null;
   sessions: SessionRef[];
   transcriptsAvailable: boolean;
-  live?: LiveRunState;
+  live?: LiveRunMeta;
 }
 
 // ---------------------------------------------------------------------------

@@ -1332,16 +1332,31 @@
 }
 .session-flow-section {
   scroll-margin-top: 72px;
+  /* Offscreen sections skip layout and paint entirely; the remembered
+     intrinsic size keeps the scrollbar stable while scrolling long runs. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
 }
 .session-flow {
   width: min(100%, 780px);
   margin: 0 auto;
   padding-bottom: 7px;
 }
+.session-flow-placeholder {
+  /* Height-pinned stand-in for sections scrolled far away; the inline
+     minHeight overrides with the measured height once the section has
+     rendered (inline minHeight, because this stylesheet floor would beat an
+     inline height — dogfood F-37). */
+  min-height: 480px;
+}
 .session-flow-items {
   display: flex;
   margin-top: 13px;
   flex-direction: column;
+}
+.session-flow-items > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
 }
 .session-flow-section {
   animation: session-enter 240ms ease-out both;
@@ -2114,6 +2129,10 @@ button.tool-row:focus-visible,
 .finding-detail {
   padding: 11px;
   border-top: 1px solid var(--border);
+  /* Expanded findings render markdown + highlighted excerpts; offscreen ones
+     (a long list scrolled past) cost nothing. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 320px;
 }
 .finding-detail section {
   margin-bottom: 13px;
