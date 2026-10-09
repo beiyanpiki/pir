@@ -119,3 +119,32 @@ test("idle sweep frees ended runs without waiting for another event", async () =
     registry.dispose();
   }
 });
+
+// #70 regression: the replay copy must not spread-apply the buffer. A long
+// audit buffers >125k events (mostly tiny deltas) well under the 32 MB char
+// budget; push(...events) passed each one as a call argument and V8's stack
+// overflowed, killing every SSE connection with a synchronous throw.
+test("subscribe: replays a 200k-event buffer without stack overflow", () => {
+  const registry = new LiveRegistry({ endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x", now));
+    const DELTAS = 200_000;
+    for (let i = 0; i < DELTAS; i += 1) {
+      emitRunEventForTest(delta("A", "s1", "x", now));
+    }
+
+    const single = registry.subscribe("A", () => {});
+    assert.equal(single.replay.length, DELTAS + 2, "single-run replay returns the full buffer");
+    assert.equal(single.replay[0].kind, "run-start", "replay preserves emission order");
+    assert.equal(single.replay[single.replay.length - 1].kind, "session-delta");
+    single.unsubscribe();
+
+    const all = registry.subscribe(null, () => {});
+    assert.equal(all.replay.length, DELTAS + 2, "all-runs replay returns the full buffer, seq-sorted");
+    all.unsubscribe();
+  } finally {
+    registry.dispose();
+  }
+});
