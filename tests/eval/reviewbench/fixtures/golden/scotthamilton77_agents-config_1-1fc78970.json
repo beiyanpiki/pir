@@ -1,0 +1,751 @@
+{
+  "pr_key": "scotthamilton77_agents-config_1-1fc78970",
+  "pr": {
+    "repo": "https://github.com/scotthamilton77/agents-config",
+    "pr_number": 1,
+    "base": "3776d9195827d79efec978fb900573f3a5a53339",
+    "head": "1fc789709ae044579908fed58c8c14638d0db095"
+  },
+  "findings": [
+    {
+      "file": "src/user/.codex/AGENTS.md.template",
+      "start_line": 6,
+      "end_line": 11,
+      "message": "The `@filename` syntax (e.g. `@INSTRUCTIONS.md`, `@AGENT-PERSONA.md`) is a Claude Code-specific file-inclusion feature. OpenAI Codex CLI does not support this syntax — it will treat these lines as literal text rather than loading the referenced files. The shared laws, constraints, and workflow instructions will be silently absent from Codex's effective context, making the shared-instructions architecture non-functional for Codex.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The @filename include syntax is Claude Code-specific. The Codex AGENTS.md.template uses identical @INSTRUCTIONS.md, @AGENT-PERSONA.md, etc. references that Codex CLI will treat as literal text, meaning the shared laws, constraints, and workflow content will be silently absent. The PR's own test plan has an unchecked item about verifying @INSTRUCTIONS.md resolution, confirming the risk.",
+      "severity_justification": "The entire shared-instructions architecture (laws, constraints, workflow, orchestration) is non-functional for Codex because the referenced files will never be loaded. The Codex AGENTS.md will contain only a few lines of literal text with no actual instructions.",
+      "category_justification": "The code produces incorrect runtime behavior — the Codex template will not include the referenced instruction files, making the intended multi-tool architecture non-functional for Codex.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.gemini/GEMINI.md.template",
+      "start_line": 6,
+      "end_line": 11,
+      "message": "Same issue as the Codex template: `@INSTRUCTIONS.md`, `@AGENT-PERSONA.md`, and `@USER-PERSONA.md` use Claude Code file-inclusion syntax. Google Gemini CLI does not support `@filename` references, so these lines will be ignored and the shared instructions will never be loaded for Gemini.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The GEMINI.md.template uses the same @filename include syntax (@AGENT-PERSONA.md, @USER-PERSONA.md, @INSTRUCTIONS.md, @GEMINI-EXTENSIONS.md) that is Claude Code-specific. Gemini CLI reads GEMINI.md as plain text and has no file-inclusion mechanism for @ references, so all shared instructions will be absent from Gemini's effective context.",
+      "severity_justification": "The same as Finding 1 — the entire shared-instructions architecture (laws, constraints, workflow, orchestration, personas) will be non-functional for Gemini, leaving it with only a 3-line instruction file.",
+      "category_justification": "The Gemini template produces incorrect runtime behavior for the same reason as the Codex template — @file references are silently unresolved.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.claude/AGENTS.md.template",
+      "start_line": 7,
+      "end_line": 12,
+      "message": "The old template used bare `@AGENT-PERSONA.md` / `@USER-PERSONA.md` directives which Claude Code expands directly at parse time. The new form wraps them in natural-language prose (`Read the contents of @INSTRUCTIONS.md …`). Whether Claude Code still performs file inclusion when the `@` reference appears inside a sentence is unverified — the PR test plan explicitly marks this item as unchecked. If Claude Code requires the bare `@file` form for inclusion, the entire shared-instructions chain silently becomes a no-op.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The diff confirms the change from bare @AGENT-PERSONA.md / @USER-PERSONA.md directives to prose-wrapped form ('Read the contents of @AGENT-PERSONA.md for agent personality.'). The PR test plan explicitly leaves unchecked 'Verify Claude Code resolves @INSTRUCTIONS.md references in new AGENTS.md format', which the author wrote themselves — directly confirming this is a known unverified risk.",
+      "severity_justification": "If Claude Code requires bare @file form for inclusion (rather than inline prose), the entire shared-instructions chain — laws, constraints, workflow, orchestration, personas — silently becomes a no-op. This affects Claude, the primary tool this config targets.",
+      "category_justification": "The behavior of @file references in prose vs standalone is a correctness question about whether file inclusion actually fires, not a style or reliability concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 504,
+      "end_line": 508,
+      "message": "Phase 5 iterates `commands`, `skills`, and `agents` for tool-specific source dirs. When a tool-specific `skills/` or `agents/` dir exists, `sync_directory` runs its trailing 'warn about items in dest not in source' loop (lines 331-337). At that point `dest_parent` already contains all the shared skills/agents installed by Phase 2/3, but none of them exist in the tool-specific source. This produces a spurious warning for every shared skill and agent, making the output misleading and potentially alarming to the user. This is a design-level defect in how shared and tool-specific subdirectory phases interact.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The code logic is correctly described: the trailing 'warn about items in dest not in source' loop in sync_directory would generate spurious warnings for every shared skill/agent if a tool-specific skills/ or agents/ directory were added. However, at this SHA no such tool-specific subdirectory exists (src/user/.claude/ only has commands/), so sync_directory returns early and the issue is latent rather than currently triggered.",
+      "severity_justification": "The flaw is real but currently latent — it requires a future addition of tool-specific skills/ or agents/ dirs to manifest. No user-facing breakage occurs at this SHA.",
+      "category_justification": "Misleading warning output that would alarm users and undermine trust in the install script's reporting is a reliability/operational concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 128,
+      "end_line": 144,
+      "message": "When `--tools=` is supplied, the parsed `TOOLS` array is never deduplicated. `--tools=claude,claude` passes validation and causes `install_tool \"claude\"` to run twice: all prompts fire twice, all counters are doubled, and files may be clobbered between the two runs (backup creates a second backup of the file written in the first run). A simple `readarray -t TOOLS < <(printf '%s\n' \"${TOOLS[@]}\" | sort -u)` after parsing would fix this.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in the code: the TOOLS array is populated directly from the comma-split of TOOLS_OVERRIDE with no deduplication step. Validation only checks each element is a valid tool name. --tools=claude,claude passes validation and installs claude twice: prompts fire twice, counters double, and the backup function creates a second backup of the file written during the first run.",
+      "severity_justification": "Requires the user to deliberately pass a duplicate in --tools=, which is unlikely in normal use. The impact (doubled output and an extra backup file) is annoying but not data-destructive.",
+      "category_justification": "Duplicate entries in TOOLS lead to incorrect behavior — running install_tool twice for the same tool — rather than a style or reliability concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 146,
+      "end_line": 151,
+      "message": "Auto-detection unconditionally includes `claude` regardless of whether `~/.claude/` exists or Claude Code is installed, while `codex` and `gemini` are only added when their directories already exist. This means running the script on a machine with no Claude Code creates `~/.claude/` and installs all Claude files without any opt-in, which is inconsistent with the detection policy applied to other tools.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The asymmetry is documented in --help: 'claude always, others if ~/.<tool>/ exists'. This is intentional design for a Claude-first tool adding multi-tool support. A user can always use --tools= to override. The finding correctly describes the behavior but mischaracterizes an intentional design decision as a defect.",
+      "severity_justification": "Even if undesired, the impact is limited to creating ~/.claude/ and installing config files, which is the script's primary purpose anyway.",
+      "category_justification": "The finding is about behavioral consistency of tool detection logic.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 188,
+      "end_line": 196,
+      "message": "`compute_hash` uses `shasum -a 256`, which is a macOS-native Perl utility. On Debian/Ubuntu/RHEL Linux systems, `shasum` is not installed by default; the standard command is `sha256sum`. Any install attempt on Linux fails immediately with `command not found`, making the script entirely non-functional on Linux despite the documented Linux support (`apt install jq` is listed as an alternative in the prerequisites message).",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "compute_hash uses shasum -a 256 on both file and directory paths with no fallback. Line 103 references 'apt install jq (Linux)', confirming Linux support is intended. shasum is macOS-native (Perl utility); on Debian/Ubuntu/RHEL the standard command is sha256sum and shasum is not installed by default, causing command not found and script failure.",
+      "severity_justification": "The script is entirely non-functional on Linux for all hash-comparison operations (which are used for every template and directory sync), but the impact is limited because this config repo is primarily targeting macOS Claude Code users (the bash version guard also says 'brew install bash').",
+      "category_justification": "Cross-platform portability failure making the script non-functional on a documented supported platform.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 423,
+      "end_line": 427,
+      "message": "The temp file created by `mktemp` in `sync_settings_file` is not protected by a `trap … EXIT` cleanup handler. If `printf … | jq . > \"$tmp\"` fails (disk full, jq error on unexpectedly malformed merged JSON) or `mv` fails, the temp file is left in `/tmp` indefinitely. With `set -euo pipefail` active, the script exits without any cleanup. Adding `trap 'rm -f \"$tmp\"' EXIT` immediately after `tmp=\"$(mktemp)\"` prevents the leak.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: single mktemp at line 424, no trap handler anywhere in the script (grep confirms), set -euo pipefail active from line 2. If jq or mv fails, the script exits leaving the temp file in /tmp with no cleanup.",
+      "severity_justification": "Leaking a small JSON temp file in /tmp during a rare failure path of an interactive dev-config install script has negligible real-world impact. OSes clean /tmp on reboot. The fix is good practice but the harm is minimal.",
+      "category_justification": "Resource leak on error path — a reliability/operational concern rather than correctness or security.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 129,
+      "end_line": 129,
+      "message": "`IFS=',' read -ra TOOLS <<< \"$TOOLS_OVERRIDE\"` gives no indication to the user when the value is an empty string (i.e., `--tools=`). `read` with an empty here-string produces `TOOLS=(\"\")`, the empty-string element passes the outer loop, fails validation with the unhelpful error `Unknown tool:  (valid: claude codex gemini)`, and exits. A simple guard `[[ -n \"$TOOLS_OVERRIDE\" ]]` check that also catches the post-parse empty-array case would give a clearer error.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding claims --tools= would produce TOOLS=(\"\") and fail with 'Unknown tool: (valid: ...)'. This is incorrect: the existing if [[ -n \"$TOOLS_OVERRIDE\" ]]; then guard at line 128 is false for an empty string, so the read and validation loop are never entered. --tools= silently falls through to auto-detect, not to an error.",
+      "severity_justification": "Even if the behavior were as described it would just be a poor error message, not data loss or broken functionality.",
+      "category_justification": "The finding makes a factual claim about control flow that is incorrect.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 275,
+      "end_line": 280,
+      "message": "In `sync_directory`, when `DRY_RUN=true` the `mkdir -p \"$dest_parent\"` is skipped. The subsequent loop over `\"$src_parent\"/*` then calls `[[ ! -e \"$dest_item\" ]]` for each source item — since `dest_parent` doesn't exist, every item reports \"Would install … (new)\" even if a previous real install already placed them there. The dry-run output is correct for first-run scenarios but misleading on subsequent dry-runs against an existing installation, as it will always show all items as new rather than up-to-date.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding claims subsequent dry-runs against an existing installation always show all items as new. This is incorrect: after a real install, dest_parent exists on disk regardless of the DRY_RUN guard. The mkdir -p guard only skips directory creation; it doesn't destroy an existing directory. So dest_item exists and hash comparison works correctly. The only scenario where everything shows as new is a genuine first-run on a fresh machine, which is accurate output.",
+      "severity_justification": "The described scenario is incorrect; no actual misleading output occurs on subsequent dry-runs.",
+      "category_justification": "The finding makes an incorrect factual claim about dry-run behavior.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 286,
+      "end_line": 289,
+      "message": "The script uses `diff` with `--color=auto`, which can produce ANSI escape codes. This output is then used in a non-interactive context, and could be problematic if logs are parsed or if the terminal does not support colors. It's safer to either remove `--color=auto` or check if stdout is a TTY before using it.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "diff --color=auto already performs TTY detection internally and suppresses ANSI codes when stdout is not a terminal. The finding's concern about escape codes in non-interactive contexts is precisely what the 'auto' mode handles. The suggestion to add a TTY check duplicates what the flag already does.",
+      "severity_justification": "Even if the concern were valid, the impact would be cosmetic ANSI escape characters in log output, not broken functionality.",
+      "category_justification": "The finding is about output formatting in non-interactive contexts.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 131,
+      "end_line": 142,
+      "message": "The script uses `IFS` to parse the `--tools` argument but doesn't restore its original value. Changing `IFS` globally can lead to unexpected behavior in subsequent parts of the script that rely on word splitting, as any command that performs word splitting will use the new `IFS` value. It should be localized to the `read` command or restored afterward.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "In bash, variable assignments prefixed to a command (including builtins like read) are scoped to that command invocation only. IFS=',' read -ra TOOLS ... does not permanently change IFS in the shell environment. The concern about IFS polluting subsequent word splitting is factually incorrect for bash.",
+      "severity_justification": "Even if IFS were permanently changed, the script uses arrays and quoted expansions throughout, minimizing word-splitting reliance.",
+      "category_justification": "The finding makes an incorrect factual claim about bash variable scoping.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 105,
+      "end_line": 105,
+      "message": "The `backup` function uses `cp` without the `-p` flag. This will not preserve the original file's metadata such as permissions and timestamps. While perhaps not critical for this use case, it is generally better practice to use `cp -p` or `cp -a` to ensure the backup is as identical to the original as possible.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "While factually correct that cp without -p doesn't preserve metadata, this is a generic best-practice suggestion. The backed-up files are markdown config templates and settings.json where permissions/timestamps carry no recovery value. The finding explicitly concedes 'perhaps not critical for this use case', making it sub-threshold.",
+      "severity_justification": "No meaningful impact — the content of config files is what matters for recovery, not their timestamps or permissions.",
+      "category_justification": "A style/best-practice suggestion about cp flags with no functional consequence.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 405,
+      "end_line": 418,
+      "message": "The final summary loop only reports on tools that were actually processed. If a tool specified via `--tools` is unknown and causes the script to exit early, no summary is printed for any tool. It would be more user-friendly to show a partial summary for completed tools or a clearer error message indicating which tool failed.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Validation of --tools= happens entirely before any install_tool invocation. If an unknown tool is passed, the script exits with 'Unknown tool: $tool (valid: claude codex gemini)' before a single file is touched. There are no partially-completed tools to summarize. The finding's premise of a partial-completion scenario does not apply.",
+      "severity_justification": "No real issue exists; behavior is already correct with a clear error message.",
+      "category_justification": "The finding is about error message UX, not a functional correctness bug.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 135,
+      "end_line": 146,
+      "message": "The validation loop for tools provided via `--tools` uses `local_valid` which is not declared with `local`. While bash allows this in functions, it becomes a global variable. If this function were to be called from another function, it could unintentionally overwrite a global variable of the same name. Declaring it `local local_valid=false` would be safer.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The local_valid variable is used in the top-level script body, not inside a function. Using 'local' at script scope is invalid in bash and would produce a runtime error. The finding's suggestion to declare 'local local_valid=false' is inapplicable here. A global variable at script top-level is normal and expected behavior.",
+      "severity_justification": "No actual issue; the suggested fix would introduce a syntax error.",
+      "category_justification": "The finding makes an incorrect factual claim about where the code runs and what fix would be appropriate.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 348,
+      "end_line": 348,
+      "message": "The `sync_settings_file` function uses `jq .` to format the temporary JSON file before moving it. If the `jq` command fails for some reason (e.g., not in `PATH`, or a very esoteric issue with the JSON), the `mv` command will move an empty or non-existent file, potentially corrupting or deleting the user's settings file. The `jq` output should be checked for success before the `mv`.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "set -euo pipefail is active throughout the script. If jq . fails with a non-zero exit, the pipeline fails and set -e aborts before mv runs, leaving the backed-up dest_file untouched. jq availability is pre-checked at startup. The scenario of mv moving a bad file requires jq to exit 0 with empty/corrupt output, which jq . cannot do for valid JSON input (merged_json was already constructed by jq earlier in the same function).",
+      "severity_justification": "The safeguards (set -euo pipefail, jq pre-check, prior jq validation of merged_json) make the described corruption scenario essentially impossible.",
+      "category_justification": "The finding is about error handling on a write operation that could corrupt a user file.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 232,
+      "end_line": 232,
+      "message": "When syncing a directory, if `confirm` returns false, the tool counts the item as `skipped`. However, if the script is run with `--dry-run`, the item is counted as `updated` but no action is taken. This leads to inconsistent reporting in the final summary between a dry run and an interactive run where the user says 'no'.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The code correctly counts dry-run items as 'updated' (what would happen) vs user-rejected items as 'skipped' (what did happen). This is standard dry-run semantics — it shows the optimistic outcome assuming acceptance, not accounting for user rejections. Comparing a dry-run summary with an interactive reject-all run is comparing two different intentional outcomes, not an inconsistency.",
+      "severity_justification": "No functional issue; the reporting correctly reflects the different scenarios.",
+      "category_justification": "The finding is about summary counter semantics with no functional impact.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 38,
+      "end_line": 41,
+      "message": "The script incorrectly allows invalid tools in the --tools parameter. The validation loop only checks the tool names in TOOLS_OVERRIDE but does not prevent invalid names from populating TOOLS. This could lead to unexpected behavior when processing invalid tool names.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The validation loop at lines 131-144 checks every element of TOOLS against ALL_TOOLS and calls exit 1 for any invalid name. The script exits before install_tool is ever called. Invalid names cannot proceed to processing. The finding's claim that invalid names can populate TOOLS and cause unexpected behavior is factually incorrect.",
+      "severity_justification": "No real issue — the described scenario cannot occur.",
+      "category_justification": "The finding makes an incorrect factual claim about validation logic.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 405,
+      "end_line": 411,
+      "message": "In sync_settings_file, the mechanism to merge or copy settings files ignores validation of TOML templates before copying. Unlike JSON templates, TOML processing lacks any integrity checks, which may propagate invalid TOML configurations.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The code correctly shows TOML templates are plain-copied without any validation while JSON destination files are validated with 'jq empty' before merging. The asymmetry is real and verifiable in the code. However, no .toml.template files exist in the repo at this SHA, so the code path is never exercised.",
+      "severity_justification": "No TOML templates exist in the current codebase, making this a purely theoretical concern. When/if TOML templates are added, copying an invalid template would be a minor issue since the user sees the diff and confirms the change.",
+      "category_justification": "Missing validation before writing a configuration file is a reliability/data-integrity concern.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 206,
+      "end_line": 211,
+      "message": "The backup function does not validate whether the backup file was successfully created before proceeding, which may lead to silent data loss if the backup fails.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "set -euo pipefail is active from line 2. If cp in the backup function fails with a non-zero exit code, set -e aborts the script before the caller proceeds to overwrite the destination file. Silent data loss is impossible — a cp failure produces a visible hard exit. The finding does not account for this protection.",
+      "severity_justification": "The described data loss scenario cannot occur given set -e; the concern is already mitigated.",
+      "category_justification": "The finding is about error handling on a backup operation.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/AGENT-PERSONA.md.template",
+      "start_line": 1,
+      "end_line": 20,
+      "message": "Closing tag does not match the opening tag: line 1 uses `<your_persona>` (underscore) but line 20 closes with `</your-persona>` (hyphen). Tools that parse XML-like tags (or humans reading these as a block) will see this as mismatched. Use `</your_persona>` to match.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified directly in the file: opening tag is `<your_persona>` (underscore) but closing tag is `</your-persona>` (hyphen) — a genuine mismatch that would break any XML-aware parser or structured reader.",
+      "severity_justification": "These are instruction template files parsed by LLM tools which are tolerant of loose markup, so behavioral impact is minimal, but it is a real inconsistency that should be fixed for correctness and readability.",
+      "category_justification": "The mismatched tags are a factual error in the document structure, not merely a style preference.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/AGENT-PERSONA.md.template",
+      "start_line": 3,
+      "end_line": 3,
+      "message": "Spelling: \"principle software architect\" should be \"principal software architect\". \"Principle\" is a noun (a fundamental truth); \"principal\" is the adjective meaning chief/lead.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in the file: line 3 reads 'principle software architect' which is a spelling/word-choice error; the correct word is 'principal' (adjective meaning chief/lead).",
+      "severity_justification": "This is a persona description template that AI tools read verbatim, so the wrong word could slightly confuse the intended role, but impact is minimal.",
+      "category_justification": "The error is in a markdown template/documentation file describing an agent persona, not in executable code.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/AGENT-PERSONA.md.template",
+      "start_line": 20,
+      "end_line": 20,
+      "message": "The persona tag is malformed: it opens as `<your_persona>` but closes as `</your-persona>`. Consumers that rely on XML-style section boundaries may fail to recognize the persona block correctly.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in the file: the opening tag `<your_persona>` (underscore) and closing tag `</your-persona>` (hyphen) are mismatched, exactly as claimed. This is the same factual issue as Finding 1.",
+      "severity_justification": "Same as Finding 1 — LLM tools are generally tolerant of loose markup so behavioral impact is minimal, but the mismatch is a real structural error.",
+      "category_justification": "Mismatched structural tags in a template file consumed by AI tools is a correctness issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/AGENT-PERSONA.md.template",
+      "start_line": 3,
+      "end_line": 3,
+      "message": "Correct the typo in the role description: this should be “principal software architect,” not “principle software architect.”",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 3 reads 'principle software architect' — same factual error identified in Finding 2. The correct word is 'principal'.",
+      "severity_justification": "Minor word-choice error in a persona description template with minimal behavioral impact.",
+      "category_justification": "Error is in a markdown persona template file, not executable code.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "scripts/install.sh",
+      "start_line": 53,
+      "end_line": 53,
+      "message": "This script still requires `jq` before it knows whether any selected tool needs JSON settings merging. With the new `--tools=codex` or `--tools=gemini` paths, installs can fail on systems without `jq` even though those tool sources currently have only Markdown templates and do not need JSON processing.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The jq prerequisite check at line 101 runs unconditionally before tool detection. Only src/user/.claude has a .json.template; codex and gemini sources have only .md.template files. A user running --tools=codex or --tools=gemini on a system without jq will get a hard exit failure even though jq is never needed for those paths.",
+      "severity_justification": "It breaks a valid use case (codex-only or gemini-only install on systems without jq) that the PR explicitly introduces and advertises.",
+      "category_justification": "An unnecessary hard dependency causes the script to fail in a valid execution path, degrading the tool's reliability.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/agents/tech-lead.md",
+      "start_line": 40,
+      "end_line": 42,
+      "message": "This shared agent is now installed under each tool's home directory, but it still hardcodes `.claude/agents/*` as the source of available agents. Under `~/.codex` or `~/.gemini`, following this instruction points at the wrong directory and prevents the agent from seeing the installed shared agents.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "exacerbated-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: tech-lead.md hardcodes '.claude/agents/*' in three places (team assessment, initial assessment, and constraints). The PR moves this file to shared content installed under all tool directories. The repo's AGENTS.md states 'Claude/Gemini use natively', so Gemini would incorrectly point at ~/.claude/agents/ instead of ~/.gemini/agents/.",
+      "severity_justification": "The tech-lead agent's core functionality (team assessment, delegation) relies on scanning the agents directory. Under Gemini, it would scan the wrong path and potentially fail to discover available agents.",
+      "category_justification": "Hardcoded tool-specific path in a file now used as shared content across multiple tools produces wrong behavior in non-Claude environments.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/self-improving-agent/SKILL.md",
+      "start_line": 33,
+      "end_line": 38,
+      "message": "This shared skill is installed for Codex and Gemini too, but it writes cross-project preferences and memory to Claude-specific paths. When used outside Claude, corrections would be persisted to the wrong tool's configuration instead of the active tool's user-level instruction files.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "exacerbated-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the skill's classification table hardcodes '~/.claude/AGENTS.md' and '~/.claude/projects/*/memory/MEMORY.md' as write targets. Now that this skill is installed as shared content for Codex and Gemini too, corrections made during a Codex or Gemini session would be written to Claude's config files rather than the active tool's user-level files.",
+      "severity_justification": "Corrections and preferences persisted during Codex/Gemini sessions would land in Claude's config, polluting it with irrelevant rules or failing to actually improve the active tool's behavior. Cross-session learning is a core function of this skill.",
+      "category_justification": "Hardcoded Claude-specific paths in a now-shared skill produce incorrect behavior when used outside Claude.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/root-cause-tracing/find-polluter.sh",
+      "start_line": 21,
+      "end_line": 23,
+      "message": "The documented test pattern example does not match what this `find` command searches: paths emitted by `find .` are prefixed with `./`, so the advertised pattern `src/**/*.test.ts` will commonly find zero tests. This makes the script report a clean result without checking anything.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 21 uses `find . -path \"$TEST_PATTERN\"` and the documented example pattern is `src/**/*.test.ts`. Since `find .` emits paths with `./` prefix (e.g. `./src/foo/bar.test.ts`), the pattern without the `./` prefix will match nothing, causing the script to silently report 'no polluter found' without actually running any tests.",
+      "severity_justification": "A script that silently finds zero test files and reports a clean result without testing anything provides false confidence — the entire purpose of the tool is undermined.",
+      "category_justification": "The `find` command's path matching is incorrect, causing the script to not locate the files it's supposed to process.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/root-cause-tracing/find-polluter.sh",
+      "start_line": 32,
+      "end_line": 36,
+      "message": "If the pollution target already exists before a test runs, the script skips that test and continues, then can finish with “No polluter found” even though no tests were actually evaluated. A pre-existing pollution target should fail fast or be cleaned explicitly; otherwise the script can produce a false clean result.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified by tracing the script logic: if the pollution target exists before the loop starts, every iteration hits the `[ -e \"$POLLUTION_CHECK\" ]` guard, skips via `continue`, and the loop exits normally, printing the false 'No polluter found' success message at line 55.",
+      "severity_justification": "A debugging utility that silently produces a false clean result on a common edge case (running after pollution already occurred) undermines its core purpose and wastes developer time.",
+      "category_justification": "The script's control flow has a logical error: it should fail fast or clean up pre-existing pollution before the loop, not skip all tests and report clean.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/agents/javascript-developer.md",
+      "start_line": 51,
+      "end_line": 60,
+      "message": "Several items listed as “ES2024+ Features” are still proposal-stage or not universally available JavaScript syntax (for example pipeline operator, pattern matching, and record/tuple). As a default shared agent, this can lead it to generate code that current runtimes and toolchains cannot parse unless a project has explicit transpiler support.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Verified: lines 51-64 list pipeline operator, pattern matching, and Record & Tuple as 'ES2024+ Features'. All three are TC39 proposals still well below Stage 4 — they are not part of any released ECMAScript standard. An agent instructed to use these as standard ES2024 features may generate code that current runtimes cannot parse without specific transpiler configuration.",
+      "severity_justification": "In practice most LLMs contextualise proposal-stage features correctly when they see actual project code/config, reducing real-world impact. But the mislabelling is a concrete inaccuracy that could cause the agent to push unsupported syntax on greenfield or plain-JS projects.",
+      "category_justification": "The agent instruction file contains factually incorrect claims about language standard inclusion, which can propagate to incorrect code generation.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/agents/frontend-developer.md",
+      "start_line": 85,
+      "end_line": 87,
+      "message": "Core Web Vitals guidance is outdated: FID was replaced by INP as a Core Web Vital in 2024. Keeping FID as the target metric will steer frontend work toward the wrong performance signal.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Verified: line 85 lists 'FID < 100ms' as a Core Web Vitals target. Google officially retired FID and replaced it with INP (Interaction to Next Paint, threshold < 200ms) as a Core Web Vital in March 2024. An agent following this guidance targets a deprecated metric.",
+      "severity_justification": "Misleading but not blocking — a developer following this agent's guidance would track an obsolete metric. It steers work toward the wrong signal but does not produce broken code or security issues.",
+      "category_justification": "The agent file contains an outdated factual claim about an industry standard metric, which would cause the agent to give incorrect performance guidance.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/condition-based-waiting/SKILL.md",
+      "start_line": 47,
+      "end_line": 49,
+      "message": "The example call omits the required `description` argument shown in the implementation signature and later verification checklist. Copying this example would either fail type-checking or bypass the descriptive timeout errors this skill is trying to enforce.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: Quick Patterns table (lines 47-51) shows waitFor() calls with only the condition argument. The Implementation section's TypeScript signature has `description: string` as a required second parameter, and the verification checklist explicitly requires every waitFor call to include a description. An AI agent copying these patterns would produce code that fails type-checking and bypasses the descriptive error messages the skill is designed to enforce.",
+      "severity_justification": "This is a documentation inconsistency in a skill template. Impact is limited to agents copying the Quick Patterns examples verbatim, which would produce a TypeScript compile error caught at dev time.",
+      "category_justification": "The issue is an inconsistency between the example patterns and the documented function signature within the same skill file.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/ralf-it/foreign-eyes-prompt.md",
+      "start_line": 103,
+      "end_line": 108,
+      "message": "The text requires a 10-minute timeout, but the concrete CLI commands shown here do not wrap the foreign agent invocation in any timeout mechanism. Agents following the copyable command can hang indefinitely despite the documented timeout behavior.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 103 documents a 10-minute timeout requirement but both CLI commands shown lack any timeout wrapper (e.g. `timeout 600 codex exec ...`). An agent following the copyable commands will invoke the foreign CLI with no enforced timeout, directly contradicting the stated behavior.",
+      "severity_justification": "Agents or users following the examples could experience an indefinitely hanging session, but this is a documentation-consistency issue in a skills file rather than production code. The actual harm depends on how long the foreign CLI takes.",
+      "category_justification": "The inconsistency is between the documented requirement and the example commands provided, making it a documentation/instruction accuracy issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/ralf-it/SKILL.md",
+      "start_line": 147,
+      "end_line": 152,
+      "message": "The reference commands do not include any timeout wrapper even though the next line says both invocations use a 10-minute timeout. This makes the reference unsafe to copy and can leave the workflow hanging on a stalled foreign CLI call.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: lines 147-151 show a reference command table with no timeout wrapper on either CLI command, while line 152 explicitly states 'Both use a 10-minute timeout (600000ms)'. The same inconsistency as Finding 13 but in a different file.",
+      "severity_justification": "Same as Finding 13 — documentation inconsistency that could cause indefinite hangs when commands are followed literally, but limited to this skills/workflow file.",
+      "category_justification": "Inconsistency between the stated behavior and the copyable command examples within the same file.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/skills/optimize-agents-md/SKILL.md",
+      "start_line": 3,
+      "end_line": 3,
+      "message": "The description refers to `AGENT.md`, but the file format used throughout the repo is `AGENTS.md`. This typo can make the trigger less clear for the intended file.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 3 of the frontmatter description contains 'AGENT.md' (no 'S') — the phrase 'when AGENT.md or CLAUDE.md files exceed 200 lines' — while the rest of the same line and the entire repo uses 'AGENTS.md'. The typo is real and inconsistent with the repo convention.",
+      "severity_justification": "The description is used as skill metadata that helps AI tools decide when to invoke the skill. A typo here makes the trigger condition slightly less precise but is unlikely to cause a meaningful behavioral difference given the surrounding correct references.",
+      "category_justification": "The issue is a naming inconsistency/typo in a frontmatter description field.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/user/.agents/agents/code-reviewer.md",
+      "start_line": 164,
+      "end_line": 166,
+      "message": "This shared reviewer is installed for Codex and Gemini as well, but it only tells the agent to follow `CLAUDE.md`. In non-Claude contexts the relevant project instructions may be `AGENTS.md` or `GEMINI.md`, so this can cause reviews to ignore the active tool's instruction file.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "exacerbated-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: line 164 reads 'Follows project coding standards from CLAUDE.md'. The PR moves this file to shared content installed for all tools. In Codex or Gemini contexts the project instruction file is AGENTS.md (or GEMINI.md), so the reviewer would direct the agent to look at the wrong — potentially absent — file.",
+      "severity_justification": "The reviewer ignoring the active tool's project instruction file would reduce review quality in non-Claude contexts, but since Codex/Gemini support for agent files is still limited and Claude is the primary consumer, real-world impact is modest.",
+      "category_justification": "Hardcoded tool-specific reference in a now-shared agent file produces incorrect behaviour in non-Claude environments.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "AGENTS.md",
+      "start_line": 7,
+      "end_line": 7,
+      "message": "This now presents the repository as supporting Claude, Codex, and Gemini, but the immediately following prerequisites section still says the configuration assumes Claude Code plugins. The top-level guidance should distinguish Claude-only prerequisites from requirements that apply to all supported tools, otherwise Codex/Gemini users get contradictory setup guidance.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 7 declares support for Claude, Codex, and Gemini, but the Prerequisites section (lines 11-15) unconditionally states 'This configuration assumes the following Claude Code plugins are installed' with no qualifier that these only apply to Claude. The PR introduced the multi-tool claim on line 7 without updating the prerequisites section to scope it appropriately.",
+      "severity_justification": "Confusing setup guidance for non-Claude users, but no functional breakage — Codex and Gemini users who ignore the Claude-specific prerequisites will still get a working install.",
+      "category_justification": "The mismatch between the updated project purpose statement and the un-updated prerequisites section creates misleading developer-facing documentation.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

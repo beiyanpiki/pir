@@ -1,0 +1,251 @@
+{
+  "pr_key": "vanyastaff_nebula_224-d5ba86dd",
+  "pr": {
+    "repo": "https://github.com/vanyastaff/nebula",
+    "pr_number": 224,
+    "base": "c4879eb1c460e45c11ce28e3e8a305194023b64e",
+    "head": "d5ba86dd1014b79e263d93a1e324eeec0d0b306c"
+  },
+  "findings": [
+    {
+      "file": "crates/credential/src/layer/encryption.rs",
+      "start_line": 133,
+      "end_line": 158,
+      "message": "Lazy rotation CAS write-back succeeds but returns a credential with the old version number. After `inner.put(updated, CAS{expected_version: credential.version})` succeeds, the backing store version is incremented to N+1, but `credential.version` is still N. The returned `StoredCredential` is therefore stale. Any caller that uses this version for a subsequent CAS write (e.g., the resolver's refresh loop in resolver.rs:306) receives `VersionConflict { actual: N+1 }`. The resolver's 3-attempt retry loop absorbs this, but each lazy rotation consumes one retry slot — under concurrent modifications a legitimate refresh can exhaust the budget and fail. Code paths outside the resolver that do a single-shot CAS after `get()` will always fail when lazy rotation fires.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: when lazy rotation CAS write-back succeeds, the Ok(_) is discarded and credential.version remains N while the backing store is at N+1. The returned StoredCredential has a stale version. The resolver's 3-attempt retry loop absorbs this today, but single-shot CAS callers would always fail on lazy rotation, and the resolver wastes a retry slot on each rotation event.",
+      "severity_justification": "The bug causes a stale version in the returned credential after lazy rotation, which wastes the resolver's retry budget and will silently break any future single-shot CAS callers. The current resolver code is resilient (3-attempt loop) but the broken get() contract is a real hazard.",
+      "category_justification": "The get() method returns a StoredCredential with an incorrect (stale) version field when lazy rotation fires — a factual correctness bug in the return value.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/layer/encryption.rs",
+      "start_line": 85,
+      "end_line": 102,
+      "message": "`EncryptionLayer::with_keys()` does not register the empty-string key alias that `new()` registers (line 72: `keys.insert(String::new(), key)`). Any `EncryptedData` with `key_id = \"\"` (produced by the public `encrypt()` and `encrypt_with_aad()` functions, which both use `EncryptedData::new(\"\", …)`) cannot be decrypted via a `with_keys()` layer — `key_for_id(\"\")` returns `Err(StoreError::Backend)`. An operator who starts with `new()` mode, has records written by the pre-PR code or by callers of the public `encrypt` API, and then switches to `with_keys()` for key rotation will find those records permanently unreadable.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: with_keys() does not register the empty-string alias that new() registers. Records with key_id=\"\" (pre-v3 data deserialized via #[serde(default)], or data from direct callers of crypto::encrypt/encrypt_with_aad) cannot be decrypted through a with_keys() layer. key_for_id(\"\") returns Err(StoreError::Backend). The migration requirement is only mentioned in an internal struct field comment, not in with_keys() docs, making silent data loss a real operator risk.",
+      "severity_justification": "Credentials that cannot be decrypted are permanently unreadable. Any operator upgrading from pre-v3 data or from new() to with_keys() without understanding the undocumented migration requirement will lose data.",
+      "category_justification": "with_keys() is missing a key registration that new() provides, causing decryption to fail for a valid class of stored records.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/crypto.rs",
+      "start_line": 196,
+      "end_line": 205,
+      "message": "The public `encrypt()` function is still exported from `crates/credential/src/lib.rs` (line 118: `pub use crate::crypto::{EncryptedData, EncryptionKey, decrypt, encrypt}`) but now produces `EncryptedData` with `key_id = \"\"`. Any record written through this public API cannot be read back by an `EncryptionLayer::with_keys()` instance (which has no empty-string key alias). This silently creates data that is durable but unreadable once multi-key rotation is enabled, with no compile-time or runtime warning at write time.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "All claims verified: encrypt() is publicly exported from lib.rs:118, produces key_id=\"\", and with_keys() cannot decrypt such records. In production code no path currently uses encrypt() to write stored credentials, but the public API creates a silent footgun for callers who bypass EncryptionLayer.",
+      "severity_justification": "No active production code misuse exists today, but the exported API silently creates unreadable-under-rotation records with no warning, which will trap future integrators.",
+      "category_justification": "The core issue is a public API function producing data incompatible with the new multi-key layer, without any warning or restriction at the API boundary.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/context.rs",
+      "start_line": 203,
+      "end_line": 218,
+      "message": "`CredentialContext::resolve_credential` now passes `format!(\"{:?}\", S::pattern())` — a non-unique category string like `\"SecretToken\"` — as the `expected_kind` argument to `CredentialResolverRef::resolve_scheme`. Previously this parameter carried `S::KIND`, a unique per-type string. Two different `AuthScheme` types that share the same `AuthPattern` (e.g., any two custom schemes both returning `AuthPattern::SecretToken`) will now receive the same string, silently breaking any resolver implementation that used the kind string for type-based dispatch. The `downcast::<S>()` call provides type safety, but if the resolver returns the wrong concrete type, the only error is `SchemeMismatch { actual: \"unknown\" }`, which gives no useful diagnostic.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The semantic change is real: expected_kind changed from unique-per-type S::KIND to a category string shared across multiple types. The trait docs say the parameter is for error messages only, not dispatch, and there are zero production implementations of CredentialResolverRef in the codebase. The actual: unknown diagnostic issue pre-dates this PR.",
+      "severity_justification": "No existing code is broken since there are no production CredentialResolverRef implementations. The docs say expected_kind is error-message-only. The concern is speculative about future external implementors being misled.",
+      "category_justification": "The core issue is a semantic degradation of a public trait parameter that could mislead future implementors, rather than a bug or security issue.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/snapshot.rs",
+      "start_line": 152,
+      "end_line": 152,
+      "message": "`scheme_pattern` is stored as `format!(\"{:?}\", S::pattern())`. Any two different `AuthScheme` types that both return `AuthPattern::Custom` (the escape hatch for plugin-defined patterns) will have identical `scheme_pattern` strings of `\"Custom\"`. When `project::<S>()` fails for such types the error reports `expected: \"Custom\", actual: \"Custom\"`, which is completely undiagnosable. Since `AuthPattern` is `#[non_exhaustive]`, adding new shared variants has the same problem. The type-safety of `downcast_ref` is unaffected, but error messages become useless.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: scheme_pattern stores format!(\"{:?}\", S::pattern()), so two Custom-pattern types produce identical scheme_pattern strings. The SchemeMismatch error becomes expected: Custom, actual: Custom which is undiagnosable. Type safety via downcast_ref is unaffected — only error message quality degrades.",
+      "severity_justification": "Purely a diagnostic/DX issue. Type safety is preserved, no data corruption or security implications. Only affects error messages when a scheme type mismatch occurs for Custom-pattern or same-pattern types.",
+      "category_justification": "The issue is entirely about error message quality and developer experience, not correctness or security.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/credential.rs",
+      "start_line": 125,
+      "end_line": 125,
+      "message": "The `TESTABLE: bool = false` const is now inconsistent with the new `test()` semantics. `test()` returns `Ok(None)` to signal non-testability, making the const redundant and misleading: a credential can return `Ok(Some(TestResult::Success))` from `test()` while still advertising `TESTABLE = false`, or vice versa. Caller code that gates `test()` invocations on `C::TESTABLE` (as suggested in the crate's plans, e.g. `plans/credential-flows-hld.md:542`) will skip testing for credentials that have correctly overridden `test()` but left `TESTABLE = false`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Confirmed: TESTABLE const still exists but test() now signals non-testability via Ok(None), creating dual-source-of-truth. credential-flows-hld.md:542 explicitly shows future code will gate test() on TESTABLE. No current production code uses C::TESTABLE for dispatch, but the plan makes the inconsistency a real forward hazard.",
+      "severity_justification": "A credential that overrides test() correctly but leaves TESTABLE=false will be silently skipped by the planned executor implementation. Dual-source-of-truth is a maintenance trap but no current production code is broken.",
+      "category_justification": "The TESTABLE const and test() return value are now semantically inconsistent, creating a correctness issue when the executor is implemented per the plan.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/description.rs",
+      "start_line": 146,
+      "end_line": 148,
+      "message": "`CredentialDescriptionBuilder::build()` now requires `pattern` and returns `Err(\"pattern is required\")` as a plain `&str`-typed `String` if it is absent. The error type is inconsistent with all other builder error messages (also `String`, so not a type mismatch), but more critically this is a silent runtime regression for any existing code using the builder without calling `.pattern()`. There is no compile-time enforcement. The `Credential` derive macro (credential.rs, expanded in `credential::expand`) sets `pattern` automatically, but manual builder usage — including the example in `examples/credential_description.rs` before this PR's patch — silently fails at runtime rather than compile time.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "All in-repo builder calls were updated to include .pattern() in this PR. The failure is not silent — build() returns Err(pattern is required) with a clear message. The pattern field follows the same runtime-only enforcement as all other required builder fields (key, name, description, properties), so this is not a regression in the enforcement model. The claim about external code is speculative.",
+      "severity_justification": "No current code is broken. The pattern field uses the same runtime-enforcement model as all other required builder fields, so there is no new inconsistency.",
+      "category_justification": "The finding is about compile-time vs runtime enforcement of a required builder field.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "start_line": 165,
+      "end_line": 165,
+      "message": "The Rust toolchain version has been changed from `1.100` to `1.94`. This seems to be a significant downgrade and might be a typo for `1.9.4` (which would be very old) or an incorrect version string. The `dtolnay/rust-toolchain` action expects a version like `stable`, `beta`, `nightly`, or a specific version `1.78.0`. The project's documentation (`CLAUDE.md`) specifies Rust 1.94+, but `1.94` is not a valid Rust version string. This will likely cause the CI job to fail.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "1.94 is a valid Rust version string accepted by dtolnay/rust-toolchain (partial versions without patch are supported by rustup). Rust 1.94 exists and is the project's documented MSRV per CLAUDE.md. The git log confirms this is an intentional fix (restore MSRV toolchain to 1.94), not a downgrade. The finding has it backwards: 1.100 was the incorrect version, 1.94 is correct.",
+      "severity_justification": "The finding is incorrect; the change is a correct bug fix. No real issue exists.",
+      "category_justification": "The finding relates to CI configuration and toolchain version specification.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/layer/encryption.rs",
+      "start_line": 204,
+      "end_line": 218,
+      "message": "The error handling for lazy re-encryption on read could lead to data being returned to the caller without the re-encryption write-back being persisted. The code ignores all errors from `self.inner.put`, including transient backend errors, by matching on `Ok(_)` or `Err(StoreError::VersionConflict { .. })` and doing nothing for other errors. If a transient error occurs during the `put` operation, the re-encryption is silently dropped, and the old key will be used again on the next read, leading to repeated re-encryption attempts. The error should be logged or propagated.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding misreads the match statement. The third arm Err(other) => return Err(other) propagates all non-VersionConflict errors including transient backend errors. Only VersionConflict is intentionally swallowed with a comment explaining the retry-on-next-read design. The claim that transient errors are silently dropped is factually wrong.",
+      "severity_justification": "Finding is incorrect; no real issue exists.",
+      "category_justification": "The finding concerns error handling in the lazy re-encryption write-back path.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/crypto.rs",
+      "start_line": 234,
+      "end_line": 240,
+      "message": "The `decrypt` function returns a `Zeroizing<Vec<u8>>` to ensure the decrypted plaintext is zeroed on drop. However, the calling code in `EncryptionLayer` takes ownership of the inner `Vec<u8>` via `std::mem::take(&mut *plaintext)`, which circumvents the zeroizing behavior. The returned vector `credential.data` is a plain `Vec<u8>` and will not be zeroed when it goes out of scope, leaving sensitive data in memory. The `EncryptionLayer::get` method should return a zeroizing wrapper around the data.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "std::mem::take on the Zeroizing<Vec<u8>> does leave the extracted Vec unzeroed — the Zeroizing wrapper holds an empty Vec on drop, zeroing nothing. The protection added to decrypt() is defeated. The .claude docs explicitly document this extraction pattern, indicating the team is aware but it remains a real semantic inconsistency.",
+      "severity_justification": "Practical impact is limited: StoredCredential is short-lived, actual secrets end up in SecretString which does zeroize, and JSON deserialization creates multiple transient unzeroed copies regardless. The Zeroizing on raw JSON bytes provides marginal protection at best.",
+      "category_justification": "The finding is about memory hygiene for sensitive credential data — the zeroizing contract on decrypted plaintext is violated.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/credential/src/credentials/mod.rs",
+      "start_line": 26,
+      "end_line": 27,
+      "message": "Changing the built-in `CredentialState::KIND` values here makes existing stored credentials unreadable: `CredentialResolver::load_and_verify` rejects any record whose `state_kind` does not equal the new `C::State::KIND`, so previously stored API key records with `bearer` and basic-auth records with `basic_auth` will now fail resolution (and basic-auth also has a changed JSON field shape). This needs a compatibility path or explicit migration before the old kinds are removed.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The mechanism is factually correct: `load_and_verify` in `resolver.rs` checks `stored.state_kind != C::State::KIND` and returns `KindMismatch`, so records with old kinds `\"bearer\"` or `\"basic_auth\"` would fail with the new kinds `\"secret_token\"` and `\"identity_password\"`. The JSON field rename (`username`→`identity`) is also real. The finding correctly identifies specific lines and the specific check that breaks compatibility. Severity is low because the only remaining storage backend is `InMemoryStore` (non-persistent), the PR explicitly documents this as a breaking change, and the project is in alpha with no persistent data at risk.",
+      "severity_justification": "The mechanism is real but practical impact is minimal: no persistent storage backends exist (only in-memory), making migration of existing stored credentials impossible/unnecessary. It's also an explicitly documented breaking change for an alpha-stage system.",
+      "category_justification": "Identifies a data compatibility break where existing stored records would be rejected by the updated resolver due to changed state_kind values and renamed JSON fields.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "crates/webhook/src/rate_limit.rs",
+      "start_line": 63,
+      "end_line": 64,
+      "message": "This hard-coded value does not match `DEFAULT_MAX_PATHS`, which is still `10_000` above and is what `new()` assigns to `max_paths`. The docs now understate the cap by 10x and will drift if the constant changes; keep the intra-doc link or use the correct value.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: `DEFAULT_MAX_PATHS` is defined as `10_000` at line 23, but the `new()` doc comment at line 63 now reads `1 000` (1,000) after this PR replaced the intra-doc link with a hardcoded value. The discrepancy is 10×. This was introduced by the final commit `d5ba86dd` which changed `[\\`DEFAULT_MAX_PATHS\\`]` to `1 000` instead of `10 000`.",
+      "severity_justification": "Pure documentation error — runtime behavior is correct since `new()` still assigns `DEFAULT_MAX_PATHS` (10,000). Misleading to API users but no functional impact.",
+      "category_justification": "The only issue is a wrong value in a doc comment; no code behavior is affected.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

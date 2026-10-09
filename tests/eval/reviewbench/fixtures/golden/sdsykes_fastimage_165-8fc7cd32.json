@@ -1,0 +1,575 @@
+{
+  "pr_key": "sdsykes_fastimage_165-8fc7cd32",
+  "pr": {
+    "repo": "https://github.com/sdsykes/fastimage",
+    "pr_number": 165,
+    "base": "7a0dcf780e6d8cd7686520a3a1f57e7cd85b0b46",
+    "head": "8fc7cd32904240c2c841e70aef2ba5c3bb659ffd"
+  },
+  "findings": [
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 257,
+      "end_line": 268,
+      "message": "When a format has no resolution data, the parser returns nil, which causes parse_packets to raise CannotParseImage (line 488). This is rescued in fetch, but @resolution is never set, so defined?(@resolution) remains false forever. Every subsequent call to fi.resolution or fi.resolution_units triggers a full re-fetch of the image. Verified empirically: calling resolution three times on a GIF produces three fetch invocations. For HTTP URIs this means three network requests per call pair. Fix: explicitly set @resolution = nil (and @resolution_units = nil) before fetching, or set them when CannotParseImage is caught, so the defined? guard can short-circuit on subsequent calls.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: when parse_resolution returns nil, parse_packets raises CannotParseImage which is rescued in fetch without setting @resolution. Since defined?(@resolution) stays false, every subsequent call to resolution or resolution_units triggers another full fetch invocation — confirmed by reading the code path.",
+      "severity_justification": "For HTTP URIs this causes repeated network requests per call, wasting resources and introducing latency. For most image formats (GIF, WebP, SVG, PSD, ICO, etc.) resolution returns nil, making this the common case rather than an edge case.",
+      "category_justification": "The issue causes redundant re-fetching of image data (including network requests) on every call to resolution/resolution_units when the result is nil, rather than caching the nil result.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 35,
+      "end_line": 44,
+      "message": "After reading the JFIF APP0 segment, the code accesses data[7].ord and data[8, 4].unpack without first verifying that the segment is long enough. If a malformed JPEG has an APP0 segment shorter than 8 bytes, data[7] is nil and nil.ord raises NoMethodError. fetch does not rescue NoMethodError, so this exception propagates uncaught to the caller rather than returning nil. A length guard (e.g., next/return :started unless data.length >= 12) is needed before those accesses.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: data[7].ord is accessed unconditionally after the JFIF\\0 prefix check with no length guard. Ruby's String#[] returns nil for out-of-bounds access, and nil.ord raises NoMethodError. fetch's rescue clauses don't include NoMethodError, so it propagates to the caller for malformed APP0 segments shorter than 8 bytes.",
+      "severity_justification": "Only triggered by malformed JPEG files with a JFIF\\0-prefixed APP0 segment shorter than 8 bytes — an unusual edge case. The impact is an unexpected exception rather than incorrect behavior or data loss.",
+      "category_justification": "Missing input validation causes an uncaught exception for malformed input, affecting error handling robustness.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/exif.rb",
+      "start_line": 88,
+      "end_line": 96,
+      "message": "In read_rational_resolution, when absolute_pos < @stream.pos (i.e., the rational value's file offset is behind the current stream position), the code does next if skip_amount < 0, silently dropping that resolution value. The result is x_resolution or y_resolution stays nil, and the caller (tiff.rb or jpeg.rb) returns nil for the whole resolution even though the data exists in the file. This can occur with legal TIFF files where rational values are stored before the IFD. The only correct fix for a forward-only stream would be to raise CannotParseImage or return nil explicitly instead of silently skipping.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Factually correct: next if skip_amount < 0 silently drops the rational value, leaving x_resolution/y_resolution nil, and both callers return nil for the whole resolution. The scenario only occurs with technically-legal-but-unusual or malformed TIFF files where rational data precedes the IFD scan position.",
+      "severity_justification": "Only affects TIFFs where rational offsets point to positions before the end of the IFD scan area — practically non-existent in real-world files, only in malformed/crafted inputs. The failure mode (returning nil instead of resolution) is unhelpful but not dangerous.",
+      "category_justification": "Silent data loss on edge-case input rather than a crash or incorrect value — a robustness/error-handling concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/exif.rb",
+      "start_line": 76,
+      "end_line": 84,
+      "message": "The early-exit break condition inside parse_exif_ifd is: break if rational_offsets has both X and Y keys && @resolution_unit. ResolutionUnit is an optional TIFF tag (default 2 = inch when absent). When it is absent, @resolution_unit remains nil, so the && @resolution_unit term is falsy and the break never fires even after all needed data is collected. The loop runs through all remaining IFD entries unnecessarily. The condition should break when both rational offsets are collected, separately tracking whether the resolution unit tag was encountered.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: @resolution_unit starts nil and is only set when TAG_RESOLUTION_UNIT is found. The break condition includes && @resolution_unit, which is falsy when the optional ResolutionUnit tag is absent. The early-exit optimization never fires for such files, causing the loop to scan all remaining IFD entries even after both rational offsets are already collected.",
+      "severity_justification": "Pure performance issue — results are still correct since the rational offsets are already stored when break should have fired. Only wasteful extra IFD scanning occurs; no behavioral difference in output.",
+      "category_justification": "The early-exit optimization in the IFD scan loop fails to trigger when ResolutionUnit tag is absent, causing unnecessary iteration over remaining IFD entries.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/bmp.rb",
+      "start_line": 18,
+      "end_line": 26,
+      "message": "The nil guard only covers the case where both x_ppm and y_ppm are zero (return nil if x_ppm == 0 && y_ppm == 0). If only one dimension is zero — or if either value is negative (the fields are signed 32-bit longs per the BMP spec; some encoders write -1 or other sentinel values) — the code returns a nonsensical resolution like [[0, 2834], :meters] or [[-2834, -2834], :meters]. The guard should be return nil if x_ppm <= 0 || y_ppm <= 0 to reject any non-positive PPM value.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: the guard `x_ppm == 0 && y_ppm == 0` only catches the both-zero case. Confirmed via Ruby that [0, 2834] returns [[0, 2834], :meters] and [-2834, -2834] returns [[-2834, -2834], :meters], both nonsensical resolutions that should be nil.",
+      "severity_justification": "Only affects unusual BMP files with asymmetric zeros or negative sentinel values. The consequence is returning a wrong resolution value (like [0, 2834]) rather than nil — incorrect but unlikely to cause serious downstream issues.",
+      "category_justification": "The nil guard logic is incomplete, causing incorrect (non-nil) resolution values to be returned for BMPs with one-zero or negative PPM values.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/png.rb",
+      "start_line": 14,
+      "end_line": 22,
+      "message": "When a pHYs chunk is matched, the code unconditionally reads 9 bytes and accesses data[8].ord, without first verifying that length == 9. If the chunk length is smaller than 9 (malformed PNG), data[8] is nil and nil.ord raises NoMethodError, which propagates uncaught. The fix is to validate length == 9 (or at least >= 9) before reading; return nil or :no_units if invalid.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The FiberStream#read raises FastImage::CannotParseImage (not a short string) when fewer bytes than requested are available, which is caught by fetch's rescue clause. @stream.read(9) cannot return a string shorter than 9 bytes, so data[8] is never nil in normal operation. The specific nil.ord/NoMethodError propagation claim is factually incorrect for this codebase's stream implementation.",
+      "severity_justification": "Even if the claim were correct, it would only affect malformed/truncated PNG input; the actual behavior is a caught CannotParseImage rather than an uncaught NoMethodError.",
+      "category_justification": "The finding is about error handling for malformed input.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 45,
+      "end_line": 62,
+      "message": "The resolution method returns Integer values when parsed from a JFIF APP0 segment (via unpack('nn')) but Float values when parsed from EXIF APP1 (num.to_f / den). The same logical value — e.g. 72 DPI — is returned as [72, 72] from JFIF and [72.0, 72.0] from EXIF. This is observable in the test fixtures: test.jpg (JFIF) has [[72, 72], :inches] while test2.jpg (EXIF) has [[72.0, 72.0], :inches]. Callers that compare resolution values or use Integer-specific methods will behave differently depending on which segment is present, without any indication in the API. The return type should be consistent (prefer Float across all paths, or document the distinction and guarantee it).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified from code and test fixtures: JFIF APP0 uses unpack('nn') returning Integers, while EXIF APP1 uses num.to_f/den returning Floats. Test fixtures explicitly show [[72, 72], :inches] for test.jpg (JFIF) and [[72.0, 72.0], :inches] for test2.jpg (EXIF JPEG) — same format, different types. The inconsistency extends within JPEG (not just TIFF vs others).",
+      "severity_justification": "Ruby's == semantics handle Integer/Float comparison transparently for most use cases. Only callers using .eql?, Hash keys, or type-checking would be affected. An unexpected but mostly benign inconsistency.",
+      "category_justification": "The return type of the public API is inconsistent within the same format depending on which JPEG segment is present, affecting API contract predictability.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 476,
+      "end_line": 484,
+      "message": "The parse_packets method uses result.size == 2 as the signal to extract resolution data. This check is applied after result != nil but before any type assertion. If a future parser were to return a two-element array for a different reason, or if a resolution parser returned a malformed tuple (e.g. just [x, y] with no units symbol), the branch would silently mis-assign @resolution and @resolution_units without raising. Unlike the size path — which checks both @property == :size and result.size == 3, then calls result.pop — the resolution path has no type checking on result[0] or result[1]. At minimum, the condition should also verify result[0].is_a?(Array) && result[1].is_a?(Symbol) to fail loudly rather than assign garbage.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding mischaracterizes the size path comparison — the resolution branch also checks @property == :resolution, identical in structure to the size path. The actual concern (no element-type validation) applies equally to the size path and is a generic defensive programming suggestion for controlled internal code with no current bug. No actual defect is identified.",
+      "severity_justification": "Even if valid, this is theoretical defensive programming against hypothetical future internal bugs, not an actual current issue.",
+      "category_justification": "A structural code quality concern about defensive validation in internal dispatch logic.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 51,
+      "end_line": 52,
+      "message": "The code rescues any StandardError from `Exif.new` and continues, but it doesn't handle the case where `IOStream.new` might fail (e.g., if `data` is nil). This could lead to a `NoMethodError` on a nil `io` variable when `Exif.new` is called. It would be safer to wrap the `IOStream.new` call within the `rescue` block or ensure `data` is valid before this point.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "data is always a String (FiberStream raises CannotParseImage rather than returning nil). The data[0,6] == 'Exif\\0\\0' guard guarantees data is >= 6 bytes, so data[6..-1] returns '' or a non-nil string, never nil. StringIO.new and IOStream.new never fail with these inputs. The nil-io scenario the finding describes cannot occur.",
+      "severity_justification": "The scenario described is impossible given the stream implementation, so there is no actual risk.",
+      "category_justification": "The finding is about error handling for a scenario that cannot actually occur.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/png.rb",
+      "start_line": 17,
+      "end_line": 20,
+      "message": "The `pHYs` chunk is not guaranteed to be the first chunk after `IHDR`. The current loop correctly handles this, but the initial read of 33 bytes is unnecessary and potentially incorrect if other chunks appear before `pHYs`. The loop should start immediately after the 8-byte PNG signature, reading chunk headers dynamically.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The PNG spec mandates IHDR as the first chunk with exactly 13 bytes of data (25 bytes total including length/type/CRC fields). The 33-byte skip (signature + IHDR) is both correct and efficient. No valid PNG chunk can appear before IHDR. The loop correctly handles all chunks after IHDR. The finding is based on a misunderstanding of the PNG format.",
+      "severity_justification": "The claim is factually wrong; the code is correct per spec.",
+      "category_justification": "The finding makes an incorrect claim about PNG format structure and stream positioning.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 34,
+      "end_line": 34,
+      "message": "The JFIF density values are documented to be non-zero. If `x_density` or `y_density` is zero, it should be treated as an invalid or unspecified resolution, and the parser should probably return `nil` or continue searching for EXIF resolution data. The current implementation returns `[[0, 0], :unit]` which is ambiguous.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: no zero-guard exists in the JFIF path. The JFIF spec mandates density values > 0. BMP has an equivalent guard (return nil if x_ppm == 0 && y_ppm == 0) while JPEG doesn't, creating an inconsistency. A JPEG with zero density values would return [[0, 0], :inches] instead of nil.",
+      "severity_justification": "Only affects malformed JPEG files (spec mandates non-zero), but returning [[0, 0], :inches] is semantically wrong rather than nil. Minor inconsistency with BMP handling.",
+      "category_justification": "Missing validation for an invalid but possible input state, returning semantically incorrect data instead of nil.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 40,
+      "end_line": 40,
+      "message": "This line returns JFIF resolution as soon as it's found. However, a JPEG file can contain both JFIF and EXIF resolution information. According to the ExifTool documentation, EXIF resolution should be preferred over JFIF when both are present. The current logic prevents this by exiting early.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: test.jpg, orient_2.jpg, exif_orientation.jpg, test4.jpg, infinite.jpg all have both JFIF APP0 (first) and EXIF APP1. The code returns JFIF immediately, silently ignoring EXIF resolution data. The design decision to prefer JFIF over EXIF is not documented and deviates from common tool conventions (ExifTool prefers EXIF).",
+      "severity_justification": "In practice, JFIF and EXIF resolution values typically agree in files that contain both. The impact is only when the two sources disagree — an uncommon edge case. This is a design priority concern, not a functional bug.",
+      "category_justification": "The parser silently ignores EXIF resolution data when JFIF is present, which may return less authoritative data than available.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 454,
+      "end_line": 454,
+      "message": "The result from `parse_resolution` is an array `[[x, y], :units]`. Here, `result` is assigned to `@resolution`, but then `result` itself is also modified. The final line `result = result[0]` makes the method return just `[x, y]`. This is inconsistent with how other properties are handled and could be confusing. It would be clearer to assign the parts to `@resolution` and `@resolution_units` directly and then set the return value.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: @resolution is set to result[0] explicitly in line 479, then result is mutated to result[0], then instance_variable_set sets @resolution again to the same value. The double assignment is redundant and structurally inconsistent with how the size path works (which only uses instance_variable_set, not a prior explicit assignment).",
+      "severity_justification": "No behavioral bug — @resolution ends up with the correct value. This is purely a code clarity/readability concern about redundant assignment.",
+      "category_justification": "Redundant double-assignment with intermediate result mutation makes the code harder to read and understand than necessary.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 28,
+      "end_line": 28,
+      "message": "This code block checks if the JFIF identifier is `JFIF\\0`. However, it reads 5 bytes and compares against a 5-char string. The next byte, `data[5]`, which is the JFIF version, is not checked. Malformed files could cause issues. A more robust check might be `data.start_with?(\"JFIF\\0\")`.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified via Ruby: data[0, 5] == 'JFIF\\0' and data.start_with?('JFIF\\0') return identical results for all inputs. The finding identifies no concrete bug or behavioral difference. The 'malformed files could cause issues' claim is unsubstantiated and doesn't identify a specific failure mode.",
+      "severity_justification": "No actual issue exists — the two expressions are semantically equivalent.",
+      "category_justification": "The finding is a cosmetic style preference between two functionally equivalent expressions.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/tiff.rb",
+      "start_line": 25,
+      "end_line": 25,
+      "message": "When the `ResolutionUnit` tag is absent in a TIFF file, the specification defaults to `:inches`. The comment correctly states this, but the code implements it as part of an `else` clause that also handles `Exif::RESOLUTION_UNIT_INCHES`. This makes it slightly less explicit that a missing tag results in inches. A clearer implementation would check for a nil `exif.resolution_unit` explicitly to improve readability.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The code is correct and the comment already explains the nil-defaulting behavior. The suggested change (explicit nil case) produces identical behavior. This is a purely cosmetic preference that doesn't identify a bug, inconsistency, or concrete issue — the existing comment already provides the clarity the finding wants.",
+      "severity_justification": "No behavioral difference between current code and suggested fix.",
+      "category_justification": "A pure readability preference about how to express a default case in a case statement.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 255,
+      "end_line": 265,
+      "message": "In the `FastImage.resolution` class method, errors encountered while creating an instance or fetching resolution data will silently return `nil`. This may obscure actual issues with image parsing or fetching.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Silent nil-on-failure is the documented, library-wide design for all FastImage class methods. The resolution method is consistent with size, type, and animated? — all swallow errors by default, all support raise_on_failure: true. The docstring explicitly documents the nil-on-failure behavior. The finding is generic advice that applies equally to every other class method.",
+      "severity_justification": "No actual issue — behavior is consistent with the entire library's design and documented.",
+      "category_justification": "The finding is about error handling behavior.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/exif.rb",
+      "start_line": 152,
+      "end_line": 170,
+      "message": "In `read_rational_resolution`, the calculation assumes `den > 0`. Division by zero is theoretically avoided, but additional validation might help protect against corrupted data or unexpected states.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The code already has den > 0 guards before dividing — the finding itself acknowledges 'division by zero is theoretically avoided'. The suggestion for 'additional validation' is unspecified and vague, amounting to generic defensive programming advice with no concrete issue identified.",
+      "severity_justification": "No actual issue exists — the code already handles the den == 0 case by returning nil.",
+      "category_justification": "The finding is about defensive validation of numeric operations.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 35,
+      "end_line": 36,
+      "message": "In the `resolution` method of JPEG, the code processes JFIF and EXIF data but depends on fallback resolution order. Conflicts between these sources (e.g., mismatched units) might be misunderstood by consumers.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is too vague to be actionable. There is no actual 'conflict' scenario since only one source (JFIF or EXIF) is ever returned to callers — the early return on JFIF prevents both from being visible. The 'mismatched units' concern cannot materialize. This finding restates a general multi-source parsing concern without identifying a concrete defect.",
+      "severity_justification": "No concrete issue is identified; the described conflict scenario cannot occur in the current code.",
+      "category_justification": "The finding is a vague concern about API behavior and consumer understanding, not a specific code defect.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "test/test.rb",
+      "start_line": 124,
+      "end_line": 134,
+      "message": "Test `test_should_report_resolution_correctly` relies on file assertions solely against `GoodFixtures`. There appears to be no negative-case testing (e.g., invalid or missing metadata). This could leave edge scenarios untested.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The claim that there is no negative-case testing is factually wrong. GoodFixtures includes 40+ fixtures with nil expected resolution (GIF, WebP, SVG, ICO, PSD, etc.) that are all asserted in test_should_report_resolution_correctly. test_instance_resolution_returns_nil_for_format_without_resolution also explicitly tests the nil return. The remaining concern about malformed-input edge cases is a generic 'add more tests' suggestion.",
+      "severity_justification": "The core claim is incorrect; the existing tests do cover nil/no-resolution negative cases.",
+      "category_justification": "The finding is about test coverage.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/exif.rb",
+      "start_line": 102,
+      "end_line": 103,
+      "message": "When parsing EXIF data, the method does not account for streams where resolution information is rolled into uncommon TIFF directories. This restricts applicability to files compliant with usual EXIF standards.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The TIFF spec defines XResolution/YResolution/ResolutionUnit as IFD0 baseline tags — not placed in sub-directories by any standard. The finding provides no specific 'uncommon directory' name, no real-world file evidence, and no spec citation. The code correctly reads IFD0 where these tags are defined. The claim is vague and unverifiable.",
+      "severity_justification": "No concrete issue identified — the claim contradicts the TIFF specification.",
+      "category_justification": "The finding makes a claim about missing coverage for a non-standard data location.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "test/test.rb",
+      "start_line": 562,
+      "end_line": 567,
+      "message": "The test `test_instance_resolution_returns_nil_for_format_without_resolution` covers cases where resolution is `nil` but doesn't validate edge cases for invalid structure (e.g., corrupted PNG or inconsistent JFIF data).",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is a generic 'add more tests for edge cases' suggestion with no specific defect identified. The named test does exactly what it says — tests nil return for a format without resolution. The suggestion about corrupted PNG/JFIF could be applied to any test in any project without modification.",
+      "severity_justification": "No actual issue with the existing test is identified.",
+      "category_justification": "The finding is about test coverage for edge cases.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 75,
+      "end_line": 77,
+      "message": "In JPEG's `resolution`, the skipping mechanism for unsupported markers assumes marker consistency, yet rare scenarios (invalid tags or malformed segments) could crash parsing routines.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The skipframe pattern is identical to the pre-existing dimensions method. The finding makes a vague 'could crash' claim without identifying a specific exception or code path. FiberStream raises CannotParseImage (caught) on EOF rather than crashing. No concrete issue unique to the new resolution method is identified.",
+      "severity_justification": "Even if valid, it's the same risk that exists in the pre-existing dimensions method with the same skip pattern.",
+      "category_justification": "The finding is about robustness of malformed-input handling.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 436,
+      "end_line": 505,
+      "message": "The `fetch` method routes response handling generically but doesn't emphasize distinguishing between resolution-specific exceptions and unresolvable images. This could blend failures impairing debugging or supportability.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is entirely vague — no specific 'resolution-specific exception' is named, no concrete failure scenario is identified, and no actionable fix is suggested. The fetch method's uniform error handling applies identically to all properties and is pre-existing design. The finding could be applied word-for-word to size, type, or animated handling.",
+      "severity_justification": "No concrete issue identified.",
+      "category_justification": "The finding is about error handling design.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage.rb",
+      "start_line": 198,
+      "end_line": 198,
+      "message": "This returns both resolution and units. Instance methods return just one or another. It's inconsistent between each other but with class method allows to parse just once. And for instance methods it is parsed just once anyway",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: FastImage.resolution returns [[x,y], :units] while fi.resolution returns [x,y] — a different shape. Every other FastImage class method (size, type, animated?) returns the same type as its instance counterpart. This is a real API inconsistency introduced by this PR.",
+      "severity_justification": "It's a design inconsistency that could surprise users who switch between class and instance API, but both APIs are functional and documented. No runtime failures result.",
+      "category_justification": "The return type of the class method is inconsistent with the instance method API, breaking the pattern established by all other FastImage class methods.",
+      "producer": "human_review",
+      "source": {
+        "type": "review_comment",
+        "author": "cmrd-senya",
+        "url": "https://github.com/sdsykes/fastimage/pull/165#discussion_r3029831061",
+        "created_at": "2026-04-02T19:08:10Z",
+        "alignment": "on_chosen_head",
+        "original_commit": "8fc7cd32904240c2c841e70aef2ba5c3bb659ffd"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/exif.rb",
+      "start_line": 19,
+      "end_line": 19,
+      "message": "This introduces Ruby 2.0+ keyword-argument syntax even though the gemspec still declares support for Ruby >= 1.9.2 (`fastimage.gemspec:7`). On supported Ruby 1.9.x, this file will fail to parse before the gem can load; use an options hash or raise the minimum Ruby version.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The gemspec at line 7 declares `s.required_ruby_version = '>= 1.9.2'`, and keyword argument syntax (def initialize(stream, parse_resolution: false)) requires Ruby >= 2.0. A search of all lib/ files confirms this PR introduces the only occurrence of keyword argument syntax — no pre-existing usage exists to fall back on. On Ruby 1.9.x the file would fail to parse.",
+      "severity_justification": "It directly contradicts the declared minimum Ruby version in the gemspec, causing a hard parse failure on Ruby 1.9.x. In practice Ruby 1.9 is extremely old and likely unused, but the gemspec is the public compatibility contract.",
+      "category_justification": "This is a compatibility/build issue — the gem would fail to load on its declared minimum supported Ruby version.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "lib/fastimage/fastimage_parsing/jpeg.rb",
+      "start_line": 51,
+      "end_line": 51,
+      "message": "The safe-navigation operator requires Ruby 2.3+, but this gem still advertises Ruby >= 1.9.2 support in `fastimage.gemspec:7`. This will be a syntax error for supported Ruby versions below 2.3; avoid `&.` or update the supported Ruby version.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Line 51 of jpeg.rb uses `exif&.x_resolution && exif&.y_resolution` — the safe-navigation operator `&.`, which requires Ruby >= 2.3. The gemspec declares `s.required_ruby_version = '>= 1.9.2'`, and a search of all lib/ files confirms this PR introduces the only occurrence. On any Ruby < 2.3 it would be a syntax error.",
+      "severity_justification": "Same class of issue as finding 1: breaks the declared minimum supported Ruby version. Practically speaking nobody runs Ruby 1.9 or 2.0–2.2 today, but it is a concrete violation of the gemspec contract. Medium rather than high because real-world impact is negligible.",
+      "category_justification": "A compatibility/build failure on declared supported Ruby versions — the gem would fail to load on Ruby < 2.3.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "test/test.rb",
+      "start_line": 125,
+      "end_line": 129,
+      "message": "The new resolution coverage exercises URLs, file paths, and IOs, but not data URIs, even though data URI handling is a documented FastImage feature and existing tests cover it for size/type. Add a resolution data-URI case so this public API is protected on the same input forms as the rest of the library.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The test at lines 125-129 covers URL, file path, and IO but not data URIs. A DataUriImage constant already exists at line 85 and is used by other tests (size, type, content_length), establishing a clear pattern that is not followed for resolution. The gap is factually real and code-specific.",
+      "severity_justification": "Data URIs route through fetch_using_base64 → fetch_using_read, which is the same parsing infrastructure as the IO path that is already tested. The practical chance of a data-URI-specific regression being missed is very low.",
+      "category_justification": "This is a missing test case for a documented input modality.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "README.md",
+      "start_line": 79,
+      "end_line": 82,
+      "message": "This example creates a new remote `FastImage` instance for `resolution_units`, so readers copying it will make a second HTTP request for the same image. Use one instance for both calls to match the instance API and avoid demonstrating unnecessary network fetches.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Lines 79 and 81 each call `FastImage.new(\"https://switchstep.com/images/photo.jpg\")` independently, one for `.resolution` and one for `.resolution_units`. These are two separate instances, each making a network request. A single instance demonstrating both calls (as in `fi = FastImage.new(...); fi.resolution; fi.resolution_units`) would be both cleaner and more representative of how the instance API should be used.",
+      "severity_justification": "This is a documentation example issue — no runtime code is affected. It would only mislead readers who copy the example literally into making redundant HTTP requests.",
+      "category_justification": "The issue is in README example code demonstrating incorrect/inefficient usage of the public API.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

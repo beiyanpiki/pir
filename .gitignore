@@ -5,3 +5,5 @@ dist/
 .zcode/
 .env
 .DS_Store
+tests/eval/reviewbench/.cache/
+tests/eval/rb-out/

@@ -1,0 +1,851 @@
+{
+  "pr_key": "cmik_apilix_12-0c34439a",
+  "pr": {
+    "repo": "https://github.com/cmik/apilix",
+    "pr_number": 12,
+    "base": "4fe23e22e3937c38cb859a3b9c00b193bb309aa1",
+    "head": "0c34439aeebedc646d76d90db6b79a5c54b4cb8f"
+  },
+  "findings": [
+    {
+      "file": "server/package.json",
+      "start_line": 1,
+      "end_line": 23,
+      "message": "bcryptjs and jsonwebtoken are recorded in the lockfile's root-package dependencies section but are absent from server/package.json. The PR description says these were added to fix 'Cannot find module' crashes, but the package.json diff only adds simple-git. A fresh `npm install` in the server directory will not install bcryptjs or jsonwebtoken, and `npm ci` will fail with a lockfile/manifest mismatch.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: server/package.json is missing bcryptjs and jsonwebtoken as declared dependencies, while server/package-lock.json's root-package section explicitly lists both. npm install will skip them and npm ci will fail with a manifest/lockfile mismatch.",
+      "severity_justification": "Missing runtime dependencies cause immediate 'Cannot find module' crashes on startup in any clean install environment (CI, Docker, fresh developer checkout).",
+      "category_justification": "A missing declared dependency is a build/dependency management issue that breaks the server on any clean install.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1037,
+      "end_line": 1044,
+      "message": "The `dataDir` value used to construct repo paths in all three git sync routes is taken directly from the request body (`req.body.dataDir`). Any caller can supply an arbitrary `dataDir` (e.g. `/`) to make the server create git repositories and write workspace files anywhere on the filesystem that the server process can access. The path-traversal check on `workspaceId` does nothing to constrain `dataDir` itself. The routes should reject any client-supplied `dataDir` and use only `process.env.APILIX_DATA_DIR`.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: lines 1037, 1077, and 1112 all do `req.body.dataDir || process.env.APILIX_DATA_DIR`. The path-traversal check at e.g. line 1044-1045 only validates workspaceId relative to repoBase, not dataDir itself. The server has no authentication (open CORS, no middleware), making this a concrete arbitrary filesystem write vulnerability.",
+      "severity_justification": "An unauthenticated caller can write git repos and workspace.json files to any path the server process can access (e.g. /, /etc, home directory), which is a real arbitrary file-write vulnerability on the server host.",
+      "category_justification": "This is a path-traversal / arbitrary file-write security vulnerability caused by trusting client-supplied filesystem paths.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1044,
+      "end_line": 1044,
+      "message": "The path-traversal guard `repoDir.startsWith(path.resolve(repoBase))` is missing a trailing path separator. If `repoBase` is `/data/git-sync/workspaces`, a `workspaceId` of `../workspaces_evil/x` resolves to `/data/git-sync/workspaces_evil/x`, which starts with `/data/git-sync/workspaces` and passes the check. The same bug exists at lines 1083 and 1118. The fix, consistent with `assertInsideUserData` in electron/main.js, is to append `path.sep` to the base when comparing.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: all three git sync routes use `repoDir.startsWith(path.resolve(repoBase))` without a trailing path separator, allowing a workspaceId like `../workspaces_evil/x` to produce a path that passes the check but is outside the intended directory. electron/main.js line 132 demonstrates the correct pattern with `base + path.sep`.",
+      "severity_justification": "This guard bypass allows writing git repositories and workspace.json files to sibling directories outside the intended workspaces base, compounding the already-present arbitrary-path issue from finding 2.",
+      "category_justification": "This is a path-traversal vulnerability — an incomplete sanitization check that allows filesystem writes outside the intended directory boundary.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/syncEngine.ts",
+      "start_line": 49,
+      "end_line": 51,
+      "message": "`syncConfig.lastSynced` is never written by `writeSyncConfig` in storageDriver.ts, and the `SyncConfig` objects constructed in WorkspaceManagerModal never include a `lastSynced` field. As a result `localTs` is always `null`, the condition `remoteTs && localTs && remoteTs > localTs` is always false, and conflict detection is completely disabled — every pull silently overwrites local changes without warning.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: SyncConfig objects in WorkspaceManagerModal are built without lastSynced (lines 290, 303, 325). writeSyncConfig/readSyncConfig in storageDriver.ts never stores or returns a lastSynced field. In syncEngine.ts:49, localTs is always null, so the conflict check is always false — every pull silently overwrites local data without triggering ConflictError.",
+      "severity_justification": "Conflict detection is the safety net protecting users from losing local work when a remote has diverged. It being silently disabled means any pull permanently overwrites local changes without warning, a data-loss scenario.",
+      "category_justification": "The feature is implemented but dead — the conflict guard logic produces no output despite valid remote timestamps, due to a missing data field that makes the condition always evaluate to false.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/syncEngine.ts",
+      "start_line": 50,
+      "end_line": 51,
+      "message": "Conflict detection compares timestamps as strings (`remoteTs > localTs`). The HTTP adapter returns `Last-Modified` (RFC 2822 format, e.g. `Mon, 01 Jan 2024 00:00:00 GMT`) and S3 also returns `Last-Modified` in RFC 2822. RFC 2822 strings are not lexicographically sortable, so the comparison produces incorrect results for those providers. All timestamps should be parsed into `Date` objects before comparing.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: httpAdapter and s3Adapter return RFC 2822 Last-Modified header values from HTTP HEAD responses. syncEngine.ts:51 compares these with string `>` operator. RFC 2822 strings are not lexicographically sortable, making conflict detection incorrect for these two providers.",
+      "severity_justification": "Incorrect conflict detection for HTTP and S3 providers could cause silent overwrites or false conflict alerts; medium rather than high because conflict detection is already non-functional due to the separate lastSynced issue (finding 4), so this is a secondary bug.",
+      "category_justification": "The timestamp comparison logic is factually wrong for RFC 2822 formatted strings, producing incorrect ordering results for two of the four sync providers.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/store.tsx",
+      "start_line": 573,
+      "end_line": 573,
+      "message": "`saveTimer` is stored in React `useState` rather than `useRef`. Every time the 300ms debounce timer is set, `setSaveTimer(t)` triggers an additional component re-render. Because `saveTimer` is not in the effect dependency array, the effect closure captures a stale value of it, making the `if (saveTimer) clearTimeout(saveTimer)` guard unreliable. The cleanup function (`return () => clearTimeout(t)`) already handles timer cancellation correctly; `saveTimer` state serves no purpose and adds unnecessary renders. Use `useRef` instead.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: saveTimer is useState, not useRef. It is absent from the effect's dependency array, so the closure always captures null, making the clearTimeout guard a no-op. setSaveTimer(t) triggers an unnecessary AppProvider re-render on every debounce cycle. The cleanup return already handles cancellation correctly, making saveTimer state entirely redundant.",
+      "severity_justification": "The extra re-render propagates through the entire app tree (AppProvider wraps everything) on every debounce cycle — any state change triggers this. The debounce still functions correctly via cleanup, so no data is lost, but the unnecessary renders are a real performance concern.",
+      "category_justification": "Using useState instead of useRef for a mutable timer ref causes a stale-closure bug (the guard is never effective) and unnecessary re-renders — both are correctness/behavioral issues in React.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/store.tsx",
+      "start_line": 648,
+      "end_line": 668,
+      "message": "When the user switches workspaces, the dependency-change triggers the save effect to re-run, which first runs the cleanup (`clearTimeout(t)`) cancelling any pending 300ms debounce timer for the previous workspace before it fires. Edits made to workspace A in the 300ms window before switching are silently lost because the save for workspace A is cancelled and a new timer starts for workspace B. There is no flush-before-switch logic in either handleSwitch implementation.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: SWITCH_WORKSPACE replaces state.collections and state.activeWorkspaceId (both in the dep array), causing React to run the effect cleanup which cancels the pending 300ms save. Neither handleSwitch in WorkspaceManagerModal nor WorkspaceSwitcher saves the current workspace before switching. Edits made within 300ms of switching are lost.",
+      "severity_justification": "This is a silent data loss bug — user edits disappear without any warning. The 300ms debounce window is always present after any edit, so the scenario is plausible in normal usage (e.g. quick edit then workspace switch).",
+      "category_justification": "The save/switch interaction has a logical flaw that causes unsaved data to be silently discarded — a direct correctness/data-integrity bug.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/storageDriver.ts",
+      "start_line": 179,
+      "end_line": 191,
+      "message": "In `writeSyncConfig`, if the Electron API's `readJsonFile` call throws (e.g. corrupted file, permission error), the `catch` silently falls through with `store` still set to `{}`. The subsequent `lsWrite` then writes only the current workspace's config, erasing all other workspaces' sync credentials from localStorage. To fix: read the existing localStorage store as the fallback when the file read fails, rather than using the empty `store`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: writeSyncConfig initializes store={}, and if readJsonFile throws the catch silently falls through. The subsequent lsWrite uses {...store,...} which is just {[workspaceId]: config}, overwriting all other workspaces' localStorage sync credentials. The fix would be to fall back to the localStorage store when the file read fails.",
+      "severity_justification": "Causes silent loss of sync credentials for all other workspaces in localStorage when a file-read error occurs. In browser/dev mode localStorage is the only store, so this is more impactful there. In Electron mode it corrupts the localStorage mirror, which is used as a fallback.",
+      "category_justification": "A logic error in error handling causes unintended data loss — the fallback path uses an empty object instead of the existing stored data.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "electron/main.js",
+      "start_line": 140,
+      "end_line": 176,
+      "message": "The IPC handlers for `read-json-file`, `write-json-file`, `delete-file`, and `list-dir` use synchronous Node.js filesystem APIs (`fs.readFileSync`, `fs.writeFileSync`, `fs.mkdirSync`, `fs.readdirSync`, `fs.unlinkSync`) directly on the Electron main process thread. These block the main process event loop for the duration of each I/O operation. On slow disks or with large workspace files, this can freeze the entire Electron window. All handlers should use `fs.promises` equivalents.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: read-json-file uses readFileSync, write-json-file uses mkdirSync+writeFileSync, delete-file uses unlinkSync, and list-dir uses readdirSync — all blocking sync APIs in async IPC handlers in the Electron main process thread, which is introduced by this PR.",
+      "severity_justification": "Workspace JSON files are typically small (KB range) and on local SSDs the blocking duration is negligible. The issue is architecturally incorrect but unlikely to cause noticeable freezes in typical usage; it would matter on slow/network storage or very large workspaces.",
+      "category_justification": "Synchronous I/O on the main process blocks the event loop — a performance/responsiveness concern rather than correctness or security.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 87,
+      "end_line": 101,
+      "message": "`handleDelete` dispatches `DELETE_WORKSPACE` and conditionally `SWITCH_WORKSPACE` (updating in-memory state immediately) and then calls `StorageDriver.writeManifest`. If `writeManifest` fails, the on-disk manifest still contains the deleted workspace but the in-memory state does not. On next app restart the deleted workspace will reappear in the manifest but its data file has already been deleted by `deleteWorkspace`, resulting in an empty workspace silently presented to the user. Errors from `writeManifest` are not caught or surfaced.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleDelete calls deleteWorkspace then dispatches then writeManifest with no error handling. If writeManifest fails, the disk manifest still contains the deleted workspace ID while its data file is gone. On next startup the app loads an empty workspace for that stale entry. The debounced store save partially mitigates this but doesn't eliminate the race.",
+      "severity_justification": "writeManifest failures are unlikely in normal operation (local file write), and the debounced save partially self-heals the inconsistency. The worst case is a zombie empty workspace on restart — inconvenient but not catastrophic data loss.",
+      "category_justification": "Missing error handling around a multi-step disk operation creates a potential inconsistency between on-disk and in-memory state that can surface on next startup.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1056,
+      "end_line": 1061,
+      "message": "The `simple-git` instance is configured with a user-provided `config.remote` URL. If `config.token` and `config.username` are provided, the URL is modified to include these credentials. However, the original `config.remote` is not validated and could be an SSH URL like `git@github.com:user/repo.git`. `new URL()` will throw a `TypeError: Invalid URL` for such a URL, causing the server to crash with an unhandled exception.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The TypeError from new URL() on SSH URLs is real, but it is NOT an unhandled exception — all three routes wrap it in try/catch blocks (push at line 1047/1068, pull at 1086/1103, timestamp at 1121/1137) that return 500 responses or null timestamps. The finding's central claim of an unhandled exception causing a server crash is factually incorrect.",
+      "severity_justification": "Even if the finding were correct, the only consequence would be a 500 error for the unusual case of providing SSH URL + token/username credentials together, which is a usage error.",
+      "category_justification": "The underlying concern is about error handling in the URL parsing code path.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 107,
+      "end_line": 113,
+      "message": "When deleting a workspace, a fallback workspace is selected to be activated. If the workspace being deleted is also the only workspace, `fallback` will be `undefined`, and accessing `fallback.id` will cause a runtime crash. The UI (`disabled={state.workspaces.length <= 1}`) prevents this, but the logic in the handler is not robust.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding misses the code-level guard at line 88 (`if (state.workspaces.length <= 1) return`). With that guard in place, remaining has at least 1 element and since remaining.find(w => w.id !== id) searches a list already filtered to exclude id, it always returns the first element. fallback cannot be undefined in any reachable execution path.",
+      "severity_justification": "Even if the claim were correct, it would only manifest if the guard at line 88 were bypassed, which requires calling handleDelete programmatically while ignoring both the UI disable and the explicit return guard.",
+      "category_justification": "The concern is about a potential runtime crash from a null dereference.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/storageDriver.ts",
+      "start_line": 182,
+      "end_line": 182,
+      "message": "The `readSyncConfig` function reads the entire `sync-config.json` file which may contain configurations for all workspaces. The result for the specific `workspaceId` is returned, but there's no decryption step. Credentials such as `token` or `secretAccessKey` are stored encrypted but seem to be returned to the caller in their encrypted form, which would cause authentication to fail when these encrypted values are used in API requests.",
+      "tp_fp": "fp",
+      "severity": "medium",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding's premise is wrong: writeSyncConfig never calls encryptValue, so credentials are stored as plaintext. readSyncConfig returns plaintext credentials that work fine in API requests. The encryptValue/decryptValue helpers are unused in the sync config path. The actual concern (plaintext storage despite docs claiming encryption) is real but the opposite of what the finding describes, and it doesn't cause authentication failures.",
+      "severity_justification": "The real issue — credentials stored as plaintext despite documentation claiming encryption — is a genuine security concern, even though it's not what the finding describes.",
+      "category_justification": "The finding concerns credential handling, though its specific claim about auth failure from encrypted values being used undecrypted is incorrect.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/sync/s3Adapter.ts",
+      "start_line": 23,
+      "end_line": 26,
+      "message": "The S3 adapter relies on `window.electronAPI.getPresignedUrl` to function. If this API is not available (e.g., when running in a browser), it throws an error. However, the UI in `WorkspaceManagerModal.tsx` does not disable the S3 sync option for non-Electron environments, leading to a poor user experience where the user can configure S3 sync only to have it fail at runtime.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: the S3 button is always rendered and is the default provider. No check for window.electronAPI availability disables or hides it. The adapter throws at runtime with a clear error but only after the user has attempted to use it, which is poor UX consistent with the finding's claim.",
+      "severity_justification": "The failure is graceful (a clear error message is thrown and caught by the catch block in handlePush/handlePull, which displays it in the status area), so no data is lost. It's a UX issue where a user can configure a provider that will never work in their environment.",
+      "category_justification": "This is a UI/UX issue where a non-functional option is presented to the user without indication that it requires a different environment to work.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1009,
+      "end_line": 1009,
+      "message": "`simple-git` is an optional dependency. If it fails to load, the server continues to run. However, the error is caught and `simpleGit` remains `undefined`. The health check endpoint `/health` will still return a 200 OK status, which could mislead monitoring systems into thinking the service is fully functional when a core feature (git sync) is unavailable.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: simpleGit can be undefined if require fails, git sync routes return 501 in that case, and /api/health always returns {status:'ok'} with no awareness of git availability. The claim is factually correct.",
+      "severity_justification": "simple-git is a listed dependency so load failures are rare; git sync is an optional feature not the server's core purpose; failures surface clearly as 501s; and this is a self-hosted tool where production-grade health check granularity is not expected.",
+      "category_justification": "The finding concerns monitoring and operational observability — whether a health check accurately reflects the service's capability state.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "electron/main.js",
+      "start_line": 120,
+      "end_line": 126,
+      "message": "The `assertInsideUserData` function validates that paths are within the `userData` directory, but it doesn't account for symbolic links, which could allow path traversal via symlinks.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "pre-existing",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "path.resolve() not resolving symlinks is factually correct, but there is no IPC handler to create symlinks, so an attacker must already have local filesystem write access to userData to plant one. If they have that access, they don't need this vector. No concrete exploit path exists from untrusted renderer input to dangerous I/O that requires or benefits from the missing realpath call.",
+      "severity_justification": "Even if accepted as a concern, exploiting it requires prior local filesystem access to the userData directory, making it a theoretical issue for a single-user desktop application.",
+      "category_justification": "The finding concerns path traversal via symlinks in a security boundary check.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1054,
+      "end_line": 1062,
+      "message": "In the Git pull logic, the `fetch` command should validate the remote branch’s existence before proceeding to avoid potential errors when a remote branch is missing or inaccessible.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "All git.pull() errors (missing branch, inaccessible remote) are already caught by the try/catch at lines 1086/1103 and returned as 500 responses with the git error message. The finding suggests an additional pre-validation step but identifies no concrete failure mode that the existing error handling doesn't already cover.",
+      "severity_justification": "Even taking the finding at face value, the worst case is a slightly less specific error message — no crash, no data loss, no security issue.",
+      "category_justification": "The finding concerns error handling and graceful degradation in the git pull code path.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1175,
+      "end_line": 1177,
+      "message": "In the `createSnapshot` function, there is no garbage collection or cleanup for exceeding `MAX_SNAPSHOTS`, possibly resulting in excessive storage usage over time.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding cites server/index.js lines 1175-1177, but that file is only 1146 lines and contains no createSnapshot function or MAX_SNAPSHOTS constant. The actual createSnapshot is in client/src/utils/snapshotEngine.ts. The underlying concern (old snapshot files not deleted when pruned from the index) is real in snapshotEngine.ts, but the finding's file and line references are entirely wrong.",
+      "severity_justification": "Snapshot file accumulation is a real storage concern but low severity — snapshots are per-workspace workspace JSON files, growth is bounded by user activity, and this only affects Electron mode.",
+      "category_justification": "The underlying concern is about unbounded storage growth from undeleted snapshot files.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/package-lock.json",
+      "start_line": 13,
+      "end_line": 18,
+      "message": "`bcryptjs` and `jsonwebtoken` are added to `package-lock.json` but not declared in `server/package.json`. With npm's lockfile v3, packages listed at the top level of `node_modules/...` without a matching root dependency entry are treated as extraneous and will be pruned by `npm ci` / `npm install`. Either declare these in `package.json` (as the PR description implied) or remove their entries from the lockfile to keep both files consistent.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: server/package-lock.json root packages entry includes bcryptjs ^3.0.3 and jsonwebtoken ^9.0.3, but server/package.json lists neither. This is a genuine inconsistency that will cause npm ci to fail and npm install to prune the packages.",
+      "severity_justification": "The inconsistency means npm ci will fail outright, and npm install will prune the packages — breaking any code that tries to use them. However, no server code at this SHA actually requires these packages, so there's no immediate runtime crash, just a broken install toolchain.",
+      "category_justification": "The mismatch between package.json and package-lock.json breaks the reproducible install toolchain (npm ci/npm install), which is a reliability/dependency management issue.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/sync/s3Adapter.ts",
+      "start_line": 20,
+      "end_line": 39,
+      "message": "`s3Adapter` calls `(window as any).electronAPI.getPresignedUrl(...)`, but no `getPresignedUrl` is exposed in `electron/preload.js` and no `get-presigned-url` IPC handler is registered in `electron/main.js`. As a result, every push/pull/timestamp call for the S3 provider will throw `S3 presigned URL generation requires Electron (not available in browser mode)` even when running inside Electron. The S3 provider is documented as a supported, Electron-only option (see `WORKSPACES.md` §7 and `README.md`), but it is non-functional in this PR. Either implement the `get-presigned-url` IPC channel (and add `getPresignedUrl` to preload) or remove S3 from the provider list and documentation until it lands.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: s3Adapter.ts calls api.getPresignedUrl() but electron/preload.js does not expose this method (confirmed by reading the full contextBridge.exposeInMainWorld call) and electron/main.js has no matching IPC handler. Every S3 push/pull/timestamp call will throw the error message shown, making S3 sync non-functional even in Electron mode despite being documented as supported.",
+      "severity_justification": "The S3 provider is documented as a supported feature in both README.md and WORKSPACES.md, but is entirely broken — all three operations (push, pull, timestamp) throw unconditionally. Users who select S3 sync will always get an error with no path to success.",
+      "category_justification": "The S3 adapter calls an API method that doesn't exist, causing all S3 sync operations to fail. This is a functional correctness bug, not a style or security issue.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/snapshotEngine.ts",
+      "start_line": 36,
+      "end_line": 44,
+      "message": "The history index is sliced to `MAX_SNAPSHOTS` (50), but the corresponding snapshot files written to `userData/workspaces/{workspaceId}/snapshots/{snapshotId}.json` are never deleted from disk when their entry is evicted from the index. Because a new snapshot is created on every debounced save (every ~300ms of user idle time after a change), this leaks disk space indefinitely and orphans potentially large workspace JSON blobs that no UI can ever surface. Before slicing the updated index, capture the dropped entries and call `StorageDriver.deleteFile` (or a new `deleteSnapshot` helper) for each evicted `snapshotId`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: createSnapshot() writes snapshot files to disk then slices the index to MAX_SNAPSHOTS, but never calls deleteFile on evicted entries. The StorageDriver has deleteFile available. The module comment claims 'oldest entries are pruned automatically' which is false for the actual files.",
+      "severity_justification": "Disk space leaks indefinitely in Electron mode with normal usage. With a 300ms debounce, active users can accumulate hundreds of orphaned workspace JSON blobs per session. This is a real resource issue but not a data-loss or security concern.",
+      "category_justification": "Unchecked disk space growth due to leaked snapshot files is an operational resource management issue.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/store.tsx",
+      "start_line": 664,
+      "end_line": 666,
+      "message": "A snapshot is created on **every** debounced workspace save, which fires roughly every time any field changes (collections, environments, variables, cookies, mock state, even the active workspace id). With `MAX_SNAPSHOTS = 50` and a 300 ms debounce, the rolling history window covers only ~15 seconds of editing in practice, making the History tab almost useless for actual rollback. Consider gating snapshot creation behind a longer minimum interval (e.g. only one snapshot per N minutes, or only when a structural change is detected by `diffSnapshots`).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the debounced effect calls SnapshotEngine.createSnapshot on every save (300ms debounce), MAX_SNAPSHOTS=50. During active editing this quickly fills the ring buffer with near-identical states. diffSnapshots exists but is unused for gating. The finding is factually correct and identifies a real UX quality issue with the History feature.",
+      "severity_justification": "The History tab is less useful than documented (50 snapshots cover very little calendar time during editing), but no data is lost and users can still restore to one of the 50 most recent states. The feature degrades in quality, not correctness.",
+      "category_justification": "The feature's behavior does not match its documented intent ('point-in-time snapshots for rollback') — snapshots fire too granularly to serve as meaningful restore points, making the documented behavior incorrect.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "WORKSPACES.md",
+      "start_line": 667,
+      "end_line": 670,
+      "message": "The feature comparison table marks Git as **not requiring Electron** (`✗`), but `gitAdapter.ts` calls `getDataDir()` from `storageDriver`, which returns `null` in browser mode, and then sends `dataDir: null` to the server. The server route at `/api/sync/git/push` (and pull/timestamp) explicitly requires `dataDir`: `if (!workspaceId || !data || !config?.remote || !dataDir) return res.status(400)...`. So in practice, Git sync also requires Electron unless `APILIX_DATA_DIR` is set in the server's environment. Either clarify this row (e.g. \"Requires Electron or `APILIX_DATA_DIR` on server\") or update the adapter/server to be browser-friendly.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: gitAdapter calls getDataDir() which returns null in browser mode, sends dataDir: null to server, and server routes require dataDir (with only process.env.APILIX_DATA_DIR as fallback). WORKSPACES.md marks Git as 'Requires Electron: ✗' without mentioning the APILIX_DATA_DIR requirement. The documentation is inaccurate.",
+      "severity_justification": "This is primarily a documentation inaccuracy — Git sync will fail in browser mode with a 400 error unless APILIX_DATA_DIR is set, but the error message is informative. The actual behavior mismatch (undocumented env var requirement) could confuse users but doesn't silently corrupt data.",
+      "category_justification": "The core issue is the feature comparison table misrepresenting the Electron dependency for Git sync. The code behavior itself is internally consistent; the problem is that docs don't reflect the APILIX_DATA_DIR requirement.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 87,
+      "end_line": 99,
+      "message": "In `handleDelete`, `state.activeWorkspaceId` is read both before and after `dispatch({ type: 'DELETE_WORKSPACE', ... })`, but the closure's `state.activeWorkspaceId` does not update synchronously. The subsequent `await StorageDriver.writeManifest(...)` therefore persists `activeWorkspaceId: state.activeWorkspaceId === id ? fallback.id : state.activeWorkspaceId` using the *pre-dispatch* value — which still works for the current case, but the logic is fragile and easy to break. More importantly, the debounced save effect in `store.tsx` will fire a moment later and overwrite this manifest write with the new state anyway, so this explicit `writeManifest` call is redundant and the two writes can race on slow disks. Consider removing the explicit `writeManifest` here and relying on the debounced effect, or routing all manifest writes through a single helper.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleDelete dispatches DELETE_WORKSPACE then writes manifest using pre-dispatch state.activeWorkspaceId. The debounced effect in store.tsx also re-fires when state.workspaces changes (which DELETE_WORKSPACE causes), creating two concurrent manifest writes. The ternary logic happens to be correct but relies on pre-dispatch closure values, which is fragile. The redundancy is real.",
+      "severity_justification": "Both writes produce correct data in the current implementation, so there is no actual data corruption. The race on slow disks is real but benign — both writes produce the same result. The fragility is a maintenance concern rather than a live bug.",
+      "category_justification": "The issue is about code fragility (relying on pre-dispatch closure state) and redundant writes, not a correctness or safety issue. The suggestion to route through a single write path is a code quality improvement.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 444,
+      "end_line": 476,
+      "message": "`TeamTab` imports `dispatch` from `useApp()` but never uses it; it also reads `activeWorkspace.teamServerUrl` and writes to local `serverUrl` state but never persists the entered Server URL or JWT token anywhere (no `StorageDriver.writeSyncConfig` call). After \"Test connection\" succeeds the credentials are simply discarded on tab change or modal close, contradicting `WORKSPACES.md` §9 step 6 which says clicking \"Test connection in the Team tab\" is part of the connect-and-sync flow. Either remove the unused `dispatch`, wire up the team-server credential save, or document that this tab is informational only.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: dispatch is destructured but never called. connectTeam() does a fetch-only test with no StorageDriver.writeSyncConfig or dispatch calls. Credentials are discarded on close. WORKSPACES.md §9 step 6 documents 'Test connection' as part of the functional connect flow, but credentials entered here are never saved.",
+      "severity_justification": "The Team tab is misleading: it accepts credentials and shows a success message but silently discards everything. Users following the documented workflow will believe they've configured team sync, then find their credentials gone and sync broken. The unused dispatch import is a minor secondary issue.",
+      "category_justification": "The Team tab's behavior contradicts its documented purpose — credentials entered and tested are never persisted, breaking the intended team server connection workflow.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/sync/s3Adapter.ts",
+      "start_line": 27,
+      "end_line": 31,
+      "message": "The S3 adapter calls `electronAPI.getPresignedUrl`, but the preload bridge and Electron main process do not expose or handle any `getPresignedUrl` IPC method. As a result, every S3 push/pull/timestamp operation will throw before reaching S3.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Duplicate of Finding 2 — already verified. s3Adapter.ts calls api.getPresignedUrl() at line 29, electron/preload.js does not expose getPresignedUrl in its contextBridge.exposeInMainWorld call, and electron/main.js has no matching IPC handler. Every S3 operation throws unconditionally.",
+      "severity_justification": "S3 sync is fully non-functional in both browser and Electron modes — all three operations (push, pull, timestamp) throw before reaching S3. It is documented as a supported Electron-only feature.",
+      "category_justification": "Missing IPC wiring causes all S3 sync operations to throw unconditionally, making the feature entirely broken.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 227,
+      "end_line": 228,
+      "message": "These S3 field keys do not match what the S3 adapter reads: the UI stores `accessKeyId` and `secretAccessKey`, while `s3Adapter` sends `config.keyId` and `config.secret` to the presigner. Even after adding the missing IPC handler, S3 requests would be generated with undefined credentials.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: WorkspaceManagerModal stores S3 credentials under keys 'accessKeyId' and 'secretAccessKey', but s3Adapter.ts reads config.keyId and config.secret when building the presigned URL request. The mismatch means AWS credentials would always be passed as undefined to the presigner, even after the missing IPC handler is added.",
+      "severity_justification": "This is a second independent bug in S3 sync on top of the missing IPC handler (Finding 2/8). Even fixing the IPC issue would leave S3 non-functional due to undefined credentials. The feature cannot work correctly as written.",
+      "category_justification": "Field key mismatch between the UI configuration layer and the adapter that consumes it causes credentials to be silently undefined, a concrete logic bug.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/storageDriver.ts",
+      "start_line": 185,
+      "end_line": 187,
+      "message": "Despite the encryption helper below and the type/docs saying credentials are encrypted, this writes provider config directly to `sync-config.json` and localStorage. Tokens and access keys entered in the Sync tab are therefore persisted in plaintext in Electron mode.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: writeSyncConfig writes config fields directly to disk/localStorage without calling encryptValue. The encryptValue/decryptValue helpers exist and invoke api.encryptString/decryptString but are never called from writeSyncConfig or readSyncConfig. The section comment, type comment, and WORKSPACES.md all claim credentials are encrypted — they are not.",
+      "severity_justification": "Sensitive credentials (AWS access keys, git tokens, JWT tokens) are stored in plaintext in sync-config.json in the user's appdata directory. This requires filesystem access to exploit but violates a documented security guarantee and Electron's safeStorage is available and unused.",
+      "category_justification": "Credentials documented as encrypted are stored in plaintext despite encryption infrastructure being available, constituting a concrete data exposure issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceSwitcher.tsx",
+      "start_line": 46,
+      "end_line": 47,
+      "message": "Switching workspaces reads the target workspace and dispatches immediately without flushing the active workspace. Since `AppProvider` persists on a 300 ms debounce and cancels the pending timer on state changes, edits made shortly before switching can be dropped instead of saved to the previous workspace.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleSwitch dispatches SWITCH_WORKSPACE without flushing the current workspace first. The debounced effect's cleanup cancels the pending 300ms save timer when state changes. After switching, the new timer writes the new workspace's data — the old workspace's unsaved changes are dropped. The same bug exists in WorkspaceManagerModal.handleSwitch.",
+      "severity_justification": "Silent data loss of user edits is a high-severity issue. Any edit made within 300ms of a workspace switch is permanently lost with no warning. This is the primary workflow action (workspace switching) and the loss is silent.",
+      "category_justification": "The workspace switch operation has a concrete bug that silently discards user data due to interaction between the immediate dispatch and the debounced persistence mechanism.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 67,
+      "end_line": 68,
+      "message": "This workspace switch path also bypasses a flush of the currently active workspace before replacing state. With the debounced persistence in `AppProvider`, recent edits can be lost when switching from the manager modal before the pending save fires.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Duplicate of Finding 11's core bug, verified in the same investigation. WorkspaceManagerModal.handleSwitch (lines 65-68) dispatches SWITCH_WORKSPACE without flushing the current workspace first, which cancels the debounced save timer and silently drops edits made within the last 300ms.",
+      "severity_justification": "Same silent data loss as Finding 11 — user edits within 300ms of switching workspaces via the manager modal are permanently lost with no warning.",
+      "category_justification": "Concrete data loss bug: SWITCH_WORKSPACE dispatch cancels pending debounced save for the current workspace, dropping unsaved edits.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/snapshotEngine.ts",
+      "start_line": 43,
+      "end_line": 44,
+      "message": "This only removes old entries from the history index; the snapshot files that were sliced off remain on disk. The documented 50-snapshot cap will not cap disk usage, and auto-save can keep accumulating orphaned `snapshots/*.json` files indefinitely.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Duplicate of Finding 3 — already verified. snapshotEngine.ts slices the history index to MAX_SNAPSHOTS but never calls StorageDriver.deleteFile for the evicted snapshot files. Orphaned snapshot JSON files accumulate on disk indefinitely.",
+      "severity_justification": "Same as Finding 3: disk space leaks indefinitely in Electron mode with normal usage. The documented 50-snapshot cap only applies to the index, not actual storage consumption.",
+      "category_justification": "Unbounded disk growth from orphaned snapshot files is an operational resource management issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1033,
+      "end_line": 1035,
+      "message": "These mutating git sync endpoints are exposed on the same unauthenticated Express app with global `cors()` enabled (server/index.js:43). A malicious web page can issue requests to the user's local server and cause git commits/pushes using supplied remotes/credentials; add an app-local authorization/CSRF guard before exposing filesystem and network side effects.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "security",
+      "scope": "pre-existing",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Verified: app.use(cors()) at line 43 allows all origins; git sync endpoints at /api/sync/git/push and /api/sync/git/pull have no auth middleware. A cross-origin request from any webpage can trigger git operations. The attack vector (data exfiltration to attacker-controlled remote) is concrete and specific to this codebase.",
+      "severity_justification": "Requires knowing or guessing workspace ID and dataDir (both somewhat predictable), and the user must have Apilix server running while visiting a malicious page. Realistic for targeted attacks against known Apilix users.",
+      "category_justification": "Unauthenticated filesystem/network side-effect endpoints exposed with wildcard CORS is a concrete CSRF/cross-origin exploitation risk.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 309,
+      "end_line": 310,
+      "message": "When the user resolves a conflict with `Keep Local`, `syncPull` returns `null`, but this branch reports “Remote is empty — nothing to pull”. That gives the wrong result message for a conflict resolution and may lead users to believe the remote has no data.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: syncEngine.pull() returns null for both 'keep-local' resolution (line 56) and a genuinely empty remote. handlePull's null branch always shows 'Remote is empty — nothing to pull' without distinguishing between the two cases, so choosing 'Keep Local' in conflict resolution displays a misleading message.",
+      "severity_justification": "The wrong status message is shown after a deliberate conflict resolution choice, which is confusing but doesn't cause data loss or functional breakage. The local workspace is correctly preserved; only the feedback message is wrong.",
+      "category_justification": "The UI displays factually incorrect feedback ('Remote is empty') for a specific user action ('Keep Local' conflict resolution), misrepresenting what happened.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 287,
+      "end_line": 291,
+      "message": "Push reads the workspace from StorageDriver instead of the current in-memory state. Because workspace persistence is debounced, clicking Push immediately after edits can upload the previous on-disk version and omit the user's latest changes.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handlePush reads workspace data from StorageDriver.readWorkspace (disk) rather than from state.collections/environments/etc. (memory). SyncTab already has state from useApp(). With the 300ms debounced persistence, edits made just before clicking Push are not yet on disk, so stale data gets pushed.",
+      "severity_justification": "Users can silently push outdated workspace data when clicking Push immediately after making changes. In a collaboration scenario this means a teammate pulls a version missing recent edits, with no error or warning to alert either party.",
+      "category_justification": "The push operation reads from a stale source (disk) instead of the authoritative current state (memory), causing it to upload incorrect data under normal usage patterns.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 101,
+      "end_line": 112,
+      "message": "Duplicating a workspace reads the source data from StorageDriver. For the active workspace, recent in-memory edits may not have reached disk yet because saves are debounced, so the duplicate can be created without the latest changes.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleDuplicate reads srcData from StorageDriver.readWorkspace(w.id). For the active workspace, WorkspacesTab has in-memory state via useApp() that may be ahead of disk by up to 300ms (debounce window). The duplicate is written with the stale disk version, silently omitting recent edits.",
+      "severity_justification": "Duplicating a workspace with stale data is less impactful than pushing stale data to a remote (Finding 16) — the user loses only the delta between their last disk-write and the duplicate action, and only for the active workspace. Annoying but not catastrophic.",
+      "category_justification": "Same class of bug as Finding 16: reading from the stale disk source instead of authoritative in-memory state for the active workspace, causing the operation to silently produce an outdated copy.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceSwitcher.tsx",
+      "start_line": 60,
+      "end_line": 62,
+      "message": "Creating a new workspace switches `activeWorkspaceId` without first persisting the current workspace. With the debounced save in `AppProvider`, any edits made shortly before creating the workspace can be discarded when the pending save is cancelled.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleCreate dispatches CREATE_WORKSPACE which changes state.activeWorkspaceId and clears all workspace data fields. This triggers the debounced effect's cleanup (clearTimeout), cancelling the pending 300ms save for the previous workspace. No explicit flush of the current workspace precedes the dispatch.",
+      "severity_justification": "Same silent data loss as Findings 11/12 — edits made within 300ms before creating a new workspace are permanently lost with no warning. Creating a workspace is an uncommon but normal operation where users would not expect to lose recent work.",
+      "category_justification": "Dispatching CREATE_WORKSPACE cancels the pending debounced save for the current workspace, silently dropping unsaved edits.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1061,
+      "end_line": 1063,
+      "message": "`URL.username` and `URL.password` setters perform their own percent-encoding, so passing `encodeURIComponent(...)` here double-encodes credentials that contain reserved characters such as `%`, `@`, or `:`. Those tokens/passwords will fail authentication when pushed.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: all three git sync routes assign encodeURIComponent(value) to URL.username/password. The URL setter already percent-encodes per the userinfo percent-encode set, so the % from encodeURIComponent's output gets re-encoded, producing double-encoding. Credentials with @, :, %, or spaces would fail authentication.",
+      "severity_justification": "Authentication fails silently for credentials containing reserved characters. While common GitHub/GitLab PATs typically use only alphanumerics, enterprise tokens, passwords, or tokens with special chars would break git sync entirely with a cryptic error.",
+      "category_justification": "Double percent-encoding of URL credentials is a concrete logic bug that causes authentication failures for a subset of valid credential values.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1091,
+      "end_line": 1093,
+      "message": "`URL.username`/`password` already encode assigned values. Encoding before assignment double-encodes credentials with reserved characters, causing authenticated pulls to fail for valid tokens/passwords containing those characters.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Duplicate of Finding 19 — same double-encoding bug in the git pull route (lines 1090-1093). Already verified: url.username = encodeURIComponent(config.username) and url.password = encodeURIComponent(config.token) cause double percent-encoding. Credentials with reserved characters fail authentication.",
+      "severity_justification": "Same as Finding 19: authentication silently fails for valid credentials containing %, @, :, or spaces. Common PATs are unaffected but the bug is real for other credential types.",
+      "category_justification": "Double percent-encoding of URL credentials causes authentication failures for credentials containing reserved characters.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "server/index.js",
+      "start_line": 1125,
+      "end_line": 1127,
+      "message": "`URL.username`/`password` already encode assigned values. Encoding before assignment double-encodes credentials with reserved characters, so timestamp fetches can fail authentication for valid credentials.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Duplicate of Findings 19 and 20 — same double-encoding bug in the git timestamp route (lines 1125-1127), confirmed by direct inspection. url.username = encodeURIComponent(config.username) and url.password = encodeURIComponent(config.token) double-encode credentials with reserved characters.",
+      "severity_justification": "Same as Findings 19/20: authentication fails silently for credentials containing reserved characters like %, @, :. Common alphanumeric PATs are unaffected.",
+      "category_justification": "Double percent-encoding of URL credentials causes authentication failures for credentials with reserved characters, same root cause as Findings 19 and 20.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/utils/storageDriver.ts",
+      "start_line": 123,
+      "end_line": 124,
+      "message": "Deleting a workspace only removes `{id}.json`; its `workspaces/{id}/history.json` and `workspaces/{id}/snapshots/*` directory are left behind. Deleted workspace data can remain on disk indefinitely through snapshots.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: deleteWorkspace only deletes {id}.json and the localStorage key. Snapshot files at workspaces/{id}/snapshots/*.json and workspaces/{id}/history.json are written by the snapshot engine but never cleaned up on workspace deletion.",
+      "severity_justification": "Orphaned snapshot files consume disk space and contain workspace data after the workspace is deleted (a minor privacy/storage concern). The ElectronAPI also lacks a deleteDir primitive, so fixing this requires additional IPC work. Not a data loss or security critical issue.",
+      "category_justification": "Incomplete cleanup on workspace deletion leaves orphaned files and indefinite disk space growth, an operational resource management issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "client/src/components/WorkspaceManagerModal.tsx",
+      "start_line": 92,
+      "end_line": 97,
+      "message": "Workspace deletion removes the workspace JSON and manifest entry, but it never removes the workspace's entry from `sync-config.json`. Any tokens/access keys saved for the deleted workspace remain on disk after deletion.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: handleDelete only calls StorageDriver.deleteWorkspace and writeManifest — no sync config cleanup. storageDriver.ts has no deleteSyncConfig function. sync-config.json stores credentials keyed by workspaceId; the entry for a deleted workspace is never removed, leaving tokens/keys on disk.",
+      "severity_justification": "The orphaned credentials cannot be used by the application (workspace is gone), but they persist in plaintext on disk (per Finding 10) and in localStorage. This is a privacy/cleanup concern rather than an actively exploitable vulnerability.",
+      "category_justification": "Sensitive credentials (git tokens, AWS keys, JWT tokens) are retained on disk after workspace deletion, a data retention/privacy issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "WORKSPACES.md",
+      "start_line": 1,
+      "end_line": 3,
+      "message": "The PR description says this change only declares missing `jsonwebtoken` and `bcryptjs` dependencies, but this file introduces extensive workspace/sync documentation for a much larger feature set. The description should be updated so reviewers and release notes reflect the actual scope and risk of the PR.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: the diff contains WORKSPACES.md (679 lines new), WorkspaceManagerModal.tsx (629 lines), WorkspaceSwitcher.tsx (190 lines), storageDriver.ts (267 lines), snapshotEngine.ts (109 lines), syncEngine.ts + adapters, and major store.tsx refactoring — none of which is mentioned in the PR description, which claims only bcryptjs and jsonwebtoken dep declarations were added.",
+      "severity_justification": "A misleading PR description doesn't break functionality, but it hampers code review quality and release note accuracy for a large, complex change with multiple bugs identified in this review. The impact is process/governance, not runtime correctness.",
+      "category_justification": "The PR description misrepresents the actual scope of changes, which is a documentation accuracy issue affecting reviewer comprehension and release traceability.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

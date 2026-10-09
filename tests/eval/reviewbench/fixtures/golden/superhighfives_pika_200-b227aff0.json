@@ -1,0 +1,431 @@
+{
+  "pr_key": "superhighfives_pika_200-b227aff0",
+  "pr": {
+    "repo": "https://github.com/superhighfives/pika",
+    "pr_number": 200,
+    "base": "bdda75cbeeb8cd72a2cb197f93623c3e197cf49c",
+    "head": "b227aff048155b8d2a8426b4d84bcec4504e7c01"
+  },
+  "findings": [
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 81,
+      "end_line": 82,
+      "message": "swap() calls pushUndo() unconditionally before checking the active palette index. The PR description explicitly states named-palette swaps should not push to the undo stack, but the guard that would enforce this comes after the pushUndo() call. Every swap on a named palette corrupts the undo stack with auto-history snapshots.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: swap() calls pushUndo() unconditionally at line 81, before paletteIndex is read at line 87. The PR description states named-palette swaps should not push to the undo stack, and the diff shows the intended fix (conditional guard), but it was not applied at this SHA. Every named-palette swap snapshots autoHistory onto the undo stack incorrectly.",
+      "severity_justification": "Corrupts undo/redo for auto-history whenever the user swaps on a named palette, producing confusing behavior, but does not lose data or affect core color picking.",
+      "category_justification": "Logic error where pushUndo() fires unconditionally, violating the stated invariant that undo-stack mutation only happens on auto-history swaps.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 284,
+      "end_line": 292,
+      "message": "deletePalette does not decrement activePaletteIndex when removing a palette whose index is less than the active one. Only the out-of-range case is clamped to 0. Deleting palette at index 1 while index 3 is active leaves activePaletteIndex pointing at the old palette 4 (now shifted to 3), silently switching the active tab to the wrong palette. The PR description says this decrement was implemented, but the code does not do it.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: deletePalette only clamps activePaletteIndex to 0 when >= palettes.count after removal. No branch decrements activePaletteIndex when deleted index < active index. The diff shows the intended fix but it was not applied at this SHA, so deleting a lower-indexed palette silently shifts the active tab to the wrong palette.",
+      "severity_justification": "Silently shifts the active palette tab to the wrong palette when a lower-indexed palette is deleted, causing visible incorrect tab selection without data loss.",
+      "category_justification": "Logic error in index management after palette deletion — active index is not adjusted for the array shift, causing the wrong palette to appear selected.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 284,
+      "end_line": 292,
+      "message": "deletePalette does not call restoreAutoHistorySelection() after clamping activePaletteIndex to 0. When the active palette is deleted, activeHistoryID still holds the ID of the last selected pair from the deleted palette, which no longer exists in any palette. The selection state is stale until the user manually clicks a chip. The PR description says this was fixed.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: deletePalette clamps activePaletteIndex to 0 when out of range but never calls restoreAutoHistorySelection(). activeHistoryID retains the stale ID from the deleted palette. The diff shows the intended call was meant to be added but is absent at this SHA.",
+      "severity_justification": "Leaves selection state stale after deleting the active palette — the active chip highlight is wrong until the user manually clicks. No data is lost and the user can recover by clicking any chip.",
+      "category_justification": "Missing state reset after palette deletion causes activeHistoryID to reference a non-existent pair, producing incorrect UI selection state.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 236,
+      "end_line": 244,
+      "message": "applyEntry() calls recordHistory() whenever a pair from a named palette (activePaletteIndex != 0) is applied, including on every chip tap, context-menu apply, and palette navigation step. This means browsing or tapping chips in a named palette continuously writes entries to auto-history, and the undo stack grows with each chip selection. The behaviour is triggered both from navigatePrevious/navigateNext and from deleteCurrentEntry's fallback after deleting a chip.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: applyEntry() calls recordHistory() whenever activePaletteIndex != 0. recordHistory() calls pushUndo() when history is non-empty and appends a new entry. This means every distinct chip tap or navigation step in a named palette writes to auto-history and grows the undo stack, contrary to the intent that named-palette browsing should not pollute auto-history.",
+      "severity_justification": "Every named-palette chip selection pollutes the auto-history with duplicates and causes undo stack growth, degrading the core history and undo/redo features that are central to the app's purpose.",
+      "category_justification": "Logic error in applyEntry() causes unintended side effects on auto-history and the undo stack when browsing named palettes.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 155,
+      "end_line": 165,
+      "message": "deleteCurrentEntry: when the deleted chip was the last one in a named palette, the if-let guard on pairs.first is false and applyEntry is never called, so activeHistoryID still points to the just-deleted pair ID. The UI's selection indicator will be stale; subsequent navigatePrevious/navigateNext calls will find no active selection and fall back to the list boundary, which may be confusing.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: when the last chip is deleted from a named palette, deleteChipFromPalette removes it without nilling activeHistoryID, and the if-let on pairs.first in deleteCurrentEntry fails (empty array), so applyEntry is never called. activeHistoryID remains pointing to the deleted pair ID, leaving stale selection state.",
+      "severity_justification": "Leaves a stale activeHistoryID when the last named-palette chip is deleted. No crash or data loss; the UI shows no active chip and navigation falls back to boundary behavior, which is recoverable but confusing.",
+      "category_justification": "Missing state cleanup after deleting the last chip from a named palette leaves activeHistoryID referencing a non-existent pair.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/AppDelegate.swift",
+      "start_line": 132,
+      "end_line": 138,
+      "message": "migrateHistoryToPalettes() sets Defaults[.palettes] = [history], unconditionally replacing the entire palettes array with a single auto-history palette. If a partial migration occurred on a previous launch (palettes written, but colorHistory not yet cleared due to a crash), re-running migration would silently discard all named palettes the user had created. A safe migration should merge into palettes[0] if it already exists, not overwrite the array.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in checked-out file: migrateHistoryToPalettes() does Defaults[.palettes] = [history], unconditionally replacing the full palettes array. The diff shows the intended safe-merge version but it was not applied at this SHA. A crash between writing palettes and clearing colorHistory would cause re-migration on next launch, silently discarding all user-created named palettes.",
+      "severity_justification": "Could silently destroy all user-created named palettes on a crash-then-relaunch scenario. The window is narrow but the consequence — irreversible data loss of named palettes — is significant.",
+      "category_justification": "Non-idempotent migration that can destroy user data if interrupted, a classic reliability/fault-tolerance concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Exporter.swift",
+      "start_line": 75,
+      "end_line": 83,
+      "message": "ISO8601DateFormatter() is constructed inside the pairs.map closure, creating one formatter instance per ColorPair rather than once per export call. ISO8601DateFormatter is expensive to initialise. The PR description states the formatter was hoisted out of the closure, but the code contradicts this — it is still allocated per iteration.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed in checked-out file: ISO8601DateFormatter() is constructed inside the pairs.map closure (called once per ColorPair), not outside it. The PR description claims it was hoisted to one allocation per export, but the code contradicts this. The diff shows the intended hoisted version but it was not applied at this SHA.",
+      "severity_justification": "ISO8601DateFormatter is relatively expensive to initialise, but palette exports are rare user-triggered operations on bounded data sets (max ~50 pairs). The performance impact is negligible in practice.",
+      "category_justification": "Unnecessary repeated allocation of an expensive formatter object inside a loop/closure when it could be created once outside.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/NavigationMenu.swift",
+      "start_line": 44,
+      "end_line": 46,
+      "message": "The compliance toggle button uses the same SF Symbol name for both on and off states: IconImage(name: showCompliance ? \"checkmark.shield\" : \"checkmark.shield\"). The conditional expression is identical in both branches, so the icon never changes when the feature is toggled. Only the foreground color changes (accent vs primary), providing minimal visual feedback.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed in checked-out file at line 45: both branches of the ternary are 'checkmark.shield', so the icon never changes on toggle. The PR description states the intent was 'checkmark.shield.fill' when active vs 'checkmark.shield' when inactive. The other toolbar buttons follow this same filled/unfilled pattern, confirming this is a copy-paste error.",
+      "severity_justification": "The button still functions correctly and the accent color change provides some feedback, but the intended visual distinction (filled vs outline icon) between active and inactive states is missing, reducing UX clarity.",
+      "category_justification": "The conditional expression has identical branches — a copy-paste bug that defeats the intended visual state feedback for the compliance toggle button.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ColorHistoryDrawer.swift",
+      "start_line": 39,
+      "end_line": 45,
+      "message": "ColorHistoryChip's context menu always labels the remove action as PikaText.textHistoryRemove (\"Remove from history\") regardless of whether the chip belongs to auto-history or a named palette. The PR description states the label switches between textHistoryRemove and textPaletteRemoveChip based on context, but ColorHistoryChip has no knowledge of which palette it belongs to and always uses the history string.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed in checked-out file: ColorHistoryChip has no isAutoHistory property and the context menu unconditionally uses PikaText.textHistoryRemove. The diff shows the intended isAutoHistory parameter and conditional label, but it was not applied at this SHA, so named-palette chips always show 'Remove from history' instead of 'Remove from palette'.",
+      "severity_justification": "Functional behavior (removal) works correctly; only the menu label text is wrong. Users see 'Remove from history' on named palette chips, which is mislabeled but not misleading enough to cause user error.",
+      "category_justification": "The conditional label logic stated in the PR description was not implemented — the remove action always shows the wrong label for named palette chips.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ContentView.swift",
+      "start_line": 151,
+      "end_line": 152,
+      "message": "The export handler silently discards write errors with try?. If the file write fails (e.g., permissions, disk full), the user receives no feedback — the save panel closes and nothing happens. The PR description notes 'write errors s...' (truncated), suggesting this was identified but not fixed. At minimum the error should be surfaced via an alert.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed in checked-out file at line 152: try? discards write errors silently. The PR description states write errors were meant to surface via NSAlert and the diff shows the intended do/catch with NSAlert, but neither was applied at this SHA. A failed export gives no user feedback.",
+      "severity_justification": "Silent failure on a user-initiated export action (permissions error, disk full, etc.) provides zero feedback, leaving the user with no indication that their export failed and no way to recover without retrying and noticing the file is missing.",
+      "category_justification": "Missing error handling on a file write operation causes silent failure with no user feedback on a user-visible operation.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ColorPreview.swift",
+      "start_line": 107,
+      "end_line": 107,
+      "message": "A `triggerSwap` notification is received to rotate the swap button, but there's no corresponding code in `Eyedroppers.swap()` to post this notification. The button's rotation will not trigger when a swap occurs.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The rotation in SwapPreviewButton and the eyedroppers.swap() call both listen to the same .triggerSwap notification posted by AppDelegate.triggerSwap. The notification is posted before swap() is called, not by it — so the rotation fires correctly whenever a swap is triggered. The finding incorrectly assumes swap() needs to post the notification itself.",
+      "severity_justification": "The claim is factually incorrect; no bug exists.",
+      "category_justification": "The finding alleges missing notification posting causing a UI update failure, which is a correctness concern, but the claim is wrong.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 90,
+      "end_line": 94,
+      "message": "The `swap` function is missing a call to `pushUndo()` when modifying a named palette (when `paletteIndex != 0`). This means that swapping colors in a user-created palette is not an undoable action, which is inconsistent with edits to the auto-history palette.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Factually incorrect. The checked-out swap() calls pushUndo() unconditionally on line 81 — it fires for both auto-history and named palettes. Furthermore, the PR description explicitly states named-palette swaps intentionally should not push to the undo stack, so excluding undo for named palettes is by design, not an omission.",
+      "severity_justification": "The claim is incorrect; the opposite bug exists (pushUndo fires when it shouldn't, per Finding 1).",
+      "category_justification": "The finding alleges missing undo functionality, a correctness concern, but the claim is factually wrong.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ContentView.swift",
+      "start_line": 139,
+      "end_line": 142,
+      "message": "The filename for exported palettes is generated by replacing spaces with hyphens, but it does not account for other characters that are invalid in filenames, such as `/` or `\\`. This could cause the save operation to fail if the palette name contains such characters.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed in checked-out file: filename generation only replaces spaces with hyphens, with no stripping of /,  \\, : or other characters. The diff shows the intended CharacterSet filter but it was not applied at this SHA. A palette named with / could cause NSSavePanel to interpret part of the name as a directory, producing unexpected behavior.",
+      "severity_justification": "NSSavePanel uses the string only as a suggested default filename that the user can edit, and the actual write uses the panel's returned URL. The practical impact is limited to unexpected panel behavior when palette names contain path-separator characters, which is an edge case.",
+      "category_justification": "Missing input sanitization on a filename could cause the save panel to behave unexpectedly for palette names containing path-separator characters.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Exporter.swift",
+      "start_line": 1,
+      "end_line": 1,
+      "message": "`import Defaults` is added here but `Exporter` and the new `paletteToJSON` method do not reference any `Defaults` APIs. This import can be removed.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: the base commit (bdda75c) had only `import Foundation` in Exporter.swift. The PR added `import Defaults` (in commit 65b11ae) but none of the Exporter methods — including the new `paletteToJSON` — reference any Defaults APIs. The unused import is real and was introduced by this PR.",
+      "severity_justification": "Unused imports are harmless but constitute dead code / unnecessary coupling. No runtime impact.",
+      "category_justification": "Unused import is a code cleanliness issue with no functional impact.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Eyedroppers.swift",
+      "start_line": 270,
+      "end_line": 274,
+      "message": "After creating a palette, the new `current` pair is the only entry in the newly active palette, but `activeHistoryID` is left pointing at the previous history/palette entry. This means the just-created chip is not selected and keyboard delete/navigate starts from a stale selection until the user re-applies a chip.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `savePalette` never sets `activeHistoryID = current.id`. After creating a palette, the old ID remains active; `hasActiveSelection` returns false, and `deleteCurrentEntry()` silently no-ops because it searches for the stale ID in the new palette's pairs. The PR description explicitly notes this fix was intended but the code at this SHA is missing it.",
+      "severity_justification": "Breaks delete and correct selection state for newly created palette chips until the user manually re-applies an entry. A user-visible functional regression in the new palette feature.",
+      "category_justification": "A logic bug where state is not updated correctly after a mutating operation, causing incorrect behavior in dependent operations.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ColorHistoryDrawer.swift",
+      "start_line": 218,
+      "end_line": 225,
+      "message": "`activePalette` falls back to `palettes.first` for an out-of-range index, but `isAutoHistory` is derived only from `activePaletteIndex == 0`. If the persisted index is out of range, the drawer displays auto-history entries while showing the named-palette add button and removal behavior, and there is no clamp elsewhere in the codebase.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `activePalette` falls back to `palettes.first` for out-of-range index while `isAutoHistory` is independently computed as `activePaletteIndex == 0`. If activePaletteIndex is out of range, auto-history chips are displayed but with named-palette behavior ('+' button, silent delete failures). The PR description itself describes `isAutoHistory` should derive from `activePalette?.isAutoHistory ?? false`, which the actual code at this SHA doesn't do.",
+      "severity_justification": "The out-of-range state requires an abnormal condition (deletePalette does clamp in the common flow). When triggered, buttons silently fail rather than corrupt data, so the impact is a degraded UX rather than data loss.",
+      "category_justification": "Two independently computed derived properties that represent the same concept can produce inconsistent results, leading to incorrect UI behavior.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ColorHistoryDrawer.swift",
+      "start_line": 240,
+      "end_line": 242,
+      "message": "For named palettes, the foreground/background apply actions still call the history-recording paths without restoring the palette chip selection. After applying one side of a named-palette chip, `activeHistoryID` points at the new auto-history entry rather than this palette chip, so the active highlight and keyboard delete/navigation in the palette become stale.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `applyForeground` and `applyBackground` in ColorHistoryDrawer call `recordHistory()` which sets `activeHistoryID` to a new auto-history entry UUID. Unlike `applyBoth`→`applyEntry`, there is no subsequent `activeHistoryID = pair.id` to restore the palette chip selection. On named palettes, this leaves the chip deselected and breaks keyboard delete (which searches for the stale auto-history ID in the named palette's pairs, silently failing).",
+      "severity_justification": "Breaks 'Apply foreground only' and 'Apply background only' context menu actions for named palette chips: the chip loses its selection highlight and subsequent keyboard delete silently fails. A user-visible correctness regression for a core interaction path.",
+      "category_justification": "Logic bug where `activeHistoryID` is updated by `recordHistory()` but not corrected back to the palette chip's ID, causing incorrect selection state and broken delete/navigation.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Constants/Constants.swift",
+      "start_line": 99,
+      "end_line": 104,
+      "message": "The existing `NotificationNamesTests` test every typed `Notification.Name` constant against its raw string. These new notification constants are not covered, so regressions in their raw values would bypass the suite. Add matching tests for the new names.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `NotificationNamesTests.swift` tests all pre-existing notification name constants. The PR added `.toggleCompliance`, `.savePalette`, and `.exportPalette` (with backing `nc*` string constants) following the exact same pattern, but none are covered in the test file. The gap is real and the pattern is explicit in the project.",
+      "severity_justification": "The risk is a raw string typo in a constant — low probability, and would likely be caught during integration testing. But it's a concrete inconsistency with an established test convention.",
+      "category_justification": "Missing test cases for new constants that follow an explicitly established testing pattern in the project.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/ColorHistoryDrawer.swift",
+      "start_line": 310,
+      "end_line": 313,
+      "message": "These new alert button titles are hard-coded, whereas the rest of the SwiftUI UI strings are routed through `PikaText`/`Localizable.strings` (for example `NavigationMenuItems.swift:130-153`). Add localized constants for these labels so the alert is translatable.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `Button(\"Clear\", role: .destructive)` and `Button(\"Cancel\", role: .cancel)` are the only hard-coded UI strings in the codebase. Every other user-visible string goes through `PikaText`. The alert title and message already use `PikaText` constants, making the button labels inconsistent. The project targets 8+ locales.",
+      "severity_justification": "Non-English users see untranslated 'Clear' and 'Cancel' in the confirmation alert. Functional behavior is unaffected; it's a localization/consistency gap.",
+      "category_justification": "Inconsistency with a well-established project convention (all UI strings via PikaText/Localizable.strings) that affects internationalization quality.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Views/NavigationMenuItems.swift",
+      "start_line": 101,
+      "end_line": 103,
+      "message": "This notification is only observed by `PaletteTabBar`, which exists only while `ColorHistoryDrawer` is mounted. If the drawer is hidden (the default), choosing “New palette” from this menu posts to no active receiver, so nothing opens and no palette can be created from the menu.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed: `ColorHistoryDrawer` (and therefore `PaletteTabBar`) is conditionally rendered only when `historyDrawerVisible == true` (ContentView line 70-71). The `.savePalette` notification's only subscriber is `PaletteTabBar.onReceive`, so posting from NavigationMenuItems when the drawer is hidden reaches no receiver. The guard inside the handler (`if !historyDrawerVisible`) is dead code — the view cannot be mounted when the drawer is hidden.",
+      "severity_justification": "The 'New palette…' menu item is silently broken whenever the drawer is hidden (the default state for new users). A user attempting to create a palette from the menu gets no feedback and cannot complete the action.",
+      "category_justification": "A feature (creating a palette from the menu) is completely non-functional in the default application state due to a notification receiver being conditionally unmounted.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Pika/Services/Exporter.swift",
+      "start_line": 1,
+      "end_line": 1,
+      "message": "`Defaults` is imported but not used anywhere in this file. Remove the unused import to keep dependencies clear and avoid lint/compiler warnings in stricter configurations.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Identical to Finding 1 — already verified. The base commit (bdda75c) had only `import Foundation` in Exporter.swift. This PR added `import Defaults` but none of the methods in the file reference any Defaults APIs. The unused import is confirmed at this SHA.",
+      "severity_justification": "Unused imports are harmless but constitute dead code and unnecessary coupling. No runtime impact.",
+      "category_justification": "Unused import is a code cleanliness issue with no functional impact.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,451 @@
+{
+  "pr_key": "PaulStSmith_figlet-comment-generator_32-1d0b6642",
+  "pr": {
+    "repo": "https://github.com/PaulStSmith/figlet-comment-generator",
+    "pr_number": 32,
+    "base": "3750acad624b6b38b768aa8b9aa3ba1573e2f63e",
+    "head": "1d0b6642fcf5ca31fc308c3d603b19ab02ea249e"
+  },
+  "findings": [
+    {
+      "file": "FIGLet.VSCodeExtension/src/BannerUtils.ts",
+      "start_line": 62,
+      "end_line": 75,
+      "message": "The `editBuilder.replace(editor.selection, ...)` path was removed and replaced unconditionally with `editBuilder.insert`. When the user has an active (non-empty) selection and confirms the banner, the banner is now inserted at column 0 of the cursor's line instead of replacing the selected text. The original selection remains in the document alongside the newly inserted banner, producing duplicate/garbled content.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in code: the `editBuilder.replace` branch for non-empty selections was removed and replaced with unconditional `editBuilder.insert`. When a selection exists, `insert` does not remove the selected text, leaving both the selection content and the newly inserted banner in the document.",
+      "severity_justification": "When the user has selected text expecting the banner to replace it, the old content remains and the banner is also inserted, producing garbled/duplicate content. This is a behavioral regression affecting a real workflow, though it may not be the most common usage path.",
+      "category_justification": "The code no longer behaves correctly when a non-empty selection exists — it fails to replace the selected text, contradicting the expected behavior of a 'replace selection with banner' operation.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figprint.yml",
+      "start_line": 253,
+      "end_line": 262,
+      "message": "`PortableCommandAlias: figprint` was removed from both the x64 and arm64 `NestedInstallerFiles` entries. WinGet uses this field to register the `figprint` command alias on PATH for portable packages. Without it, users who install via `winget install ByteForge.FIGPrint` will not have `figprint` available as a command, breaking the documented install experience.",
+      "tp_fp": "fp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Winget falls back to exe name; Windows is case-insensitive",
+      "severity_justification": "The `figprint` command is the primary documented install experience. Without `PortableCommandAlias`, the command alias is not registered on PATH, breaking the core usage of the tool for all new winget installs.",
+      "category_justification": "The manifest generation logic produces an incorrect/incomplete WinGet manifest that omits a required field for the advertised portable command alias functionality.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figlet-nuget.yml",
+      "start_line": 8,
+      "end_line": 8,
+      "message": "Path filter was narrowed from `FIGLet/**` to `FIGLet/**/*.cs`. A PR that only bumps the version in `FIGLet/FIGLet.csproj`, adds an embedded font resource, or changes a `.resx` file will not trigger this publish workflow, causing the NuGet release to be silently skipped.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the path filter was changed from `FIGLet/**` to `FIGLet/**/*.cs`. Non-.cs files in the FIGLet directory (FIGLet.csproj, fonts/small.flf, readme.md) exist and would not trigger the workflow. A `.csproj`-only version bump — a common release pattern — would silently skip the NuGet publish.",
+      "severity_justification": "A version bump commit that only touches `FIGLet.csproj` will silently skip the NuGet publish workflow, requiring a manual `workflow_dispatch` to recover. This creates a reliability gap in the release automation.",
+      "category_justification": "The overly narrow path filter causes the CI/CD publish pipeline to silently skip triggering on valid release-relevant changes, breaking automated release automation.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-vscode-extension.yml",
+      "start_line": 8,
+      "end_line": 9,
+      "message": "Path filter was narrowed to `**/*.ts` and `**/*.tsx` only. Changes to `package.json` (where the extension version lives), `package-lock.json`, `webpack.config.js`, `.vscodeignore`, or icon/asset files will not trigger the VS Code extension publish workflow, silently skipping releases that only update those files.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the path filter is `FIGLet.VSCodeExtension/**/*.ts` and `**/*.tsx` only. Files like `package.json` (which contains the extension version), `webpack.config.js`, `tsconfig.json`, `.vscodeignore`, and `package-lock.json` exist in the directory and are excluded. A version bump committed only to `package.json` would not trigger the workflow.",
+      "severity_justification": "The extension version lives in `package.json`. A version-only bump — the typical release trigger — will silently skip the publish workflow, requiring a manual `workflow_dispatch`. This is a real reliability gap in release automation.",
+      "category_justification": "The overly narrow path filter breaks the automated release trigger for valid release-relevant file changes, creating silent gaps in CI/CD automation.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/tsconfig.json",
+      "start_line": 11,
+      "end_line": 17,
+      "message": "Adding `\"node\"` and `\"vscode\"` to the global `types` array applies those ambient declarations to all source files under `src/`, including the webview React components in `src/webview/` (which run in a browser context with neither the Node.js nor VS Code runtime available). TypeScript will no longer flag accidental use of `vscode.*` or Node built-in APIs inside webview code, masking bugs that will only manifest at runtime.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Before this PR, there was no `types` array in tsconfig.json, so TypeScript auto-included all `@types/*` packages (including `@types/node` and `@types/vscode`) for all source files — meaning webview code already had these types available. The PR's explicit `types` array lists the exact same packages that were already being auto-included. The behavioral concern is real but pre-existed this change; the finding incorrectly implies 'will no longer flag' as if there was a regression.",
+      "severity_justification": "The architectural concern (no separate tsconfig for webview vs extension-host code) is real but minor in practice — webview components currently don't appear to accidentally use vscode/node APIs, and the existing test+build pipeline would likely catch runtime failures.",
+      "category_justification": "Relates to type-safety coverage in CI/build tooling and whether TypeScript can catch environment-boundary bugs at compile time.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figprint.yml",
+      "start_line": 8,
+      "end_line": 8,
+      "message": "Path filter was narrowed from `FIGPrint/**` to `FIGPrint/**/*.cs`. A version bump to `FIGPrint/FIGPrint.csproj` alone — the typical release commit — will not match this filter and the FIGPrint winget/GitHub release workflow will never fire automatically.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: path filter changed from `FIGPrint/**` to `FIGPrint/**/*.cs`. `FIGPrint/FIGPrint.csproj` (which holds the `<Version>` tag read at line 30 of the workflow) is not a `.cs` file, so a version-only bump to the csproj will not trigger the workflow automatically.",
+      "severity_justification": "A version-only bump to `FIGPrint.csproj` — the standard release commit pattern used by this workflow — silently skips the publish pipeline. The winget and GitHub Release automation becomes manually triggered-only, which is a meaningful reliability regression.",
+      "category_justification": "The overly narrow path filter breaks automated CI/CD release triggering for a valid and expected release pattern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-vs-extension.yml",
+      "start_line": 8,
+      "end_line": 9,
+      "message": "Path filter was narrowed to `**/*.cs` only for both the VS extension and the FIGLet library. Changes to `.xaml` UI files, `.resx` resources, `.vsixmanifest`, or the library `.csproj` will not trigger the Visual Studio extension publish, causing silent release skips.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: path filter narrowed to `FIGLet.VisualStudioExtension/**/*.cs` and `FIGLet/**/*.cs`. The extension directory contains `source.extension.vsixmanifest` (holds VSIX version), two `.xaml` WPF UI files, and `FIGlet.VisualStudioExtension.csproj` — none of which are `.cs` files and none would trigger the workflow.",
+      "severity_justification": "The VSIX version is stored in `source.extension.vsixmanifest`, not in `.cs` files. A version-only bump to the manifest would silently skip the publish workflow, breaking automated release for the Visual Studio extension.",
+      "category_justification": "The overly narrow path filter breaks automated CI/CD release triggering for valid release-relevant non-.cs file changes in the VS extension.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/FigletPanel.ts",
+      "start_line": 227,
+      "end_line": 228,
+      "message": "`globalState.update('lastFontUsed', msg.font)` is called before `BannerUtils.insertBanner` executes. If the editor is no longer valid (e.g. the document was closed between the user clicking OK and the handler running), the insert will throw but `lastFontUsed` has already been persisted to global state. The state update should happen only after a successful insert, or the two operations should be ordered with the insert first.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The ordering is factually correct as described, but the concern is sub-threshold. `lastFontUsed` is a purely cosmetic UX preference (font pre-selection), and saving it when the user clicks OK is semantically correct regardless of insert success — the user chose that font. There is no data integrity issue, no security concern, and the suggested fix (save only after successful insert) would actually produce worse UX by forgetting a valid font choice on transient insert failures.",
+      "severity_justification": "Even accepting the concern, the worst outcome is a font preference being persisted when an insert fails, which has no meaningful negative impact.",
+      "category_justification": "The finding is about operation ordering and state persistence, which falls under correctness.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figlet-py.yml",
+      "start_line": 8,
+      "end_line": 8,
+      "message": "The workflow path trigger has been narrowed from `'FIGLet.Python/**'` to `'FIGLet.Python/**/*.py'`. This will prevent the workflow from running on changes to `FIGLet.Python/pyproject.toml`, where the package version is defined. A version bump without other `.py` file changes will not trigger a new release.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: path filter narrowed from `FIGLet.Python/**` to `FIGLet.Python/**/*.py`. `pyproject.toml` — where the Python package version is defined, as explicitly read by the ci.yml version-sync job via `grep -oPm1 '(?<=^version = \")[^\"]+' FIGLet.Python/pyproject.toml` — is not a `.py` file and will not trigger the workflow on a version-only bump.",
+      "severity_justification": "A version bump committed only to `pyproject.toml` silently skips the PyPI publish workflow, requiring a manual `workflow_dispatch`. This breaks the automated release pipeline for the Python library.",
+      "category_justification": "The overly narrow path filter breaks automated CI/CD release triggering for the most common release commit pattern — a version bump in the package metadata file.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figlet-ts.yml",
+      "start_line": 8,
+      "end_line": 9,
+      "message": "The workflow path trigger has been narrowed from `'FIGLet.TS/**'` to only `**/*.ts` and `**/*.tsx` files. This will prevent the workflow from running on changes to `FIGLet.TS/package.json`, where the package version is defined. A version bump without other `.ts` or `.tsx` file changes will not trigger a new release.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: path filter narrowed to `FIGLet.TS/**/*.ts` and `FIGLet.TS/**/*.tsx`. `FIGLet.TS/package.json` — where the npm package version is defined — is not a `.ts` or `.tsx` file and will not trigger the workflow on a version-only bump. Other non-TypeScript files like `tsconfig.json`, `.npmrc`, and `package-lock.json` are also excluded.",
+      "severity_justification": "A version bump committed only to `package.json` silently skips the npm publish workflow for the TypeScript library, requiring manual `workflow_dispatch` and breaking automated release automation.",
+      "category_justification": "The overly narrow path filter breaks automated CI/CD release triggering for the most common release commit pattern — a version bump in the package metadata file.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/BannerUtils.ts",
+      "start_line": 61,
+      "end_line": 61,
+      "message": "The banner insertion position has been changed to always be at the start of the current line (`with(currentPosition.line, 0)`). Previously, it respected the cursor's column. This could be an unexpected behavior change for users who want to insert a banner at a specific indentation level by placing their cursor there.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "`getIndentation` always used `line.text.match(/^[\\t ]*/)`  — the line's leading whitespace — not the cursor column. The cursor column never affected the indentation of the inserted banner. The finding's core claim (users could control indentation via cursor placement) is factually incorrect. The actual change (insertion point from cursor-column to line-start) avoids inserting mid-existing-text and is an improvement.",
+      "severity_justification": "Even if partially valid, the concern would be low-impact cosmetic behavior around insertion point.",
+      "category_justification": "The finding concerns behavioral correctness of the insertion positioning logic.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/webview/SettingsApp.tsx",
+      "start_line": 269,
+      "end_line": 269,
+      "message": "The `handleFontRowClick` function updates the `selectedFont` state, but this state is only used to highlight the row in the UI. It no longer updates the `defaultFont` to be saved. Since the concept of a 'default font' setting has been removed, this font selection click action in the settings panel has no persistent effect.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Also drives live preview via `fontCache.get(selectedFont)`",
+      "severity_justification": "The settings panel still works correctly for its remaining settings (font directory, layout mode). The font preference is now tracked via `lastFontUsed` in globalState via the banner panel. The UX is potentially misleading but not a functional breakage.",
+      "category_justification": "The font row click action in the settings panel now has no effect beyond UI state, which may mislead users expecting their selection to persist — a correctness concern about the feature's intended behavior.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/LanguageCommentStyles.ts",
+      "start_line": 74,
+      "end_line": 74,
+      "message": "A new enum member `BATCHFile` was added, but TypeScript enum member names are typically PascalCase. The convention in this file and in TypeScript generally is `PascalCase` for enum members (e.g., `BlockComment`, `SingleLine`), but `BATCHFile` is an exception. It should be `BatchFile` for consistency.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Existing pattern uses uppercase abbrevs (`HTML`, `SQLLine`) — cosmetic",
+      "severity_justification": "This is a naming convention violation with no runtime impact, but it creates a visible inconsistency — the enum member `CommentStyle.BATCHFile` vs the static property `LanguageCommentStyles.BatchFile` — within the same file.",
+      "category_justification": "Naming convention violation against the established PascalCase pattern used by all other enum members in the same enum.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/FigletSettingsPanel.ts",
+      "start_line": 185,
+      "end_line": 191,
+      "message": "Removed support for persisting a default font in the settings. This breaks compatibility with workflows reliant on predefined default fonts.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The change is intentional and explicitly described in the PR. The finding restates 'removing a feature breaks users who depended on it' without identifying a specific concrete failure mode or demonstrating that the replacement (lastFontUsed in globalState) is insufficient. It is too generic to be actionable — it could apply to any feature removal in any project.",
+      "severity_justification": "The new mechanism (last-used font via globalState) covers the main individual-user use case; any impact is limited to edge cases like team-shared workspace settings for font, which the finding does not specifically identify.",
+      "category_justification": "Concerns about backwards compatibility and removal of a configuration option.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/src/LanguageCommentStyles.ts",
+      "start_line": 67,
+      "end_line": 67,
+      "message": "Introduced `BATCHFile` comment style but did not account for the case where multiple styles need to coexist in a scenario, potentially causing conflicts in contexts with mixed-comment styles.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The finding is entirely generic and unverifiable. The claim about 'conflicts in contexts with mixed-comment styles' has no basis in this codebase — the architecture maps exactly one comment style per language ID. `BATCHFile` follows the identical implementation pattern as all other single-line prefix styles. No concrete scenario, code path, or conflict mechanism is identified.",
+      "severity_justification": "Even if taken at face value, no concrete conflict scenario exists in the code.",
+      "category_justification": "The concern vaguely relates to code design, though it is not grounded in any specific code issue.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figprint.yml",
+      "start_line": 216,
+      "end_line": 247,
+      "message": "In the WinGet publish workflow, error handling is improved for branch creation and file uploads, but there's no fallback mechanism for failed uploads. This could leave the workflow in a half-completed state if an upload fails.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The code already uses `exit 1` on upload failure (fail-fast), and the branch delete/recreate logic at the start of each run explicitly cleans up any pre-existing branch, removing partially uploaded files. The finding's concern about a 'half-completed state' doesn't account for this existing cleanup mechanism. The claim is generic and doesn't identify a concrete persistent failure scenario.",
+      "severity_justification": "Even in the worst case (partial upload on a run), the next run deletes and recreates the branch, resolving any partial state automatically.",
+      "category_justification": "The concern is about error handling and fault tolerance in CI/CD.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figprint.yml",
+      "start_line": 206,
+      "end_line": 208,
+      "message": "Updated error handling when no YAML files are found, but this assumes file discovery issues are terminal. There may be cases where files are temporarily missing for external reasons.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The YAML files are generated by the same PowerShell script immediately before the `Get-ChildItem` check — there is no external system or race condition involved. If files are missing, it is a genuine failure (write error or path misconfiguration). The `exit 1` is correct behavior. The finding's suggestion of accommodating 'temporarily missing' files is generic advice inappropriate to this context and would actually mask real errors.",
+      "severity_justification": "Even accepting the concern, adding retry logic around locally-generated files would be harmful, not helpful.",
+      "category_justification": "The finding concerns error handling in a CI pipeline.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/package.json",
+      "start_line": 20,
+      "end_line": 22,
+      "message": "Removed the `figlet.selectDefaultFont` activation event. Users who rely on this event to customize their font configurations will no longer have access to this feature.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The activation event was correctly removed because the `figlet.selectDefaultFont` command was entirely removed from the extension by design. An activation event for a non-existent command would be dead/incorrect configuration. The finding conflates the activation event removal with the feature removal, which is an intentional PR decision, not a defect.",
+      "severity_justification": "Retaining an activation event for a removed command would be a bug; removing it is correct.",
+      "category_justification": "Concerns package.json configuration correctness in relation to removed functionality.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGLet.VSCodeExtension/tsconfig.json",
+      "start_line": 10,
+      "end_line": 15,
+      "message": "Added support for several new type definitions in tsconfig. While this improves type safety, it increases the build complexity and size of the type library without evaluating actual necessity for these additions.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "All five type definitions added (`node`, `vscode`, `react`, `react-dom`, `mocha`) are clearly used throughout the codebase and were already auto-included by TypeScript before this change. The finding makes no specific claim about which type is unnecessary and is entirely generic boilerplate that could apply to any tsconfig change.",
+      "severity_justification": "No concrete impact identified; all added types are actively used.",
+      "category_justification": "Concerns build configuration and type library management.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "FIGPrint/readme.md",
+      "start_line": 44,
+      "end_line": 48,
+      "message": "Updated the readme to display pending status for WinGet PR but failed to include alternative installation instructions. This may confuse users looking to install the tool immediately.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The readme already has a 'Manual download' section immediately following the WinGet pending-review note, directing users to the GitHub Releases page. The finding's claim that 'alternative installation instructions' are missing is factually incorrect.",
+      "severity_justification": "Even if the concern were valid, it would be a minor documentation issue.",
+      "category_justification": "The finding concerns the content and completeness of installation documentation.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": ".github/workflows/publish-figprint.yml",
+      "start_line": 254,
+      "end_line": 256,
+      "message": "There is a stray empty-string entry between the x64 installer's `NestedInstallerFiles` block and the start of the arm64 installer entry. When joined with newlines this produces a blank line inside the YAML sequence between two list items. While YAML tolerates blank lines between sequence items, it's inconsistent with the rest of the manifest (which has no blank lines between fields). Recommend removing the `\"\"` entry on line 255 for cleanliness and to avoid any risk with strict YAML linters used by the winget-pkgs pipeline.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 255 in the installer manifest array is a stray `\"\"` that produces a blank line in the generated YAML between the x64 `NestedInstallerFiles` entry and the arm64 installer entry. The rest of the manifest has no such blank lines between fields, making this inconsistent. The claim is factually accurate.",
+      "severity_justification": "YAML parsers tolerate blank lines between sequence items, so this is unlikely to break the winget-pkgs pipeline in practice. It's a cosmetic inconsistency with the rest of the manifest.",
+      "category_justification": "This is a formatting/consistency issue in a generated YAML manifest — the blank line is inconsistent with the rest of the file and could trip strict linters, but it's fundamentally a cleanliness concern.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "ChangeLog-2026.md",
+      "start_line": 63,
+      "end_line": 64,
+      "message": "This changelog entry says the generated manifest defines `figprint` as the portable command alias, but the updated installer manifest generation only writes `RelativeFilePath: FIGPrint.exe` and omits `PortableCommandAlias`. The release notes will be inaccurate unless the workflow is updated to match.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: ChangeLog-2026.md line 64 states 'Define FIGPrint.exe as the nested installer file with `figprint` as the portable command alias', but the actual installer manifest in publish-figprint.yml only writes `RelativeFilePath: FIGPrint.exe` for both x64 and arm64 entries — `PortableCommandAlias: figprint` is absent from the generated YAML.",
+      "severity_justification": "The inaccuracy is in changelog documentation, not in runtime behavior. The missing `PortableCommandAlias` could affect winget users (they'd need to invoke the tool by a different name), but this is a docs inconsistency finding — the changelog claim is wrong, not necessarily the workflow itself.",
+      "category_justification": "The finding is about a changelog entry that inaccurately describes the behavior of the generated manifest — a documentation correctness issue.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

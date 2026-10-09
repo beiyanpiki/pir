@@ -1,0 +1,391 @@
+{
+  "pr_key": "wirechat_wirechat_183-6e3156e7",
+  "pr": {
+    "repo": "https://github.com/wirechat/wirechat",
+    "pr_number": 183,
+    "base": "7f645146da1285f3817a9dfcb04be0a53ee50ecd",
+    "head": "6e3156e78da9b47cb4c6d596883b3ef0730b8cf8"
+  },
+  "findings": [
+    {
+      "file": "resources/views/livewire/chat/partials/body.blade.php",
+      "start_line": 86,
+      "end_line": 105,
+      "message": "loadOlderWithStableScroll has no finally block to reset loadingOlder and pendingPrependRestore on the success path. Both flags are only reset by the server-dispatched older-loaded event arriving at restoreAfterOlderLoaded(). If the Livewire event is lost (e.g., component re-mounts mid-request, Livewire update clobbers the dispatch, or any silent infrastructure failure), both flags stay true permanently. The user can no longer scroll-load older messages without a page reload. The PR description promotes try/finally for the loadMore guard; the actual loadOlder path does not use it.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: `loadOlderWithStableScroll` uses try/catch (not try/finally). On success, `loadingOlder` only resets if `pendingPrependRestore` is already false (i.e., `restoreAfterOlderLoaded()` ran first). The PHP `loadOlder()` has an early-return path that dispatches NO `older-loaded` event, meaning neither flag resets. `loadNewerIfNeeded` correctly uses `.finally()` by contrast. The PR description's own promise of `try/finally` is not fulfilled on this path.",
+      "severity_justification": "If flags get stuck, the user permanently loses the ability to load older messages until page reload. This is a meaningful but recoverable usability regression — not data-loss or a security issue.",
+      "category_justification": "The issue is about state flags not being reset on certain failure/edge-case paths, leading to a permanently broken UI state — a reliability/fault-tolerance concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/Livewire/Chat/Chat.php",
+      "start_line": 647,
+      "end_line": 658,
+      "message": "pushMessage now calls syncCursorsFromFlat and syncCanLoadFlags after every appended message. syncCanLoadFlags runs two EXISTS queries against the messages table on every call. appendNewMessage is invoked for every broadcast event received in real time, meaning each incoming message from another user executes two extra DB queries. In a busy group chat this creates significant database pressure proportional to message volume.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: `pushMessage()` calls `syncCursorsFromFlat()` then `syncCanLoadFlags()`, which runs two EXISTS queries. `appendNewMessage()` calls `pushMessage()` for every broadcast event. The queries are logically redundant on the append path (canLoadOlder is unchanged; canLoadNewer will always be false after appending the newest message). This overhead didn't exist before this PR.",
+      "severity_justification": "Two indexed EXISTS queries per incoming broadcast message per active viewer adds real but bounded DB pressure. For high-traffic group chats with many concurrent viewers it compounds, but individual queries are cheap due to indexing.",
+      "category_justification": "The issue is unnecessary database queries on a hot path (every incoming real-time message), directly impacting database load.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chats/chats.blade.php",
+      "start_line": 84,
+      "end_line": 84,
+      "message": "wire:navigate:scroll is not a valid Livewire directive on a div. Livewire's scroll preservation modifier is only documented for anchor tags that use wire:navigate (e.g., <a wire:navigate.scroll href=\"...\">). The colon-separated form wire:navigate:scroll on an arbitrary scrollable container is not a recognized Livewire attribute and is silently ignored, meaning the intended scroll-restore behavior does not activate.",
+      "tp_fp": "fp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Livewire docs explicitly allow it on any scrollable element",
+      "severity_justification": "The intended scroll-restoration behavior silently does nothing, so the chats list doesn't preserve its scroll position across navigations. Custom JS (`scrollToConversation`) partially compensates but doesn't cover all cases (e.g., returning to a prior scroll offset without a selected conversation). The feature is broken but not data-affecting.",
+      "category_justification": "The directive is syntactically invalid for Livewire, producing incorrect behavior (no-op instead of scroll preservation) rather than a style or performance issue.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chat/partials/body.blade.php",
+      "start_line": 227,
+      "end_line": 234,
+      "message": "The @scroll-bottom.window handler directly accesses el.style.overflowY without a null guard. el is initialized to null in x-data and set to $el in x-init. The widget's dispatchScrollBottom calls requestAnimationFrame inside $nextTick, which runs after Livewire re-renders the DOM. If the new chat body's Alpine x-init has not yet run when this event fires (possible during Livewire morph timing), el is still null and el.style.overflowY = 'hidden' throws a TypeError, breaking scroll-to-bottom and leaving overflowY unrestored.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "`x-init` assigns ref; event dispatch deferred via `$nextTick` + `requestAnimationFrame`",
+      "severity_justification": "While the null access is a real pattern defect, in practice `el` is set by Alpine's synchronous `initTree` before the double-deferred `dispatchScrollBottom` fires. The functional impact (broken scroll in widget) would require a precise timing race that is very unlikely in normal Livewire/Alpine operation.",
+      "category_justification": "Potential null-access exception that could break scroll state if timing conditions are met — a fault-tolerance/defensive-coding concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/Livewire/Chat/Chat.php",
+      "start_line": 1031,
+      "end_line": 1031,
+      "message": "initializeConversation still executes a COUNT(*) query to populate totalMessageCount on every component mount. None of the new cursor-based pagination methods (loadOlder, loadNewer, loadLatestWindow, syncCanLoadFlags) read this property. The query is purely wasted work on every chat open.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: `totalMessageCount` is assigned via a COUNT(*) query in `initializeConversation()` (line 1031) and the property is declared at line 84 with `#[Locked]`. No other references exist anywhere in src/ or resources/. Before this PR it was used in old `loadMessages()` for skip/canLoadMore logic; the cursor-based rewrite removed all its consumers while leaving the COUNT query intact.",
+      "severity_justification": "One extra COUNT query per chat open is real but modest overhead. The `conversation_id` foreign key is almost certainly indexed so the query is fast. The main cost is the unnecessary DB roundtrip and the serialized Livewire wire property carrying useless data.",
+      "category_justification": "A database COUNT query executes on every component mount and its result is never consumed — pure wasted work introduced when the PR removed all consumers of the property.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/Livewire/Chat/Chat.php",
+      "start_line": 107,
+      "end_line": 111,
+      "message": "The listener 'open-attachment' => 'jumpToMessage' was added, but no view or component in this codebase dispatches an open-attachment event. jumpToMessage expects an integer message ID as its argument. If this listener is intended to respond to events dispatched by wirechat-pro or user code, there is no documented contract for what the event payload must contain. If the payload does not include a bare integer messageId, the method will receive the wrong argument type and either abort or produce wrong jump behavior.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Verified: `open-attachment` is registered as a listener mapped to `jumpToMessage(int $messageId)` but is dispatched nowhere in the codebase (resources/, src/, tests/ all confirmed). The strict `int` type hint means any payload mismatch from an external dispatcher would cause a TypeError. The semantic name 'open-attachment' also mismatches the method's scroll-to-message behavior.",
+      "severity_justification": "There is no active dispatcher in this repo so no user is currently affected. The risk only materializes when external code (wirechat-pro or user code) dispatches this event, and only if the payload format doesn't match the bare-int expectation. Low immediate impact but it's an undocumented, potentially broken extension point.",
+      "category_justification": "The issue is about an undocumented event contract — a public listener with no dispatching source, a mismatched semantic name, and a strict type constraint that could break external integrations.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chats/partials/list.blade.php",
+      "start_line": 50,
+      "end_line": 50,
+      "message": "The wire:key now includes $unreadIndicatorKey which equals the exact unread count for UnreadIndicatorType::Count. Every new message that changes the count produces a different key, causing Livewire to destroy and recreate the full <li> DOM node including its Alpine component. This means Alpine state is lost and all CSS transitions are interrupted on every incoming message. Using a boolean presence key (read/unread) instead of the exact count would be sufficient to trigger re-render when the badge should appear or disappear.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Key already changes on `$lastMessage->id`; the unread count adds no extra churn",
+      "severity_justification": "The Alpine state in the `<li>` is trivial (just event handlers, no runtime state). The extra DOM rebuilds from count-based key are real but only meaningfully differ from a boolean key in mark-as-read scenarios, not in the new-message flow where `$lastMessage?->id` already forces rebuilds.",
+      "category_justification": "The issue is unnecessary DOM destruction/recreation due to an overly granular wire:key discriminator, causing extra Livewire morph work and Alpine re-initialization.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chats/partials/list.blade.php",
+      "start_line": 95,
+      "end_line": 107,
+      "message": "The @if ($showUnreadStatus) blade guard means the unread badge DOM nodes are entirely absent when showUnreadStatus is false at server render time. The new x-show=\"selectedConversationId != conversationID\" is only evaluated when the badge IS rendered. If a user opens a conversation (selectedConversationId changes client-side) and a new message arrives for that same conversation while the chat is open, the Livewire re-render will compute showUnreadStatus=false (because selectedConversationId == conversation->id on the server) and omit the badge entirely instead of simply hiding it via x-show. The client-side Alpine x-show never gets a chance to control visibility because the element doesn't exist in the DOM.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The described scenario (badge absent for the currently-selected conversation when a new message arrives) is correct behavior by design. `$showUnreadStatus` already factors in `selectedConversationId != $conversation->id` — the badge should not appear for the open conversation. The `@if` omission and `x-show` produce identical outcomes in this case. The finding treats intentional server-side gating as a bug, but both mechanisms agree: no badge for the selected conversation.",
+      "severity_justification": "Even if the finding were correct, the described scenario produces no visual bug from the user's perspective — the badge is correctly invisible whether omitted by @if or hidden by x-show.",
+      "category_justification": "The finding is about visibility logic correctness in the unread badge rendering.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/widgets/wire-chat.blade.php",
+      "start_line": 138,
+      "end_line": 145,
+      "message": "dispatchScrollBottom fires unconditionally whenever any widget component is opened or switched, not only when switching to a chat body. If the widget hosts non-chat components (e.g., a chats list, a settings panel, or a group info view), opening them will still dispatch scroll-bottom on the window, which any mounted chat body on the page will handle by resetting its scroll position to the bottom. This causes unexpected scroll position resets when the user is browsing chat history.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "`widgetComponents` is only ever populated by `openChatWidget()` which hardcodes `$component = 'wirechat.chat'`. Non-chat views (chats list, drawer) are rendered outside the widgetComponents loop and don't trigger `setActiveWidgetComponent`. The scenario of non-chat components causing unexpected scroll resets cannot occur in the current codebase.",
+      "severity_justification": "Even if non-chat components were added to widgetComponents in the future, the impact would be a scroll-position reset — a UX annoyance rather than a data or functional failure.",
+      "category_justification": "The finding is about incorrect behavior (unexpected scroll reset) from an unconditional dispatch — a correctness/logic concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chat/partials/body.blade.php",
+      "start_line": 242,
+      "end_line": 242,
+      "message": "The `@scroll-bottom.window` event handler temporarily sets `overflow-y: hidden` on the chat body, scrolls to the bottom, and then restores `overflow-y: auto`. This is a fragile way to manage scroll behavior that can be defeated by race conditions with other UI updates or media loading. A more robust approach would be to use flags to control scrolling behavior without altering CSS properties that affect layout and visibility.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The overflow-y toggle pattern is pre-existing (verified in HEAD~5), and the three operations (hidden → scroll → auto) execute synchronously within a single RAF callback so no race condition can occur between them. The 'use flags instead' suggestion is generic advice not tied to a concrete reproducible failure path in this code.",
+      "severity_justification": "Even accepting the finding at face value, the described failure mode (race condition during overflow toggle) is not mechanically possible given the synchronous execution within a single RAF callback.",
+      "category_justification": "The finding is essentially a style/approach preference (avoid CSS property manipulation for scroll control) rather than a verifiable correctness or reliability bug.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/Livewire/Chat/Chat.php",
+      "start_line": 1083,
+      "end_line": 1083,
+      "message": "When a chat is opened in widget mode, the component dispatches a `refresh` event to `Livewire\\Chat\\Chats`. However, the event listener in `WirechatServiceProvider` for incoming notifications dispatches `refresh-chats`. This inconsistency means the chat list's unread status will not reliably update in widget mode when a new message arrives for a different conversation. The event names should be standardized.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "`refresh` dispatched to Chats triggers `$refresh` which causes a full Livewire re-render and re-evaluation of the `#[Computed] conversations()` property (no `persist: true`), which re-runs `withUnreadCountFor`/`withUnreadExistsFor` queries. Unread status IS updated. The two event names serve intentionally different purposes: `refresh` for lightweight re-renders preserving conversation order; `refresh-chats` for hard resets that reload conversation ordering. There is no functional inconsistency.",
+      "severity_justification": "Even if there were a naming inconsistency, the described scenario (unread status not updating in widget mode) doesn't actually occur — `refresh` correctly refreshes unread indicators via `$refresh` re-render.",
+      "category_justification": "The finding makes a factual claim about whether unread status updates, which is a correctness concern.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/Feature/ChatTest.php",
+      "start_line": 513,
+      "end_line": 513,
+      "message": "Typo: \"succesfully\" should be \"successfully\" in this new test description. Note: the surrounding code contains a previously commented-out test with the same misspelling on line 527; consider fixing both for clarity.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified at line 513: the new test description reads 'after succesfully loading chat' — 'succesfully' is indeed missing an 's' and should be 'successfully'. The commented-out test at line 527 also carries the same misspelling, as the finding notes.",
+      "severity_justification": "Pure cosmetic typo in a test description string; no behavioral impact.",
+      "category_justification": "Spelling error in a test name — a naming/readability issue with no functional consequence.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chats/partials/list.blade.php",
+      "start_line": 37,
+      "end_line": 39,
+      "message": "The inner `if (event.detail.conversation == this.conversationID) { selectedConversationId = event.detail.conversation; }` block is dead/redundant: the parent `x-data` in `resources/views/livewire/chats/chats.blade.php` (line 9) already handles `chat-opened.window` and updates `selectedConversationId` unconditionally. The conditional assignment here only re-assigns the same value that's already been set by the parent listener, and only when matching, which has no observable effect. Recommend removing the inner `if` block to avoid confusion about intent.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the parent x-data in chats.blade.php line 9 has `x-on:chat-opened.window='selectedConversationId = $event.detail.conversation'` which sets the shared Alpine state unconditionally. The child li's handleChatOpened if-block conditionally assigns the same value to the same variable, which is always already set by the parent listener. The assignment is redundant.",
+      "severity_justification": "Dead code with no behavioral impact — it just adds confusion about intent. No bug or runtime issue.",
+      "category_justification": "Redundant/dead code that creates confusion about intended behavior without causing any functional difference.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chats/chats.blade.php",
+      "start_line": 36,
+      "end_line": 39,
+      "message": "The `requestAnimationFrame` wrapping was moved to enclose the entire function body (line 15), but the original `requestAnimationFrame(() => { ... })` block around the `scrollTo` call was deleted, leaving a stale `// Animate scroll` comment with an empty line and inconsistent indentation right before `container.scrollTo(...)`. The remaining `scrollTo` call is no longer wrapped in a dedicated rAF — it now executes synchronously within the outer rAF. The dangling comment and stray indentation are confusing; please remove the stale comment/empty block and reindent the `scrollTo` call to match its actual scope.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in the file: the `// Animate scroll` comment remains at line 36 followed by an empty line and a `container.scrollTo(...)` call with inconsistent/extra indentation — remnants of a deleted inner `requestAnimationFrame` wrapper. The scrollTo now runs synchronously within the outer rAF but the stale comment and odd indentation make the code confusing.",
+      "severity_justification": "Purely a readability/maintainability issue — stale comment and wrong indentation with no behavioral impact.",
+      "category_justification": "Dead comment and inconsistent indentation left by incomplete refactoring.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/Livewire/Chat/Chat.php",
+      "start_line": 654,
+      "end_line": 656,
+      "message": "When a new message is pushed while the component is displaying a non-latest window (for example after `jumpToMessage`, where `canLoadNewer` is true), this immediately resyncs the newest cursor to the newly appended message. That makes `syncCanLoadFlags()` conclude there are no newer messages, so any messages between the old window and the appended message can no longer be loaded via `loadNewer()`. Treat appends outside the contiguous loaded window separately or reload the latest window before updating the newer cursor.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: pushMessage unconditionally calls syncCursorsFromFlat then syncCanLoadFlags after appending. If the user is in a mid-history window with canLoadNewer=true and a new message arrives, pushMessage appends it, the newer cursor jumps to the new message, and syncCanLoadFlags finds no messages newer than it, setting canLoadNewer=false. Messages between the old window's upper bound and the new message become permanently inaccessible via loadNewer().",
+      "severity_justification": "Messages become silently inaccessible when a real-time message arrives while viewing a mid-history window, degrading the core message-browsing feature. Not data loss but a meaningful UX correctness issue.",
+      "category_justification": "Logic bug causing a portion of message history to become unreachable after a specific sequence of user actions and real-time events.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/Feature/ChatTest.php",
+      "start_line": 513,
+      "end_line": 513,
+      "message": "Typo in the new test name: “succesfully” should be “successfully”.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified at line 513: 'succesfully' is indeed misspelled (missing an 's'). This is the same finding as Finding 1 on this PR, but each finding is evaluated independently on its own merit.",
+      "severity_justification": "Pure cosmetic typo in a test description string with no behavioral impact.",
+      "category_justification": "Spelling error in a test name — a naming/readability issue with no functional consequence.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chat/partials/body.blade.php",
+      "start_line": 219,
+      "end_line": 221,
+      "message": "The initial auto-scroll window now ends after 220ms, and `onAnyMediaLoad()` only keeps the chat pinned to the bottom while `initializing` is true. Images or videos in the initially rendered messages that load after this timer can increase `scrollHeight` after the final scroll, leaving the user above the newest messages when opening a chat; the previous media wait/longer fallback avoided that case.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: `initializing` becomes false after 220ms unconditionally, but `onAnyMediaLoad()` only calls `scrollToBottom()` while `initializing` is true. Media loading after 220ms silently fails to re-anchor to the bottom. The previous code used `waitForMedia()` with `Promise.all` to explicitly await all media before clearing the init flag, which the new code does not replicate.",
+      "severity_justification": "Users on slower connections or with large media in the initial window may open a chat and not see the latest messages, requiring a manual scroll. This affects the primary chat experience on every chat open.",
+      "category_justification": "The initialization logic regresses a specific behavior — scroll-to-bottom after media loads — that the previous implementation explicitly handled.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "resources/views/livewire/chat/partials/body.blade.php",
+      "start_line": 65,
+      "end_line": 73,
+      "message": "`pendingPrependRestore` and `loadingOlder` are cleared before the newly prepended media has finished loading. Because `onAnyMediaLoad()` only restores the anchor while one of those flags is still true, images/videos in older messages that load after this handler runs can grow the prepended content and shift the viewport away from the user's original message.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: restoreAfterOlderLoaded() immediately sets pendingPrependRestore=false and loadingOlder=false, then schedules two rAF restoreToAnchor calls. If images/videos in the newly prepended content finish loading after those flags are cleared, onAnyMediaLoad() finds both flags false and does not call restoreToAnchor(), leaving the viewport shifted by the expanded media height.",
+      "severity_justification": "Affects scroll stability only when older messages containing media are loaded — a secondary UX path. The two rAF restoreToAnchor calls handle the common fast-loading case; only slow-loading media triggers the issue.",
+      "category_justification": "Timing bug causing scroll position restoration to fail when media loads asynchronously after state flags are cleared.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/Feature/ChatsTest.php",
+      "start_line": 778,
+      "end_line": 779,
+      "message": "This assertion now verifies that the reactive `showUnreadStatus` class binding is absent, but the test name still says it covers reactive preview classes and immediate de-emphasis when opening a chat. Rename or update the test so its intent matches the behavior being asserted.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the test name says 'uses reactive preview classes so unread text de-emphasizes immediately when a chat is opened', but the assertions check for server-rendered PHP @class output and confirm the old Alpine `showUnreadStatus && !false` expression is absent. The PR replaced the Alpine binding with static server-side classes, making the test name misleading about both 'reactive' behavior and 'immediately when a chat is opened'.",
+      "severity_justification": "Misleading test name only — no behavioral or correctness impact. A reader would misunderstand what the test covers but the assertions themselves are valid.",
+      "category_justification": "Test description no longer matches the behavior being tested after the implementation change in this PR.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

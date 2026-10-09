@@ -1,0 +1,391 @@
+{
+  "pr_key": "superyyrrzz_ForgeMap_106-2f3977ed",
+  "pr": {
+    "repo": "https://github.com/superyyrrzz/ForgeMap",
+    "pr_number": 106,
+    "base": "2ce83d91f981fc579ec53baf9bce4957fdc240fc",
+    "head": "2f3977edabcb8fdf5f947704e727d798a46fe96f"
+  },
+  "findings": [
+    {
+      "file": ".github/workflows/docs.yml",
+      "start_line": 26,
+      "end_line": 27,
+      "message": "Changing `cancel-in-progress` to `true` means a new push to `main` will cancel an in-flight GitHub Pages deployment job. The `deploy-pages` action may be interrupted mid-upload, leaving the Pages site in a broken or partially-updated state. The original `cancel-in-progress: false` was intentional for deployment workflows — it's safe to cancel a build but not a live deploy. The concurrency group should either remain `false` for cancel-in-progress, or the deploy job should use a separate concurrency group with `cancel-in-progress: false`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The PR changes cancel-in-progress from false to true on a single concurrency group shared by both build and deploy jobs. The deploy job uses actions/deploy-pages@v4; interrupting it mid-execution can leave the GitHub Pages site in a broken/partial state. GitHub's own Pages starter workflows use cancel-in-progress: false explicitly to prevent this. The finding is factually correct and describes a real risk introduced by this PR.",
+      "severity_justification": "A partial/interrupted deployment could leave the live documentation site broken until the next successful deploy. Not a data or security issue, but causes real user-facing downtime for the docs site.",
+      "category_justification": "The issue concerns fault tolerance of the CI/CD deployment pipeline — specifically whether a live deployment can be safely interrupted.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 241,
+      "end_line": 244,
+      "message": "Dark mode has no `[data-bs-theme=\"dark\"] pre code` color override, but light mode explicitly sets `[data-bs-theme=\"light\"] pre code { color: #e0ddd8 !important }` to ensure legible text on the dark `#1e2530` pre background. In dark mode, pre background is `#0a0e14` (near-black) but code text color falls back to Bootstrap's `var(--bs-code-color)`, which resolves to `var(--forge-ember-light)` = `#f5b85a` (amber). This makes all unstyled pre code text amber-on-black rather than the expected near-white, and will conflict with any syntax highlighter that expects a neutral base color.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: light mode has [data-bs-theme='light'] pre code { color: #e0ddd8 !important } but dark mode has no equivalent pre code color override. Dark mode pre background is #0a0e14 and --bs-code-color in dark mode resolves to var(--forge-ember-light)=#f5b85a (amber). Bootstrap's global code { color: var(--bs-code-color) } applies to pre code in dark mode, yielding amber text on near-black — an inconsistency that degrades readability and conflicts with syntax highlighting.",
+      "severity_justification": "Code blocks are central to documentation sites. Amber-on-near-black text in dark mode is harder to read and will visually conflict with any syntax highlighter that sets token colors expecting a neutral base color.",
+      "category_justification": "The issue is a color contrast/readability problem in dark mode affecting a primary user-facing feature of the documentation site.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 246,
+      "end_line": 255,
+      "message": "`pre::before` is `position: absolute` inside a `position: relative` element that also has `overflow: auto`. This makes `pre` a scroll container, and absolutely-positioned children live in the scrollable content area — not pinned to the visual viewport of the element. When a code block has wide content and the user scrolls horizontally, the decorative amber stripe scrolls with the content and disappears from view. It should be rendered as a non-scrolling overlay, e.g. using a wrapper div with `overflow: hidden` for the stripe and `overflow: auto` on an inner element, or a sticky/fixed alternative.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: pre has position:relative and overflow:auto; pre::before has position:absolute with top:0/left:0/right:0. In CSS, absolutely-positioned elements inside a scroll container live in the scrollable overflow region, not pinned to the scrollport. Horizontal scrolling on wide code blocks will cause the decorative amber stripe to scroll out of view. The finding's technical claim about CSS scroll container behavior is accurate.",
+      "severity_justification": "The affected element is purely decorative (a 2px amber gradient stripe). It doesn't break functionality, readability, or accessibility — just a cosmetic effect that disappears on horizontal scroll of wide code blocks.",
+      "category_justification": "This is a CSS correctness/implementation issue with a decorative element — the intended visual effect doesn't match the actual rendering behavior, but there are no functional or accessibility consequences.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 279,
+      "end_line": 286,
+      "message": "`overflow: hidden` on a `<table>` element does not clip to `border-radius` consistently across browsers. Firefox in particular does not apply `border-radius` clipping to table elements even when `overflow: hidden` is set, so the rounded-corner appearance will be absent in Firefox. The standard workaround is to wrap the table in a `<div>` with `overflow: hidden; border-radius: 8px` and remove those properties from the table itself.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: table has border-radius:8px and overflow:hidden with border-collapse:separate. This is a documented cross-browser issue — Firefox does not apply overflow:hidden clipping to border-radius on table elements, so rounded corners will not render in Firefox. The finding is factually correct about the CSS pattern and the known browser incompatibility.",
+      "severity_justification": "Purely cosmetic — only affects whether table corners appear rounded in Firefox. No functional or accessibility impact.",
+      "category_justification": "This is a cross-browser rendering compatibility issue affecting consistent visual presentation across user environments.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 331,
+      "end_line": 331,
+      "message": "`transition: all 0.15s ease` on `.toc .nav-link` animates every CSS property on each state change, including layout-triggering properties like `width`, `height`, `padding`, and `margin`. This forces the browser to run layout and paint on every animation frame for sidebar navigation links, which scroll continuously during page navigation. It should be replaced with an explicit list of only the properties that actually change: `transition: color 0.15s ease, border-left-color 0.15s ease`.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "transition: all 0.15s ease is confirmed on .toc .nav-link. Replacing it with explicit properties is valid CSS best practice. However, the performance rationale (links scrolling continuously) is factually wrong — transitions only fire on property changes, not scroll events. The underlying recommendation is sound but the stated reason for the performance impact is incorrect.",
+      "severity_justification": "transition: all on a sidebar nav link with 0.15s duration is not a meaningful real-world performance concern. The recommendation improves CSS hygiene and prevents accidental animation of unintended properties, but has negligible impact in practice.",
+      "category_justification": "The finding centers on unnecessary CSS property animation scope and browser rendering cost.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 9,
+      "end_line": 9,
+      "message": "Fonts are loaded unconditionally from Google Fonts via `@import`. This sends every documentation visitor's IP address and User-Agent to Google servers on each page load, which constitutes a third-party data transfer requiring consent under GDPR (confirmed by a 2022 German court ruling against Google Fonts served from CDN). It also introduces an external availability dependency — if Google Fonts is unreachable (e.g. corporate proxies, China GFW), the page load will stall waiting for the font request to time out before rendering. Fonts should be self-hosted under `docfx/templates/forgemap/public/fonts/` and served with a local `@font-face` declaration.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The finding is a template alert applicable to any project using Google Fonts via @import. The GDPR concern depends heavily on jurisdictional context (this is an open-source docs site with unknown legal obligations) and the availability/stall concern is partially mitigated by display=swap. The same comment could be pasted onto any Google Fonts CDN user without modification. It restates well-known best practices rather than identifying a concrete, specific issue in this codebase.",
+      "severity_justification": "Even if taken seriously, this is a documentation site for an open-source project where the practical GDPR risk and CDN availability impact are minimal compared to a commercial product.",
+      "category_justification": "The primary framing is around GDPR/privacy data transfer to third-party servers, with a secondary reliability concern about external dependency.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 184,
+      "end_line": 193,
+      "message": "The landing `h1` gradient text uses `-webkit-text-fill-color: transparent` without a plain `color` fallback immediately before it. The `h1` rule higher in the cascade sets `color: var(--bs-heading-color)`, but `-webkit-text-fill-color` overrides `color` in supporting browsers. If a browser supports `-webkit-text-fill-color: transparent` but does not correctly implement `background-clip: text` (e.g. some older WebKit versions where `-webkit-background-clip: text` requires the `-webkit-` prefix that is present but `background-clip: text` the standard property may not apply), the heading text becomes fully invisible. A `color` property should be declared immediately before `-webkit-text-fill-color` within this same rule to serve as a safe cascade fallback.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The code already includes both -webkit-background-clip: text and background-clip: text. The finding's failure scenario (browser supports -webkit-text-fill-color but not -webkit-background-clip:text) cannot occur in practice because these webkit extensions were introduced together and are universally co-supported. The old-WebKit mitigation the finding recommends is already present in the code.",
+      "severity_justification": "Even if the scenario were valid, it would only affect a decorative gradient heading on the landing page in browsers that have not been in active use for many years.",
+      "category_justification": "The concern is about text becoming invisible in certain browser environments, which is a cross-browser rendering issue.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 284,
+      "end_line": 284,
+      "message": "The selector `tbody td` has `border-color` set, which is not necessary as the parent `table` element already has a border and `border-collapse: separate` is used. Table cells do not have their own borders with this model. This rule has no effect.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding claims border-collapse:separate means cells don't have their own borders — this is factually incorrect. border-collapse:separate is the model where each cell has its OWN independent border (not merged with adjacent cells). Additionally, DocFX's modern template stacks Bootstrap 5 which sets default border-bottom-width on td elements, making the border-color override effective.",
+      "severity_justification": "The finding makes an incorrect claim about standard CSS behavior; there is no actual issue in the code.",
+      "category_justification": "The finding is about a supposedly redundant CSS rule — a maintainability/cleanup concern.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 204,
+      "end_line": 204,
+      "message": "The `box-shadow` property on `.form-control:focus` is set with a color value using `rgba(232, 118, 10, 0.2)`. This hardcoded color does not adapt to the dark theme, where a different `--forge-ember` color is defined. It should use CSS variables to respect the active color theme.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: header .form-control:focus uses border-color: var(--forge-ember) which adapts to both themes, but box-shadow hardcodes rgba(232,118,10,0.2) which only matches the light-mode --forge-ember (#e8760a). In dark mode --forge-ember is #f09030 (rgb 240,144,48), so the focus ring glow color mismatches the active theme. --bs-primary-rgb is already set correctly for both themes and could fix this.",
+      "severity_justification": "Minor visual inconsistency: the focus ring glow on the search box uses the wrong ember hue in dark mode. Functional and accessible, just a subtle theme inconsistency.",
+      "category_justification": "Theme consistency issue — a hardcoded color value diverges from the CSS variable system established throughout the rest of the file.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 130,
+      "end_line": 133,
+      "message": "The `filter` property on `#logo` and `.navbar-brand:hover #logo` uses hardcoded RGB values for the `drop-shadow`. This will not adapt correctly for dark mode. The color should be defined using a CSS variable to ensure it matches the theme's `--forge-ember` color.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: #logo and .navbar-brand:hover #logo use hardcoded rgba(232,118,10,...) which only matches light-mode --forge-ember (#e8760a). Dark mode --forge-ember is #f09030 (rgb 240,144,48). CSS variables work inside filter:drop-shadow() in modern browsers, so this is fixable. Same hardcoded-color-vs-CSS-variable inconsistency pattern as the box-shadow issue.",
+      "severity_justification": "The navbar background is always --forge-anvil (#141a22) in both themes with no dark-mode override, so the drop-shadow renders on the same dark surface regardless of theme. The perceptible difference between the two ember values at 0.4-0.7 opacity on near-black is minimal.",
+      "category_justification": "Theme consistency issue — hardcoded color bypasses the CSS variable system established throughout the file, creating drift risk if ember values change.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 25,
+      "end_line": 25,
+      "message": "The `--bs-link-hover-color` in the light theme is hardcoded to `#c4630a`. This color is a darkened version of `--forge-ember`. It should be derived from the `--forge-ember` variable (e.g., using `color-mix` or a pre-calculated variable) to ensure consistency if the primary ember color is changed.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: light mode hardcodes --bs-link-hover-color: #c4630a at line 32 while dark mode uses var(--forge-ember-light) at line 61 for the equivalent property. This is a real inconsistency — the rest of the link color system uses CSS variables, so light mode hover color breaks the pattern and would drift if --forge-ember changes.",
+      "severity_justification": "Purely a maintainability issue. The hardcoded color is currently correct and only becomes a problem if the ember palette changes. No functional or visual impact at present.",
+      "category_justification": "The finding is about consistency in the CSS variable system — hardcoded color value that should follow the same variable-based pattern used elsewhere in the same file.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 125,
+      "end_line": 125,
+      "message": "The color for `.navbar-brand` is hardcoded to `#f4f1ed`. While this matches the light theme's `--forge-ash` variable, it should use `var(--forge-ash)` to ensure it adapts if the theme variables are changed and to maintain consistency with dark mode styling.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The suggested fix would break dark mode: --forge-ash in dark mode is #1a1f28 (near-black), which would make the navbar brand invisible on the always-dark navbar background (#141a22). The hardcoded #f4f1ed is intentional — the navbar header has no dark-mode background override and stays near-black in both themes, requiring a consistently light text color. Using var(--forge-ash) would be harmful, not a consistency improvement.",
+      "severity_justification": "The finding is incorrect and the suggested change would introduce a visible bug (invisible navbar brand in dark mode), but no actual issue exists in the current code.",
+      "category_justification": "The finding is framed as a CSS variable consistency issue.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 365,
+      "end_line": 368,
+      "message": "Removing underlines from all links makes inline article links distinguishable only by color until hover. Since the docs include inline links in body content, this creates an accessibility issue for users who cannot rely on color alone; keep a non-color cue for content links and scope the no-underline treatment to navigation/UI links.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified at lines 365-372: `a { text-decoration: none; }` is applied globally to all anchor elements. Underlines are only restored on hover. This makes inline body content links distinguishable from surrounding text only by color when not hovered, which is a real WCAG 1.4.1 accessibility issue. The claim is factually correct and the suggested scoping fix is actionable.",
+      "severity_justification": "Fails WCAG 1.4.1 (Use of Color) for users who cannot distinguish links by color alone (color-blind users, low-vision users). It affects the usability of all inline documentation links at rest.",
+      "category_justification": "The core issue is relying on color alone to distinguish links, directly relevant to accessibility standards (WCAG 1.4.1).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 124,
+      "end_line": 131,
+      "message": "The default navbar link color has insufficient contrast against the forced dark header background. In dark mode this resolves to #6b7280 on #141a22 (about 3.6:1), below the 4.5:1 requirement for the 0.875rem text used here, so inactive navigation items can be hard to read.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: dark mode --forge-smoke (#6b7280) on the forced --forge-anvil (#141a22) navbar background yields ~3.67:1 contrast ratio. Nav links are 0.875rem/14px at font-weight 600, which does not qualify for the WCAG large text exception (requires ≥14.67px bold). The 4.5:1 threshold applies and is not met. The finding's claim and figure are factually accurate.",
+      "severity_justification": "Fails WCAG 2.1 AA 1.4.3 for inactive nav items in dark mode. Affects users with low vision but only in dark mode and only for inactive/non-hovered links.",
+      "category_justification": "Insufficient color contrast for text is a direct WCAG accessibility requirement (1.4.3).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 168,
+      "end_line": 170,
+      "message": "The search placeholder color does not meet text contrast in either theme against the input backgrounds introduced here (about 3.8:1 in light mode and 2.5:1 in dark mode). This makes the search affordance difficult to read, especially because the placeholder is the only visible prompt inside the field.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: placeholder uses --forge-smoke on --forge-steel-light background. Light mode (#8a9099 on #2c3642) gives ~3.5:1 and dark mode (#6b7280 on #c0bbb4) gives ~2.35:1, both below WCAG 4.5:1. The finding's figures are close approximations. The accessibility concern is real since placeholder is the only visible prompt in an empty search field.",
+      "severity_justification": "Affects search usability for low-vision users in both themes. Placeholder is the sole content cue in an empty search input, making it high-impact within the search affordance, though search is a secondary navigation aid.",
+      "category_justification": "Insufficient contrast on placeholder text violates WCAG 1.4.3 (Contrast Minimum).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 30,
+      "end_line": 32,
+      "message": "The light-theme link colors do not provide enough contrast against the light page background for normal body text (the default #e8760a link color is under 3:1 on #faf9f7, and the hover color is also below 4.5:1). Since article content includes inline links, these links can be difficult to read and fail text contrast requirements.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: default link color #e8760a on #faf9f7 body background yields ~2.70:1 contrast, confirming the finding's 'under 3:1' claim. Hover color #c4630a gives ~3.67:1, also below WCAG 4.5:1. Both values are factually accurate and represent a real WCAG 1.4.3 failure for inline body text links.",
+      "severity_justification": "The primary link color in light mode (which is likely the default view for most users) fails WCAG contrast requirements, making inline documentation links difficult to read for low-vision users.",
+      "category_justification": "Insufficient contrast for link text against page background is a WCAG 1.4.3 violation.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 33,
+      "end_line": 36,
+      "message": "The light-theme inline code color reuses #e8760a, which has insufficient contrast against the inline code background set later to --forge-ash (#f4f1ed). Inline code is rendered at 0.85em, so this low contrast makes code fragments hard to read in article text.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: inline code in light mode uses #e8760a on --forge-ash (#f4f1ed), yielding ~2.54:1 contrast. This is below both 3:1 (large text) and 4.5:1 (normal text) thresholds. At 0.85em size, 4.5:1 is required. The finding's claim is factually correct.",
+      "severity_justification": "Inline code fragments throughout documentation articles will be difficult to read for low-vision users in light mode, directly degrading the usability of code-heavy documentation.",
+      "category_justification": "Insufficient contrast on inline code text violates WCAG 1.4.3 (Contrast Minimum).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 314,
+      "end_line": 318,
+      "message": "Bold table values are forced to the ember color in light mode, which has insufficient contrast against the table/page background for normal text. The benchmark winner cells in the landing page are regular-sized text, so this color choice can make the emphasized values harder to read.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: light mode `td strong` uses --forge-ember (#e8760a) against the inherited body background --forge-white (#faf9f7), yielding ~2.70:1 contrast. This fails both 3:1 and 4.5:1 WCAG thresholds. The table font-size is 0.9rem (~14.4px), just under the bold large text threshold, so 4.5:1 applies. The finding is factually correct.",
+      "severity_justification": "Affects only bold/emphasized cells in tables in light mode. While a real WCAG 1.4.3 violation, it is a narrower impact than the general link or inline code contrast issues (only affects specific emphasized table values).",
+      "category_justification": "Insufficient contrast on emphasized table cell text violates WCAG 1.4.3.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "docfx/templates/forgemap/public/main.css",
+      "start_line": 207,
+      "end_line": 214,
+      "message": "The light-theme feature heading color uses #e8760a on the light page background, which is below the required 3:1 contrast even for large/bold text. These headings can therefore be hard to read on the landing page.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "accessibility",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: landing page h3 in light mode uses --forge-ember (#e8760a) on --forge-white (#faf9f7) background, yielding ~2.70:1 contrast. At 1.15rem (~18.4px) bold, these headings fall just under the WCAG large text threshold (18.67px bold), so 4.5:1 applies. Even under the large text 3:1 threshold, 2.70:1 still fails. The finding is factually correct.",
+      "severity_justification": "Affects only h3 feature headings on the landing page in light mode. While a real WCAG 1.4.3 failure, the impact is limited in scope — landing page section headings rather than body content.",
+      "category_justification": "Insufficient color contrast on heading text violates WCAG 1.4.3 (Contrast Minimum).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}
