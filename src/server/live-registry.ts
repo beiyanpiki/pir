@@ -239,6 +239,12 @@ export class LiveRegistry {
    * the window every delta of a long streak would re-trigger an O(cap)
    * pass. A run at the cap pays one pass per batch of arrivals, not per
    * event; the buffer oscillates between cap-batch and cap+batch.
+   *
+   * The trailing delta run is the stream still in flight. Evicting it
+   * mid-streak would re-anchor the next coalesced event past what live
+   * clients already hold — on reconnect the overlap would then render
+   * twice or drop silently — so both eviction passes leave it alone; the
+   * run is bounded by the pass cadence.
    */
   private enforceEventCap(): void {
     const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
@@ -248,29 +254,34 @@ export class LiveRegistry {
       let excess = state.events.length - this.maxBufferedEventsPerRun;
       if (excess <= 0) continue;
       excess += batch;
+      let inflight = 0;
+      for (let i = state.events.length - 1; i >= 0; i -= 1) {
+        if (state.events[i]!.kind !== "session-delta") break;
+        inflight += 1;
+      }
       let retained: RunEvent[] = [];
-      for (const event of state.events) {
-        if (excess > 0 && event.kind === "session-delta") {
+      state.events.forEach((event, index) => {
+        if (excess > 0 && index < state.events.length - inflight && event.kind === "session-delta") {
           excess -= 1;
           this.bufferedChars -= eventChars(event);
-          continue;
+          return;
         }
         retained.push(event);
-      }
+      });
       if (excess > 0) {
         const kept: RunEvent[] = [];
-        for (const event of retained) {
+        retained.forEach((event, index) => {
           if (
-            excess > 0 &&
+            excess > 0 && index < retained.length - inflight &&
             event.kind !== "run-start" && event.kind !== "session-start" &&
             event.kind !== "session-end" && event.kind !== "run-end"
           ) {
             excess -= 1;
             this.bufferedChars -= eventChars(event);
-            continue;
+            return;
           }
           kept.push(event);
-        }
+        });
         retained = kept;
       }
       state.events = retained;

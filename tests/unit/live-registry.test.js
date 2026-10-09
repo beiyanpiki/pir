@@ -302,3 +302,33 @@ test("event cap: a streaming streak over an atom-heavy buffer stays amortized", 
     registry.dispose();
   }
 });
+
+// F-81: on a tool-heavy run past the cap, the delta eviction pass could
+// reach the trailing streaming run and drop it wholesale mid-streak; the
+// re-coalesced tail then started past what live clients already held, so a
+// reconnect duplicated (or dropped) the overlap. The trailing delta run is
+// the stream in flight and is never evicted — blocks erode instead.
+test("event cap: the in-flight streaming tail is never evicted", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
+    for (let i = 0; i < 8; i += 1) emitRunEventForTest(block("A", "s1", `b${i}`, now));
+    // Alternating delta types: nothing coalesces, and the whole delta tail
+    // is one contiguous in-flight run behind the 16-event trigger.
+    for (const [text, type] of [["t0", "text"], ["k0", "thinking"], ["t1", "text"], ["k1", "thinking"], ["t2", "text"], ["k2", "thinking"]]) {
+      emitRunEventForTest(delta("A", "s1", text, now, type));
+    }
+
+    const events = registry.snapshot("A").events;
+    assert.ok(events.length <= 16, "buffer stays within the cap window");
+    assert.deepEqual(events.map((event) => event.kind),
+      ["run-start", "session-start", "session-delta", "session-delta", "session-delta", "session-delta", "session-delta", "session-delta"],
+      "skeleton and every in-flight delta survive; blocks eroded instead");
+    assert.deepEqual(events.filter((event) => event.kind === "session-delta").map((event) => event.text),
+      ["t0", "k0", "t1", "k1", "t2", "k2"], "no mid-stream delta is lost or reordered");
+  } finally {
+    registry.dispose();
+  }
+});
