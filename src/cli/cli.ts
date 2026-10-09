@@ -55,7 +55,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  if (!config && shouldRunWizard(argv, command)) {
+  if (!config && shouldRunWizard(argv, command, webRoute)) {
     config = await runWizard();
     if (command === undefined) {
       process.stdout.write(
@@ -67,6 +67,9 @@ async function main(argv: string[]): Promise<number> {
     !config &&
     command !== undefined &&
     !LOCAL_ONLY.has(command) &&
+    // The URL-keyed findings lane talks to the URL's server, not local
+    // defaults — the hint (and its `pir config` advice) would be wrong.
+    webRoute === null &&
     !argv.includes("--quiet") &&
     process.env.PIR_NO_WIZARD !== "1" &&
     !argv.includes("--no-wizard")
@@ -186,12 +189,23 @@ function webFindingsRoute(argv: string[]): "list" | "export" | null {
   return flags.has("--run") ? "list" : null;
 }
 
-function shouldRunWizard(argv: string[], command: string | undefined): boolean {
+/**
+ * The URL-keyed findings recovery lane carries its own server address, so it
+ * must work on an unconfigured machine (#48/#49) — like `runs`/`receipts`
+ * (LOCAL_ONLY), it never triggers first-run setup. The wizard otherwise runs
+ * before the webRoute dispatch and contradicts that contract (dogfood F-55).
+ */
+function shouldRunWizard(
+  argv: string[],
+  command: string | undefined,
+  webRoute: "list" | "export" | null,
+): boolean {
   return (
     isInteractive() &&
     !argv.includes("--json") &&
     !argv.includes("--no-wizard") &&
     process.env.PIR_NO_WIZARD !== "1" &&
+    webRoute === null &&
     (command === undefined || !LOCAL_ONLY.has(command))
   );
 }

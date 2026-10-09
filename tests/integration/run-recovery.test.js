@@ -4,6 +4,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import process from "node:process";
 import { createServer } from "node:http";
@@ -196,6 +197,44 @@ test("runs: works with a corrupt config.json — the URL carries the server", as
   const { stdout, stderr } = await pir(["runs", "status", RUN_URL(base), "--json", ...VIEWER], { cwd, env });
   assert.match(stderr, /not valid JSON.*continuing/);
   assert.equal(JSON.parse(stdout).data.run.runId, RUN_ID);
+});
+
+test("findings --run: skips the first-run wizard on an unconfigured interactive machine (dogfood F-55)", async (t) => {
+  const { base } = await withWebServer(t);
+  // The wizard's exact trigger conditions: no config, stdin+stdout on a
+  // TTY, and none of --json/--no-wizard/PIR_NO_WIZARD. The wrapper forces
+  // isTTY before importing the CLI so the child believes it is interactive
+  // while stdio stay pipes the test can read — without the webRoute
+  // exemption the wizard prompts and hangs on the closed stdin pipe.
+  const cwd = mkdtempSync(path.join(tmpdir(), "pir-tty-cwd-"));
+  const configDir = mkdtempSync(path.join(tmpdir(), "pir-tty-config-"));
+  const runner = path.join(cwd, "tty-runner.mjs");
+  writeFileSync(runner, [
+    "process.argv = [process.argv[0], 'pir', ...process.argv.slice(2)];",
+    "process.stdin.isTTY = true;",
+    "process.stdout.isTTY = true;",
+    `await import(${JSON.stringify(pathToFileURL(CLI).href)});`,
+    "",
+  ].join("\n"));
+  t.after(() => {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(configDir, { recursive: true, force: true });
+  });
+  const env = { ...process.env, PIR_CONFIG_DIR: configDir };
+  delete env.PIR_NO_WIZARD;
+
+  const { stdout, stderr } = await execFileAsync(
+    process.execPath,
+    [runner, "findings", "list", "--run", RUN_URL(base), ...VIEWER],
+    { cwd, env, encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
+  );
+  assert.match(stdout, /"displayId": "F-1"/);
+  // The command ran instead of the wizard: no prompts, no config written,
+  // and no misleading local-defaults hint (the URL carries the server).
+  assert.doesNotMatch(stdout, /first-run setup/);
+  assert.doesNotMatch(stderr, /first-run setup|locally or \[2\]/);
+  assert.doesNotMatch(stderr, /no config at/);
+  assert.equal(existsSync(path.join(configDir, "config.json")), false);
 });
 
 // ---------------------------------------------------------------------------
