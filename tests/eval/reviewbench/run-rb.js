@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { snapshotConfig } from "../run-eval.js";
-import { normalizeTask } from "./normalize.js";
+import { normalizeTask, normalizeFilePath } from "./normalize.js";
 import { prefilterTask, renderPrefilterMd, summarizeRound } from "./prefilter.js";
 
 const ROOT = fileURLToPath(new URL("../../../", import.meta.url));
@@ -30,13 +30,18 @@ const gitEnv = (env = process.env, extra = {}) => ({
   GIT_TERMINAL_PROMPT: "0",
   ...extra,
 });
+// Every git call is bounded: local ops finish far below this, and partial
+// clone checkouts may lazily fetch blobs over the network — a hung fetch
+// must not block the whole run.
+const DEFAULT_GIT_TIMEOUT_MS = 600_000;
+
 const git = (cwd, args, { env = process.env, timeoutMs } = {}) =>
   execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     env: gitEnv(env),
     maxBuffer: 32 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
-    ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    timeout: timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
   });
 
 export const MIRROR_ORG = "review-bench";
@@ -256,6 +261,22 @@ export function goldenRecallTargets(golden) {
     .map((f) => ({ file: f.file, start_line: f.start_line, end_line: f.end_line, message: f.message }));
 }
 
+/**
+ * Prefilter pir population: reported findings with a usable first anchor —
+ * exactly the rows normalizeTask forwards to the judge. The two populations
+ * stay identical by construction, not by relying on upstream validation.
+ */
+export function prefilterPirFindings(findings) {
+  return findings
+    .filter((f) => {
+      const anchor = Array.isArray(f?.anchors) ? f.anchors[0] : null;
+      if (anchor == null || (f?.status !== "confirmed" && f?.status !== "uncertain")) return false;
+      return normalizeFilePath(anchor.path) !== "" && Number.isInteger(anchor.startLine) && anchor.startLine >= 1;
+    })
+    .map((f) => ({ message: `${f.title} — ${f.claim} Trigger: ${f.trigger}`, paths: (f.anchors ?? []).map((a) => a.path),
+      start_line: f.anchors[0].startLine, end_line: f.anchors[0].endLine ?? f.anchors[0].startLine }));
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
@@ -355,10 +376,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
             writeFileSync(path.join(confirmedDir, `${key}.json`), `${JSON.stringify(confirmedOnly, null, 2)}\n`);
             const golden = loadGolden(options.manifest, key);
             const goldenFindings = goldenRecallTargets(golden);
-            const pirFindings = result.data.findings
-              .filter((f) => f.status === "confirmed" || f.status === "uncertain")
-              .map((f) => ({ message: `${f.title} — ${f.claim} Trigger: ${f.trigger}`, paths: (f.anchors ?? []).map((a) => a.path),
-                start_line: f.anchors?.[0]?.startLine, end_line: f.anchors?.[0]?.endLine ?? f.anchors?.[0]?.startLine }));
+          const pirFindings = prefilterPirFindings(result.data.findings);
             const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
             if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
             prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });

@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseOptions, prKey, mirrorUrl, loadManifest, goldenRecallTargets } from "../eval/reviewbench/run-rb.js";
+import { parseOptions, prKey, mirrorUrl, loadManifest, goldenRecallTargets, prefilterPirFindings } from "../eval/reviewbench/run-rb.js";
+import { normalizeTask } from "../eval/reviewbench/normalize.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUN_RB = path.join(HERE, "..", "eval", "reviewbench", "run-rb.js");
@@ -78,6 +79,24 @@ test("loadManifest validates the real vendored fixture and its golden coverage",
   const keys = new Set(tasks.map(prKey));
   assert.equal(keys.size, 25);
   assert.ok(keys.has("PierreJanineh_TechDebtMCP_135-16a54f0f"));
+});
+
+test("prefilterPirFindings population matches what normalizeTask sends the judge", () => {
+  const rows = [
+    { displayId: "F-1", status: "confirmed", title: "T1", claim: "C1", trigger: "G1", anchors: [{ path: "a.ts", startLine: 1 }] },
+    { displayId: "F-2", status: "uncertain", title: "T2", claim: "C2", trigger: "G2", anchors: [{ path: "b.ts", startLine: 2, endLine: 4 }] },
+    { displayId: "F-3", status: "rejected", title: "T3", claim: "C3", trigger: "G3", anchors: [{ path: "c.ts", startLine: 3 }] },
+    { displayId: "F-4", status: "confirmed", title: "T4", claim: "C4", trigger: "G4", anchors: [] },
+    { displayId: "F-5", status: "confirmed", title: "T5", claim: "C5", trigger: "G5", anchors: [{ path: "", startLine: 5 }] },
+  ];
+  const manifestEntry = { repo: "https://github.com/example/repo", pr_number: 1, base: "b".repeat(40), head: "a".repeat(40) };
+  const { reported, dropped } = normalizeTask({ manifestEntry, outcome: { data: { findings: rows } } });
+  const pir = prefilterPirFindings(rows);
+  assert.equal(pir.length, reported.findings.length);
+  assert.equal(dropped.length, 2); // the same two anchorless rows normalize drops
+  assert.deepEqual(pir.map((f) => f.start_line), [1, 2]);
+  assert.deepEqual(pir.map((f) => f.paths), [["a.ts"], ["b.ts"]]);
+  assert.equal(pir[0].message, "T1 — C1 Trigger: G1");
 });
 
 test("goldenRecallTargets keeps tp-labeled golden findings only (judge recall population)", () => {
