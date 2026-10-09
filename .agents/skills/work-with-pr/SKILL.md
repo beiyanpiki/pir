@@ -328,7 +328,9 @@ below: the worktree is removed either way.
 
 ```bash
 cd <main repo dir>
-git worktree remove "$WORKTREE"
+# --force because every worktree holds gitignored node_modules/ + dist/
+# from Phases 0-3; plain `git worktree remove` refuses unclean trees
+git worktree remove --force "$WORKTREE"
 git worktree prune
 ```
 
@@ -338,7 +340,7 @@ git worktree prune
 ## PR Complete
 
 - **PR**: #{PR_NUMBER} — {PR_TITLE}
-- **Branch**: {BRANCH} → dev
+- **Branch**: {BRANCH} → {BASE_BRANCH}
 - **Iterations**: {N} verification loops
 - **Gates**: CI pass | dogfood {pass (N findings fixed) | SKIPPED (credentials)}
 - **Merged**: {yes | no — left for you to merge, as requested}
