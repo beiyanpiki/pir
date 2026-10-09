@@ -283,10 +283,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (options.limit !== undefined) selected = selected.slice(0, options.limit);
 
   const cacheRoot = path.join(RB_DIR, ".cache");
-  // Ephemeral config snapshot (credentials included): one per invocation in
-  // the OS temp dir, discarded in finally — no durable credential copy under
-  // .cache/ (the scenario runner's snapshots are equally throwaway).
+  // Ephemeral, per-invocation scratch roots (credentials get copied into
+  // both): OS temp dirs removed in finally, matching the scenario runner's
+  // throwaway snapshots — an interrupted run never leaves credential copies
+  // under the repo tree.
   const configRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-config-"));
+  const runRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-runs-"));
   try {
     const config = snapshotConfig(configRoot, env);
     options.model ??= config.model;
@@ -336,7 +338,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
             anyError = true;
             continue;
           }
-          const runDir = path.join(cacheRoot, "runs", roundName, runLabel, key);
+          const runDir = path.join(runRoot, runLabel, key);
           if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true });
           mkdirSync(runDir, { recursive: true });
           // Same forced-local snapshot the scenario runner gives its runs:
@@ -393,6 +395,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return anyError ? 1 : 0;
   } finally {
     rmSync(configRoot, { recursive: true, force: true });
+    rmSync(runRoot, { recursive: true, force: true });
   }
 }
 

@@ -102,7 +102,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (existsSync(options.output)) throw new Error(`refusing to overwrite artifact: ${options.output}`);
 
   const sha = readPinnedSha();
-  const repoDir = path.join(CACHE_DIR, "reviewbench");
+  // RB_JUDGE_CACHE_DIR lets tests sandbox the clone; production keeps it in
+  // the worktree's .cache (gitignored, shared across rounds).
+  const cacheDir = env.RB_JUDGE_CACHE_DIR ?? CACHE_DIR;
+  const repoDir = path.join(cacheDir, "reviewbench");
   console.error(`ensuring review-bench/ReviewBench at pinned SHA ${sha.slice(0, 8)}…`);
   ensurePinnedCheckout(repoDir, sha, { repoUrl: options.repoUrl });
   if (!existsSync(depsMarker(repoDir, sha))) {

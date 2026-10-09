@@ -10,7 +10,6 @@ import { parseOptions, readPinnedSha, depsMarker } from "../eval/reviewbench/jud
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const JUDGE_JS = path.join(HERE, "..", "eval", "reviewbench", "judge.js");
-const REVIEWBENCH_CACHE = path.join(HERE, "..", "eval", "reviewbench", ".cache", "reviewbench");
 
 function temporary(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "pir-rb-judge-"));
@@ -67,31 +66,35 @@ test("PIR_EVAL gate: parseable skip JSON, exit 0, no clone", () => {
 
 test("validation fails before any clone when provider/model or candidate are missing", () => {
   temporary((dir) => {
+    // Sandbox the clone location (RB_JUDGE_CACHE_DIR): the test must never
+    // touch the real .cache/reviewbench — npm test would otherwise wipe a
+    // user's pinned judge clone and its npm ci marker.
     const candidate = path.join(dir, "round", "candidate-run1");
     mkdirSync(candidate, { recursive: true });
-    rmSync(REVIEWBENCH_CACHE, { recursive: true, force: true });
+    const sandbox = path.join(dir, "sandbox-cache");
+    const wouldClone = path.join(sandbox, "reviewbench");
 
     const missingProvider = spawnSync(process.execPath, [JUDGE_JS, "--candidate", candidate], {
       encoding: "utf8",
-      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_MODEL: "m" },
+      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_MODEL: "m", RB_JUDGE_CACHE_DIR: sandbox },
     });
     assert.equal(missingProvider.status, 3);
     assert.match(missingProvider.stderr, /RB_JUDGE_PROVIDER/);
-    assert.equal(existsSync(REVIEWBENCH_CACHE), false, "must not clone before validation");
+    assert.equal(existsSync(wouldClone), false, "must not clone before validation");
 
     const missingModel = spawnSync(process.execPath, [JUDGE_JS, "--candidate", candidate], {
       encoding: "utf8",
-      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_PROVIDER: "p" },
+      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_PROVIDER: "p", RB_JUDGE_CACHE_DIR: sandbox },
     });
     assert.equal(missingModel.status, 3);
     assert.match(missingModel.stderr, /RB_JUDGE_MODEL/);
 
     const missingCandidate = spawnSync(process.execPath, [JUDGE_JS], {
       encoding: "utf8",
-      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_PROVIDER: "p", RB_JUDGE_MODEL: "m" },
+      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_PROVIDER: "p", RB_JUDGE_MODEL: "m", RB_JUDGE_CACHE_DIR: sandbox },
     });
     assert.equal(missingCandidate.status, 3);
     assert.match(missingCandidate.stderr, /--candidate/);
-    assert.equal(existsSync(REVIEWBENCH_CACHE), false, "must not clone before validation");
+    assert.equal(existsSync(wouldClone), false, "must not clone before validation");
   });
 });
