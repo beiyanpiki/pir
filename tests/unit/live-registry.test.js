@@ -22,9 +22,12 @@ const sessionStart = (runId, sessionId, prompt, ts = Date.now()) => ({
   kind: "session-start", runId, projectId: "p", seq: seq(), ts,
   sessionId, sessionKind: "reviewer", role: "code reviewer", model: null, prompt,
 });
-const delta = (runId, sessionId, text, ts = Date.now()) => ({
+const delta = (runId, sessionId, text, ts = Date.now(), deltaType = "text") => ({
   kind: "session-delta", runId, projectId: "p", seq: seq(), ts,
-  sessionId, deltaType: "text", text,
+  sessionId, deltaType, text,
+});
+const sessionEnd = (runId, sessionId, ts = Date.now()) => ({
+  kind: "session-end", runId, projectId: "p", seq: seq(), ts, sessionId,
 });
 const block = (runId, sessionId, text, ts = Date.now()) => ({
   kind: "session-block", runId, projectId: "p", seq: seq(), ts,
@@ -154,33 +157,71 @@ test("subscribe: replays a 200k-event buffer without stack overflow", () => {
 // #70 follow-up: bound the buffered event count per run — the char budget
 // alone let hundreds of thousands of tiny deltas pile up, making every SSE
 // replay an unbounded burst for the serve loop and the joining client.
-// Eviction is batched (cap 10, batch 5): each pass clears the excess plus a
-// margin, so the buffer oscillates between cap-batch and cap+1.
-test("event cap: oldest deltas are dropped first when a run exceeds the count cap", () => {
+// Delta-heavy runs (the #70 shape) are bounded losslessly: consecutive
+// same-session/same-type deltas coalesce into cumulative-text events, so a
+// joining client still receives every character of streamed text.
+test("event cap: coalescing bounds delta-heavy buffers without losing text", () => {
   const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
   try {
     const now = Date.now();
     emitRunEventForTest(runStart("A", now));
     emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
-    for (let i = 0; i < 20; i += 1) emitRunEventForTest(delta("A", "s1", `d${i}`, now));
+    const emitted = [];
+    for (let i = 0; i < 20; i += 1) {
+      const text = `d${i}`;
+      emitted.push(text);
+      emitRunEventForTest(delta("A", "s1", text, now));
+    }
     emitRunEventForTest(block("A", "s1", "settled", now));
 
     const events = registry.snapshot("A").events;
     assert.ok(events.length <= 11, "buffer stays capped");
-    assert.ok(events.length >= 5, "eviction clears a batch, not the whole buffer");
     const kinds = events.map((event) => event.kind);
     assert.ok(kinds.includes("run-start") && kinds.includes("session-start") && kinds.includes("session-block"),
       "run structure and the authoritative block survive");
     const deltaTexts = events.filter((event) => event.kind === "session-delta").map((event) => event.text);
-    assert.deepEqual(deltaTexts, ["d18", "d19"], "oldest deltas dropped first, newest kept");
+    assert.equal(deltaTexts.join(""), emitted.join(""), "coalesced replay carries every streamed character");
+    const lastDelta = events.filter((event) => event.kind === "session-delta").pop();
+    assert.equal(lastDelta.text, "d19", "the newest raw tail keeps its own event");
   } finally {
     registry.dispose();
   }
 });
 
-// Deltas eventually run out; from then on the cap eats the oldest
-// non-structural events. run-start/session-start must survive — a joining
-// client cannot fold a replay whose session skeleton is missing.
+// Sessions stream sequentially (the supervisor awaits one session at a
+// time), so a session's deltas arrive as streaks: a text run, a thinking
+// run, a text run... Coalescing must merge within a streak only — never
+// across types — and preserve every character.
+test("event cap: coalescing merges per streak, never across types", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x", now));
+    const streak = (prefix, type, n) => Array.from({ length: n }, (_, i) => [`${prefix}${i}`, type]);
+    for (const [text, type] of [...streak("a", "text", 4), ...streak("b", "thinking", 4), ...streak("c", "text", 4)]) {
+      emitRunEventForTest(delta("A", "s1", text, now, type));
+    }
+
+    const events = registry.snapshot("A").events;
+    assert.ok(events.length <= 11, "buffer stays capped");
+    const deltas = events.filter((event) => event.kind === "session-delta");
+    assert.deepEqual(deltas.map((event) => event.text),
+      ["a0a1a2a3", "b0b1b2b3", "c0", "c1", "c2", "c3"],
+      "the two completed streaks coalesce; the post-pass tail stays raw");
+    assert.deepEqual(deltas.map((event) => event.deltaType),
+      ["text", "thinking", "text", "text", "text", "text"],
+      "thinking never bleeds into text streaks or vice versa");
+    assert.equal(deltas.map((event) => event.text).join(""), "a0a1a2a3b0b1b2b3c0c1c2c3", "every character preserved");
+  } finally {
+    registry.dispose();
+  }
+});
+
+// When deltas cannot satisfy the cap (tool-heavy runs), the oldest
+// non-structural events go — but never the foldable skeleton: losing a
+// session-end would pin that session as "running" forever on a joining
+// client, since terminal state is only derived from the event stream.
 test("event cap: without deltas the oldest non-structural events go, skeleton survives", () => {
   const registry = new LiveRegistry({ maxBufferedEventsPerRun: 5, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
   try {
@@ -188,13 +229,14 @@ test("event cap: without deltas the oldest non-structural events go, skeleton su
     emitRunEventForTest(runStart("A", now));
     emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
     for (let i = 0; i < 6; i += 1) emitRunEventForTest(block("A", "s1", `b${i}`, now));
+    emitRunEventForTest(sessionEnd("A", "s1", now));
+    emitRunEventForTest(runEnd("A", now));
 
     const events = registry.snapshot("A").events;
     assert.ok(events.length <= 6, "buffer stays near the cap");
-    assert.equal(events[0].kind, "run-start", "run skeleton survives cap eviction");
-    assert.equal(events[1].kind, "session-start", "session skeleton survives cap eviction");
-    assert.deepEqual(events.slice(2).map((event) => event.block.text), ["b3", "b4", "b5"],
-      "oldest non-structural events trimmed from the front");
+    assert.deepEqual(events.map((event) => event.kind),
+      ["run-start", "session-start", "session-end", "run-end"],
+      "skeleton incl. terminal events survives; blocks eroded from the front");
   } finally {
     registry.dispose();
   }

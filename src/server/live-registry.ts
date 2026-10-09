@@ -221,12 +221,18 @@ export class LiveRegistry {
    * Bound each run's buffered event count (#70): the char budget alone
    * allows hundreds of thousands of tiny deltas, and replaying that many
    * events in one shot costs the serve loop and every joining client.
-   * Eviction prefers the oldest deltas — they are streaming duplicates of
-   * the authoritative blocks — then the oldest non-structural events, the
-   * same front-degradation the char budget's last resort applies.
-   * run-start/session-start are never evicted here: a joining client
-   * cannot fold a replay whose session skeleton is missing, and their
-   * count is bounded by the session count.
+   *
+   * First losslessly: consecutive same-session/same-type deltas coalesce
+   * into one cumulative-text event — they are streaming duplicates of the
+   * authoritative blocks, and the client's fold already treats cumulative
+   * delta text as a replace, so a replay of coalesced deltas loses no
+   * content, only streaming granularity. Only a stream still over the cap
+   * after coalescing evicts: oldest deltas first, then the oldest
+   * non-structural events — the same front-degradation the char budget's
+   * last resort applies. run-start/session-start/session-end/run-end are
+   * never evicted: they are the skeleton a joining client folds (session
+   * terminal state included), and their count is bounded by the session
+   * count.
    *
    * Eviction runs in batches — a margin beyond the excess — so a run
    * sitting at the cap does not pay a full-buffer pass on every arriving
@@ -235,6 +241,8 @@ export class LiveRegistry {
   private enforceEventCap(): void {
     const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
     for (const state of this.runs.values()) {
+      if (state.events.length <= this.maxBufferedEventsPerRun) continue;
+      this.coalesceDeltas(state);
       let excess = state.events.length - this.maxBufferedEventsPerRun;
       if (excess <= 0) continue;
       excess += batch;
@@ -250,7 +258,11 @@ export class LiveRegistry {
       if (excess > 0) {
         const kept: RunEvent[] = [];
         for (const event of retained) {
-          if (excess > 0 && event.kind !== "run-start" && event.kind !== "session-start") {
+          if (
+            excess > 0 &&
+            event.kind !== "run-start" && event.kind !== "session-start" &&
+            event.kind !== "session-end" && event.kind !== "run-end"
+          ) {
             excess -= 1;
             this.bufferedChars -= eventChars(event);
             continue;
@@ -261,6 +273,27 @@ export class LiveRegistry {
       }
       state.events = retained;
     }
+  }
+
+  /**
+   * Merge consecutive same-session/same-type deltas into one event with
+   * cumulative text and the newest seq/ts. Text content and emission order
+   * are preserved — only streaming granularity collapses.
+   */
+  private coalesceDeltas(state: LiveRunState): void {
+    const merged: RunEvent[] = [];
+    for (const event of state.events) {
+      const last = merged[merged.length - 1];
+      if (
+        event.kind === "session-delta" && last !== undefined && last.kind === "session-delta" &&
+        last.sessionId === event.sessionId && last.deltaType === event.deltaType
+      ) {
+        merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts };
+        continue;
+      }
+      merged.push(event);
+    }
+    state.events = merged;
   }
 
   private dropEvents(state: LiveRunState, keep: (event: RunEvent) => boolean): void {
