@@ -396,8 +396,8 @@ function navigationResult(ctx: ToolContext, symbols: CodeSymbol[]): { text: stri
 export function createFindSymbolTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_symbol",
-    description: "Navigation only: search an unpinned structural index for symbols. Verify returned paths/lines with read_code at the selected review revision.",
-    promptSnippet: "find_symbol: symbol search over the structural index",
+    description: "Locate a symbol's qualified name, kind and definition site across the repository — the entry point for structural queries. Results come from an unpinned structural index: navigation only; verify paths/lines with read_code at the selected review revision.",
+    promptSnippet: "find_symbol: locate a symbol's qualified name via the structural index; entry point for find_callers/find_callees/find_references",
     parameters: Type.Object({
       query: Type.String({ description: "Symbol name or fragment" }),
       kind: Type.Optional(Type.String({ description: "Filter by kind, e.g. function/class/method" })),
@@ -418,7 +418,8 @@ export function createFindSymbolTool(ctx: ToolContext): ReviewTool {
 export function createFindCallersTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_callers",
-    description: "Navigation only: approximate callers from an unpinned index. Requires a qualified symbol name from find_symbol; verify with pinned read_code.",
+    description: "Enumerate a symbol's approximate call sites — the fastest way to answer who-calls-this, typically cheaper and more complete than repeated search_text. Requires a qualified symbol name from find_symbol. Results come from an unpinned structural index: navigation only; verify each candidate with pinned read_code.",
+    promptSnippet: "find_callers: enumerate approximate call sites of a qualified symbol (unpinned; confirm with read_code)",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
@@ -433,7 +434,8 @@ export function createFindCallersTool(ctx: ToolContext): ReviewTool {
 export function createFindCalleesTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_callees",
-    description: "Navigation only: approximate callees from an unpinned index. Requires a qualified symbol name from find_symbol; verify with pinned read_code.",
+    description: "Enumerate a symbol's approximate callees — what it calls. Requires a qualified symbol name from find_symbol. Results come from an unpinned structural index: navigation only; verify each candidate with pinned read_code.",
+    promptSnippet: "find_callees: enumerate approximate callees of a qualified symbol (unpinned; confirm with read_code)",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
@@ -448,7 +450,8 @@ export function createFindCalleesTool(ctx: ToolContext): ReviewTool {
 export function createFindReferencesTool(ctx: ToolContext): ReviewTool {
   return {
     name: "find_references",
-    description: "Navigation only: approximate references (callers and dependents) from an unpinned index, not snapshot evidence. Verify with pinned read_code.",
+    description: "Enumerate a symbol's approximate references — callers and dependents — for blast-radius and impact questions. Requires a qualified symbol name from find_symbol. Results come from an unpinned structural index: navigation only, not snapshot evidence; verify each candidate with pinned read_code.",
+    promptSnippet: "find_references: enumerate approximate callers and dependents of a qualified symbol (unpinned; confirm with read_code)",
     parameters: Type.Object({ symbol: Type.String({ description: "Qualified symbol name" }) }),
     async execute(params) {
       try {
