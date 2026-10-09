@@ -234,14 +234,16 @@ export class LiveRegistry {
    * terminal state included), and their count is bounded by the session
    * count.
    *
-   * Eviction runs in batches — a margin beyond the excess — so a run
-   * sitting at the cap does not pay a full-buffer pass on every arriving
-   * event; the buffer oscillates between cap-batch and cap+1.
+   * The pass is triggered lazily, a full batch past the cap: coalescing
+   * often absorbs the overage of a streaming tail on its own, and without
+   * the window every delta of a long streak would re-trigger an O(cap)
+   * pass. A run at the cap pays one pass per batch of arrivals, not per
+   * event; the buffer oscillates between cap-batch and cap+batch.
    */
   private enforceEventCap(): void {
     const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
     for (const state of this.runs.values()) {
-      if (state.events.length <= this.maxBufferedEventsPerRun) continue;
+      if (state.events.length <= this.maxBufferedEventsPerRun + batch) continue;
       this.coalesceDeltas(state);
       let excess = state.events.length - this.maxBufferedEventsPerRun;
       if (excess <= 0) continue;

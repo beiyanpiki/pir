@@ -191,7 +191,8 @@ test("event cap: coalescing bounds delta-heavy buffers without losing text", () 
 // Sessions stream sequentially (the supervisor awaits one session at a
 // time), so a session's deltas arrive as streaks: a text run, a thinking
 // run, a text run... Coalescing must merge within a streak only — never
-// across types — and preserve every character.
+// across types — and preserve every character. (cap 10, batch 5: the pass
+// triggers once the buffer passes cap+batch = 15.)
 test("event cap: coalescing merges per streak, never across types", () => {
   const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
   try {
@@ -199,20 +200,23 @@ test("event cap: coalescing merges per streak, never across types", () => {
     emitRunEventForTest(runStart("A", now));
     emitRunEventForTest(sessionStart("A", "s1", "x", now));
     const streak = (prefix, type, n) => Array.from({ length: n }, (_, i) => [`${prefix}${i}`, type]);
-    for (const [text, type] of [...streak("a", "text", 4), ...streak("b", "thinking", 4), ...streak("c", "text", 4)]) {
+    for (const [text, type] of [
+      ...streak("a", "text", 4), ...streak("b", "thinking", 4),
+      ...streak("c", "text", 4), ...streak("d", "thinking", 4),
+    ]) {
       emitRunEventForTest(delta("A", "s1", text, now, type));
     }
 
     const events = registry.snapshot("A").events;
-    assert.ok(events.length <= 11, "buffer stays capped");
+    assert.ok(events.length <= 16, "buffer stays within the cap window");
     const deltas = events.filter((event) => event.kind === "session-delta");
     assert.deepEqual(deltas.map((event) => event.text),
-      ["a0a1a2a3", "b0b1b2b3", "c0", "c1", "c2", "c3"],
-      "the two completed streaks coalesce; the post-pass tail stays raw");
+      ["a0a1a2a3", "b0b1b2b3", "c0c1c2c3", "d0d1", "d2", "d3"],
+      "the streaks before the last pass coalesce; the post-pass tail stays raw");
     assert.deepEqual(deltas.map((event) => event.deltaType),
-      ["text", "thinking", "text", "text", "text", "text"],
+      ["text", "thinking", "text", "thinking", "thinking", "thinking"],
       "thinking never bleeds into text streaks or vice versa");
-    assert.equal(deltas.map((event) => event.text).join(""), "a0a1a2a3b0b1b2b3c0c1c2c3", "every character preserved");
+    assert.equal(deltas.map((event) => event.text).join(""), "a0a1a2a3b0b1b2b3c0c1c2c3d0d1d2d3", "every character preserved");
   } finally {
     registry.dispose();
   }
@@ -233,10 +237,10 @@ test("event cap: without deltas the oldest non-structural events go, skeleton su
     emitRunEventForTest(runEnd("A", now));
 
     const events = registry.snapshot("A").events;
-    assert.ok(events.length <= 6, "buffer stays near the cap");
+    assert.ok(events.length <= 8, "buffer stays near the cap");
     assert.deepEqual(events.map((event) => event.kind),
-      ["run-start", "session-start", "session-end", "run-end"],
-      "skeleton incl. terminal events survives; blocks eroded from the front");
+      ["run-start", "session-start", "session-block", "session-end", "run-end"],
+      "skeleton incl. terminal events survives; only the oldest blocks erode");
   } finally {
     registry.dispose();
   }
@@ -260,6 +264,37 @@ test("event cap: eviction at the cap is amortized, not per-event full passes", (
     const events = registry.snapshot("A").events;
     assert.ok(events.length <= 20_001, "buffer stays capped");
     assert.ok(elapsedMs < 5_000, `60k events at a 20k cap buffer in ${Math.round(elapsedMs)}ms, not per-event full passes`);
+  } finally {
+    registry.dispose();
+  }
+});
+
+// F-73 shape: a buffer sitting exactly at the cap whose tail is a
+// mergeable streaming streak. A naive per-overage trigger pays an O(cap)
+// coalesce pass on EVERY streak delta (the pass absorbs the overage, no
+// eviction runs, the next delta re-triggers). The cap+batch trigger window
+// keeps passes batched.
+test("event cap: a streaming streak over an atom-heavy buffer stays amortized", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 20_000, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x", now));
+    const started = process.hrtime.bigint();
+    // 19997 alternating-type atoms: no two consecutive deltas can merge, and
+    // with run-start/session-start the buffer holds exactly 19999 events —
+    // one below the cap, nothing triggered yet.
+    for (let i = 0; i < 19_997; i += 1) {
+      emitRunEventForTest(delta("A", "s1", "x", now, i % 2 === 0 ? "text" : "thinking"));
+    }
+    // The streak: same type as the last atom (i=19996 is text), so every
+    // pass coalesces the tail and lands back at exactly the cap.
+    for (let i = 0; i < 40_000; i += 1) emitRunEventForTest(delta("A", "s1", "y", now));
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    const events = registry.snapshot("A").events;
+    assert.ok(events.length <= 21_025, "buffer stays within the cap window");
+    assert.ok(elapsedMs < 5_000, `60k events buffer in ${Math.round(elapsedMs)}ms, not a full pass per streak delta`);
   } finally {
     registry.dispose();
   }
