@@ -113,7 +113,10 @@ async function seedMemory(repo, dbPath, scenario, seedCli) {
   } finally { memory.close(); }
 }
 
-function snapshotConfig(root, env) {
+// Exported for the ReviewBench runner (tests/eval/reviewbench/run-rb.js),
+// which needs the same forced-local config snapshot without duplicating the
+// credential-adjacent copy logic.
+export function snapshotConfig(root, env) {
   const agentDir = path.resolve(env.PIR_EVAL_AGENT_DIR ?? env.PI_CODING_AGENT_DIR ?? path.join(homedir(), ".pi/agent"));
   const configDir = path.resolve(env.PIR_CONFIG_DIR ?? path.join(homedir(), ".pir"));
   const publicHashes = {};
