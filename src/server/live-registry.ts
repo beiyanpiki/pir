@@ -243,8 +243,12 @@ export class LiveRegistry {
    * The trailing delta run is the stream still in flight. Evicting it
    * mid-streak would re-anchor the next coalesced event past what live
    * clients already hold — on reconnect the overlap would then render
-   * twice or drop silently — so both eviction passes leave it alone; the
-   * run is bounded by the pass cadence.
+   * twice or drop silently — so both eviction passes leave it alone. The
+   * zone is bounded (2× the batch): a genuinely growing streak collapses
+   * to one event per pass plus at most a batch of raw tail, and a
+   * non-coalescible delta run older than that is settled content —
+   * without the bound, an adversarial alternating-type tail would leave
+   * nothing droppable and the cap would silently stop bounding.
    */
   private enforceEventCap(): void {
     const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
@@ -255,7 +259,7 @@ export class LiveRegistry {
       if (excess <= 0) continue;
       excess += batch;
       let inflight = 0;
-      for (let i = state.events.length - 1; i >= 0; i -= 1) {
+      for (let i = state.events.length - 1; i >= 0 && inflight < 2 * batch; i -= 1) {
         if (state.events[i]!.kind !== "session-delta") break;
         inflight += 1;
       }

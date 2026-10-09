@@ -332,3 +332,30 @@ test("event cap: the in-flight streaming tail is never evicted", () => {
     registry.dispose();
   }
 });
+
+// F-84: protecting the WHOLE trailing delta run made an alternating-type
+// delta tail (nothing coalesces, no blocks to erode) undroppable — the cap
+// silently stopped bounding and the buffer grew without limit again. The
+// in-flight zone is bounded to 2×batch; older tail deltas are settled
+// content and evict from the oldest end.
+test("event cap: a non-coalescible delta tail cannot outgrow the cap", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x", now));
+    // 14 alternating-type deltas: 16 events crosses the cap+batch trigger,
+    // and with run+session-start there is nothing else to erode.
+    for (let i = 0; i < 14; i += 1) {
+      emitRunEventForTest(delta("A", "s1", `d${i}`, now, i % 2 === 0 ? "text" : "thinking"));
+    }
+
+    const events = registry.snapshot("A").events;
+    assert.ok(events.length <= 15, `buffer stays within the cap window (${events.length})`);
+    const deltas = events.filter((event) => event.kind === "session-delta");
+    assert.equal(deltas[0].text, "d4", "oldest tail deltas evicted past the bounded in-flight zone");
+    assert.equal(events[events.length - 1].text, "d13", "newest tail kept");
+  } finally {
+    registry.dispose();
+  }
+});
