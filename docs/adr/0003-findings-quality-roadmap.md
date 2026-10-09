@@ -2,12 +2,14 @@
 
 ## Status
 
-Proposed (2026-10-09). This ADR lands inside a plan-only WIP PR; the
-implementation is specified in
+Proposed (2026-10-09). This ADR lands inside the plan-only PR that
+introduces the roadmap (D1, the stack root); the implementation is
+specified in
 [docs/plans/findings-quality-roadmap.md](../plans/findings-quality-roadmap.md)
-and arrives as the PR series defined there. Each item of the decision is
-binding for that series; items may be individually reverted with evidence
-from the benchmark, in which case this ADR is amended.
+— a development record that is deleted once the series completes — and
+arrives as the stacked PR series defined there. Each item of the decision
+is binding for that series; items may be individually reverted with
+evidence from the benchmark, in which case this ADR is amended.
 
 ## Context
 

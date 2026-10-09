@@ -1,3 +1,10 @@
+<!-- DEVELOPMENT RECORD — NOT PERMANENT DOCUMENTATION.
+     This file tracks the findings-quality roadmap implementation series.
+     When every task in the tracking issue is done, DELETE THIS FILE; the
+     durable record is ADR 0003 plus whatever design docs the series lands.
+     The PR-series and sequencing sections below describe the development
+     process, not a supported interface. -->
+
 # Findings-quality roadmap — implementation plan
 
 Decision record: [ADR 0003](../adr/0003-findings-quality-roadmap.md).
@@ -5,9 +12,12 @@ This document is the implementation plan for that decision: the PR series,
 per-slice designs down to signatures and edge cases, tests, live QA,
 acceptance criteria, and the benchmark protocol that judges them.
 
-**This PR is plan-only and WIP on purpose.** No code in this series is
-implemented here; the PR stays draft until the maintainers accept the plan
-(and the ADR's status moves to Accepted). It must not be auto-merged.
+**This PR is plan-only.** No code in this series is implemented here. It is
+the **stack root**: every implementation PR below is created on top of it
+as a GitHub stacked PR (`gh stack link`, see "PR stack convention"), so the
+whole series merges bottom-up in review order. This PR must not be merged
+without the maintainer's explicit decision, and the series must not be
+merged out from under it.
 
 ## Goals
 
@@ -47,23 +57,50 @@ implemented here; the PR stays draft until the maintainers accept the plan
 
 ## PR series overview
 
-| PR | Slice | Type | Base | Depends on | Cost | Risk |
-|----|-------|------|------|-----------|------|------|
-| D1 | This plan + ADR 0003 (docs, WIP) | docs | dev | — | — | — |
-| B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | dev | — | M | L |
-| Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | dev | B1 (for delta rows) | S | L |
-| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | dev | — | M | M |
-| Q3 | Verifier evidence gate on `submit_verdict` | feat | dev | — | S–M | M |
-| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | dev | — | M | L |
-| Q5 | Separate verifier model option | feat | dev | — | S | L |
-| C1 | Change-mode diff coverage ledger | feat | dev | — | M | M |
-| M1 | Memory denoising, observational (similar-dismissed context) | feat | dev | — | M | M |
-| F1 | Multi-angle finder fan-out (default-off) | feat | dev | B1, Q2 | L | H |
+| PR | Slice | Type | Stack position | Depends on | Cost | Risk |
+|----|-------|------|----------------|-----------|------|------|
+| D1 | This plan + ADR 0003 (docs, stack root) | docs | root (base: dev) | — | — | — |
+| B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | 1 | — | M | L |
+| Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | 2 | B1 (for delta rows) | S | L |
+| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | 3 | — | M | M |
+| Q3 | Verifier evidence gate on `submit_verdict` | feat | 4 | — | S–M | M |
+| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | 5 | — | M | L |
+| Q5 | Separate verifier model option | feat | 6 | — | S | L |
+| C1 | Change-mode diff coverage ledger | feat | 7 | — | M | M |
+| M1 | Memory denoising, observational (similar-dismissed context) | feat | 8 | — | M | M |
+| F1 | Multi-angle finder fan-out (default-off) | feat | 9 | B1, Q2 | L | H |
 
-Landing order: **B1 first** (it measures everything else), then Q1/Q2/Q3 in
-parallel (independent), then Q4/Q5/C1/M1 (independent of each other), F1
-last. Per the work-with-pr skill, independent PRs are built concurrently,
-each in its own worktree with the full lifecycle.
+### PR stack convention
+
+Every implementation PR is a **GitHub stacked PR on top of D1**, created
+with the `gh stack` extension (github/gh-stack):
+
+```sh
+# once, after D1's PR exists — establishes the stack rooted at D1:
+gh stack link <D1-PR-number> <implementation-branch>
+
+# growing the stack afterwards (stack number shown in the GitHub stack UI):
+gh stack link <stack-number> <next-implementation-branch>
+```
+
+`gh stack link` pushes the branch if needed, creates the PR with the
+correct base-branch chaining, and never removes existing stack members.
+Consequences for this series:
+
+- Each implementation branch is cut from the **current stack top**, not
+  from `dev` — the git base of PR N is the branch of PR N−1.
+- Merge order is stack order, bottom-up: D1 first, then B1, Q1, …, F1.
+- Independent slices may still be *developed* concurrently in separate
+  worktrees, but they are linked into the stack in the listed order and
+  rebased onto the new top before linking.
+- The stack ordering above is dependency-consistent: B1 before the PRs
+  that cite its delta rows, Q2 before F1 (worker-pool reuse).
+
+Landing order: **B1 first** (it measures everything else), then
+Q1/Q2/Q3 (logically independent, stacked in listed order), then
+Q4/Q5/C1/M1, F1 last. Every PR still follows the full work-with-pr
+lifecycle: isolated worktree, model-free tests + live QA, dogfood gate
+before each push, CI green, merge only on explicit approval.
 
 ```
 D1 (this PR, WIP)
@@ -912,17 +949,22 @@ re-evaluation after model upgrades.
 
 ## Sequencing summary
 
-1. **B1** lands; ReviewBench baseline recorded (2× test-25) in RESULTS.md.
-   The scenario harness baseline already exists
+1. **D1** (this PR): plan + ADR; stack root; awaiting maintainer merge
+   decision — never auto-merged.
+2. **B1** linked on top of D1; ReviewBench baseline recorded (2× test-25)
+   in RESULTS.md. The scenario harness baseline already exists
    (`tests/eval/results/2026-09-29-dev-vs-review-loop-glm-5.3-run1.json`)
    and keeps accumulating dated runs per its own convention.
-2. **Q1, Q2, Q3** in parallel (independent worktrees, full lifecycle each);
-   each appends its delta row.
-3. **Q4, Q5, C1, M1** in parallel afterwards (Q4/Q5 touch options plumbing
-   — land before C1/F1 only to reduce conflicts; no semantic dependency).
-4. **F1** last, gated on B1 numbers + Q2 pool.
-5. ADR 0003 status → Accepted once the first three behavioral PRs (Q1–Q3)
+3. **Q1 → Q2 → Q3** stacked in order (developed concurrently where
+   convenient, linked sequentially); each appends its delta row.
+4. **Q4 → Q5 → C1 → M1** stacked next (Q4/Q5 touch options plumbing —
+   landing before C1/F1 reduces conflicts; no semantic dependency).
+5. **F1** last, gated on B1 numbers + Q2 pool.
+6. ADR 0003 status → Accepted once the first three behavioral PRs (Q1–Q3)
    land with non-regressing delta rows; any reverted item amends the ADR.
+7. When every task in the tracking issue is complete, **delete this plan
+   file** (top-of-file note) — ADR 0003 and the landed design docs are the
+   durable record.
 
 Every PR in the series follows the work-with-pr lifecycle: isolated
 worktree, model-free tests + live QA, dogfood gate before each push, CI
