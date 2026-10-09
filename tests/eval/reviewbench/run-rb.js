@@ -291,7 +291,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   const variants = [options.baselineCli && { name: "baseline", cli: options.baselineCli }, { name: "candidate", cli: options.candidateCli }].filter(Boolean);
   for (const variant of variants) {
-    if (!statSync(variant.cli).isFile()) throw new Error(`CLI is not a file: ${variant.cli}`);
+    if (!existsSync(variant.cli) || !statSync(variant.cli).isFile()) throw new Error(`CLI is not a file: ${variant.cli}`);
     variant.sha256 = sha256(readFileSync(variant.cli));
   }
   const tasks = loadManifest(options.manifest);

@@ -96,5 +96,14 @@ test("validation fails before any clone when provider/model or candidate are mis
     assert.equal(missingCandidate.status, 3);
     assert.match(missingCandidate.stderr, /--candidate/);
     assert.equal(existsSync(wouldClone), false, "must not clone before validation");
+
+    // A nonexistent path hits the designed message, not a raw ENOENT.
+    const ghostCandidate = spawnSync(process.execPath, [JUDGE_JS, "--candidate", path.join(dir, "no-such-dir")], {
+      encoding: "utf8",
+      env: { ...process.env, PIR_EVAL: "1", RB_JUDGE_PROVIDER: "p", RB_JUDGE_MODEL: "m", RB_JUDGE_CACHE_DIR: sandbox },
+    });
+    assert.equal(ghostCandidate.status, 3);
+    assert.match(ghostCandidate.stderr, /--candidate must be an existing judging-input directory/);
+    assert.equal(existsSync(wouldClone), false, "must not clone before validation");
   });
 });

@@ -93,7 +93,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return 0;
   }
   // Argument validation fires before any clone or install.
-  if (!options.candidate || !statSync(options.candidate).isDirectory()) {
+  if (!options.candidate || !existsSync(options.candidate) || !statSync(options.candidate).isDirectory()) {
     throw new Error(`--candidate must be an existing judging-input directory (e.g. tests/eval/rb-out/<round>/candidate-run1): ${options.candidate ?? "(missing)"}`);
   }
   if (!options.provider) throw new Error("set --provider or RB_JUDGE_PROVIDER (recorded in RESULTS.md rows)");
