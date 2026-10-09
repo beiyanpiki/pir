@@ -1,9 +1,11 @@
 import {
+  appendFileSync,
   closeSync,
   existsSync,
   fsyncSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -19,6 +21,11 @@ import { commitExists, git, gitBuffer } from "../changes/git.js";
 import { getRemoteUrl, normalizeRemoteUrl } from "../changes/git.js";
 import { sha256 } from "../core/types.js";
 import { stateRootDbPath } from "../memory/index.js";
+import { codegraphInit, codegraphSync, CodeMapError } from "../codemap/codegraph-cli.js";
+import {
+  CODEGRAPH_INIT_TIMEOUT_MS,
+  CODEGRAPH_SYNC_TIMEOUT_MS,
+} from "../codemap/codegraph-cli.js";
 
 /**
  * Server-side repository registry. Repos live under PIR_REPOS_ROOT
@@ -107,24 +114,34 @@ function writeRegistry(registry: Record<string, RepoEntry>): void {
  *  crashed this long ago is considered gone and its lock is broken. */
 const REGISTRY_LOCK_STALE_MS = 10_000;
 const REGISTRY_LOCK_WAIT_MS = 5_000;
+// A first-time codegraph seed build legitimately holds its lock for up to
+// TWO full index inits (the seed attempt, then the worktree fallback after
+// the seed init times out) plus a sync; waiters must not break that as
+// staleness (dogfood F-66). A busy lock past CODEGRAPH_LOCK_WAIT_MS degrades
+// the waiting review rather than queueing it behind another process's index
+// build (dogfood F-61).
+const CODEGRAPH_LOCK_STALE_MS = 2 * CODEGRAPH_INIT_TIMEOUT_MS + CODEGRAPH_SYNC_TIMEOUT_MS + 60_000;
+const CODEGRAPH_LOCK_WAIT_MS = 60_000;
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Serialize registry mutations across processes: CLI invocations are not
- * serialized by anything (unlike the server's request queue), and an
- * unguarded read-modify-write loses whichever entry was written first.
+ * Serialize mutations of shared repo-root state across processes: CLI
+ * invocations are not serialized by anything (unlike the server's request
+ * queue), and an unguarded read-modify-write loses whichever side wrote
+ * first.
  *
  * The lock file carries an owner token and is removed only if it is still
- * ours: if we stall past REGISTRY_LOCK_STALE_MS a waiter breaks the lock and
+ * ours: if we stall past the stale threshold a waiter breaks the lock and
  * creates its own — deleting that one would re-open the race this lock
  * exists to close.
  */
-function withRegistryLock<T>(fn: () => T): T {
-  const lockPath = `${registryPath()}.lock`;
-  const deadline = Date.now() + REGISTRY_LOCK_WAIT_MS;
+async function withFileLock<T>(
+  lockPath: string,
+  options: { staleMs: number; waitMs: number; busyError: string },
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const deadline = Date.now() + options.waitMs;
   const token = `${process.pid}-${randomUUID()}`;
   let acquired = false;
   while (!acquired) {
@@ -134,19 +151,19 @@ function withRegistryLock<T>(fn: () => T): T {
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > REGISTRY_LOCK_STALE_MS) {
+        if (Date.now() - statSync(lockPath).mtimeMs > options.staleMs) {
           rmSync(lockPath, { force: true });
           continue;
         }
       } catch {
         continue; // the lock vanished — try to grab it right away
       }
-      if (Date.now() > deadline) throw new Error(`repo registry lock busy: ${lockPath}`);
-      sleepSync(25);
+      if (Date.now() > deadline) throw new Error(`${options.busyError}: ${lockPath}`);
+      await sleep(25);
     }
   }
   try {
-    return fn();
+    return await fn();
   } finally {
     try {
       if (readFileSync(lockPath, "utf8") === token) {
@@ -156,6 +173,14 @@ function withRegistryLock<T>(fn: () => T): T {
       // someone else already broke a lock they considered stale
     }
   }
+}
+
+function withRegistryLock<T>(fn: () => T | Promise<T>): Promise<T> {
+  return withFileLock(
+    `${registryPath()}.lock`,
+    { staleMs: REGISTRY_LOCK_STALE_MS, waitMs: REGISTRY_LOCK_WAIT_MS, busyError: "repo registry lock busy" },
+    fn,
+  );
 }
 
 export function projectIdFor(remoteUrl: string | null, rootCommit: string): string {
@@ -207,7 +232,7 @@ export async function addRepo(source: string, name?: string): Promise<RepoEntry>
     };
     // The clone happened outside the lock; only the registry mutation is
     // serialized, so the lock is held for milliseconds.
-    withRegistryLock(() => {
+    await withRegistryLock(() => {
       const registry = readRegistry();
       registry[entry.name] = entry;
       writeRegistry(registry);
@@ -228,8 +253,8 @@ export function listRepos(): RepoEntry[] {
   return Object.values(readRegistry()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function removeRepo(name: string, purge: boolean): RepoEntry {
-  const entry = withRegistryLock(() => {
+export async function removeRepo(name: string, purge: boolean): Promise<RepoEntry> {
+  const entry = await withRegistryLock(() => {
     const registry = readRegistry();
     const found = registry[name];
     if (!found) throw new Error(`repo not registered: ${name}`);
@@ -294,11 +319,196 @@ export async function materializeRegistered(
   return materializeWorktree(dir, projectId, headCommit);
 }
 
+// codegraph keeps its database in files named codegraph.db plus SQLite
+// sidecars (-wal/-shm/-journal); the .gitignore it writes is config, not data.
+const CODEGRAPH_DB_FILE = /^codegraph\.db(-wal|-shm|-journal)?$/;
+// Completion marker inside a seed .codegraph: written only after a full init
+// or a synced copy-back landed, so a partial database from a killed init is
+// never mistaken for a usable seed (dogfood F-62).
+const SEED_MARKER = "pir-seed-ok";
+
+/**
+ * Prepare a structural index for a review worktree (#64). Reviews run in
+ * throwaway worktrees and codegraph 1.6.0 fixes its index at `<path>/.codegraph`
+ * with no external-index option, so an index living in the project dir is
+ * invisible to the review — without this step serve-mode reviews always probe
+ * `initialized: false` and run degraded, codegraph installation and operator
+ * willingness notwithstanding.
+ *
+ * With `PIR_CODEGRAPH=1` (opt-in): seed an index in the persistent project dir
+ * (registered clone or bundle cache), copy it into the fresh worktree, sync it
+ * to the review head, then copy the database back so the next review syncs
+ * incrementally instead of re-indexing from the seed's original state. A seed
+ * is trusted only when a past run marked it complete. Best effort throughout:
+ * any failure strips the worktree index so the probe degrades cleanly — a
+ * review is never blocked or served from a suspect index.
+ */
+async function activateCodegraph(repoDir: string, worktree: string): Promise<void> {
+  const seedDir = path.join(repoDir, ".codegraph");
+  const worktreeDir = path.join(worktree, ".codegraph");
+  // A directory alone is not a usable seed: repos that follow codegraph's
+  // advice commit .codegraph/.gitignore, so every clone carries a db-less
+  // .codegraph directory. Judge readiness by the database file.
+  const seedDb = path.join(seedDir, "codegraph.db");
+  const seedMarker = path.join(seedDir, SEED_MARKER);
+  // The seed is shared per-project state mutated from CLI processes too
+  // (only a serve process serializes its own queue), so every
+  // read-modify-write of it happens under a cross-process lock (dogfood
+  // F-61). A busy lock past CODEGRAPH_LOCK_WAIT_MS degrades this review
+  // rather than queueing it behind another process's index build.
+  try {
+    await withFileLock(
+      path.join(repoDir, ".codegraph.lock"),
+      { staleMs: CODEGRAPH_LOCK_STALE_MS, waitMs: CODEGRAPH_LOCK_WAIT_MS, busyError: "codegraph seed lock busy" },
+      async () => {
+        // Trust a pre-existing seed only when it carries the completion
+        // marker from a past successful init/copy-back: `codegraph init`
+        // writes codegraph.db incrementally, so a killed or failed init can
+        // leave a partial database that must never be copied as if complete
+        // (dogfood F-62).
+        let seeded = existsSync(seedDb) && existsSync(seedMarker);
+        if (!seeded) {
+          try {
+            await codegraphInit(repoDir);
+            seeded = true; // exit 0: the CLI completed a full index build
+          } catch {
+            // Seeding can legitimately fail (e.g. a bundle cache dir has no
+            // checkout to index, or the build timed out mid-db): a partial
+            // database is not trusted — fall through to initializing in the
+            // worktree, which always has the review's files checked out.
+          }
+        }
+        if (seeded) {
+          // Copy, not symlink: a tracked .codegraph/.gitignore makes the
+          // worktree path a real directory (a symlink would nest inside it),
+          // and a private copy keeps the review's index isolated from
+          // anything else reading the seed. Async cp — a synchronous copy of
+          // a large index would freeze the server's whole event loop, fast
+          // read lane included (dogfood F-65).
+          await copyDir(seedDir, worktreeDir);
+        } else {
+          await codegraphInit(worktree);
+        }
+        await codegraphSync(worktree);
+        await copyCodegraphDbBack(worktreeDir, seedDir);
+        // Only now is the seed known-complete: a synced index whose snapshot
+        // was written back. The marker is what future reviews trust (F-62).
+        if (!existsSync(seedMarker)) writeFileSync(seedMarker, "");
+      },
+    );
+    // The merge-copy above force-overwrites any file under .codegraph that
+    // the reviewed repo TRACKS with content differing from the seed's; git
+    // excludes cannot hide a modified tracked file, so put the head's
+    // content back — untracked artifacts (db, marker) are untouched
+    // (dogfood F-67). Same for the seed dir: seeding may have rewritten a
+    // tracked .codegraph/.gitignore in the persistent clone.
+    await restoreTrackedCodegraph(worktree);
+    await restoreTrackedCodegraph(repoDir);
+    // The index copy is pir's own artifact, never user state — but audits
+    // judge cleanliness with `git status --porcelain`, and codegraph's
+    // self-including .codegraph/.gitignore keeps the directory visible as
+    // untracked. Hide it via the repo's exclude file so isDirty() stays
+    // honest (dogfood F-60). materializeWorktree only ever runs on pir-owned
+    // dirs (registered clones, bundle caches), never a user checkout; a
+    // linked worktree's --git-path resolves to the shared .git/info/exclude,
+    // the one file every worktree of these server-side repos reads.
+    try {
+      const exclude = path.resolve((await git(worktree, ["rev-parse", "--git-path", "info/exclude"])).trim());
+      if (!existsSync(exclude) || !readFileSync(exclude, "utf8").includes(".codegraph/")) {
+        mkdirSync(path.dirname(exclude), { recursive: true });
+        appendFileSync(exclude, "\n.codegraph/\n");
+      }
+    } catch {
+      // Cosmetic only: audits may report the worktree dirty; the review
+      // itself is unaffected.
+    }
+  } catch (err) {
+    // A half-copied or stale index must not serve wrong structure data:
+    // remove it so createCodeMap's probe degrades instead of trusting it.
+    // Only pir's own artifacts go (databases, staging temps, the marker) — a
+    // tracked .codegraph/.gitignore must survive, or the throwaway worktree
+    // turns "dirty" on the failure path too (dogfood F-64).
+    stripIndexArtifacts(worktreeDir);
+    await restoreTrackedCodegraph(worktree);
+    if (
+      err instanceof CodeMapError &&
+      (err.kind === "failed" || err.kind === "bad_output" || err.kind === "not_initialized")
+    ) {
+      // The seed itself is the likely culprit (torn copy-back, corruption,
+      // an index the CLI refuses): drop it so the next review reseeds instead
+      // of failing the same way forever. Timeouts, a lock held by a live
+      // process, and a missing CLI leave the seed alone — it is fine, this
+      // run just could not use it.
+      rmSync(seedDir, { recursive: true, force: true });
+      await restoreTrackedCodegraph(repoDir);
+    }
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`pir: codegraph activation failed: ${detail} — review continues degraded\n`);
+  }
+}
+
+/** Remove exactly the files activation may have created in an index dir. */
+function stripIndexArtifacts(dir: string): void {
+  if (!existsSync(dir)) return;
+  for (const entry of readdirSync(dir)) {
+    if (CODEGRAPH_DB_FILE.test(entry) || entry.includes(".pir-tmp") || entry === SEED_MARKER) {
+      rmSync(path.join(dir, entry), { force: true });
+    }
+  }
+}
+
+/** Bring back a tracked .codegraph/.gitignore that a cleanup just deleted. */
+async function restoreTrackedCodegraph(repoRoot: string): Promise<void> {
+  try {
+    await git(repoRoot, ["checkout", "--", ".codegraph"]);
+  } catch {
+    // nothing tracked under .codegraph (or already intact) — nothing to restore
+  }
+}
+
+/** Async recursive directory merge (fs.cp with force) — never blocks the
+ *  server's event loop the way cpSync would on a large index (F-65). */
+async function copyDir(from: string, to: string): Promise<void> {
+  const { cp } = await import("node:fs/promises");
+  await cp(from, to, { recursive: true, force: true });
+}
+
+/**
+ * Refresh the seed's database from the freshly synced worktree index.
+ * Every file is staged as a temp first, stale sidecars from older snapshots
+ * are dropped, then the temps are renamed into place — so a crash mid-copy
+ * leaves the previous snapshot intact (never an empty-but-"initialized"
+ * seed, and never a half-written database; leftover temps are inert and
+ * cleaned by the next pass). Copies are async so a large database does not
+ * freeze the event loop (dogfood F-65).
+ */
+async function copyCodegraphDbBack(from: string, to: string): Promise<void> {
+  if (!existsSync(from)) return;
+  mkdirSync(to, { recursive: true });
+  const { cp } = await import("node:fs/promises");
+  const want = readdirSync(from).filter((entry) => CODEGRAPH_DB_FILE.test(entry));
+  // Unique temp names: even if a stale-looking lock ever gets broken while
+  // its holder is still alive, two concurrent passes must not clobber the
+  // same staging file (dogfood F-61).
+  const staged = new Map(want.map((entry) => [`${entry}.pir-tmp-${randomUUID()}`, entry]));
+  for (const [tmp, entry] of staged) {
+    await cp(path.join(from, entry), path.join(to, tmp));
+  }
+  for (const entry of readdirSync(to)) {
+    if (staged.has(entry)) continue;
+    if (CODEGRAPH_DB_FILE.test(entry) || entry.includes(".pir-tmp")) rmSync(path.join(to, entry), { force: true });
+  }
+  for (const [tmp, entry] of staged) renameSync(path.join(to, tmp), path.join(to, entry));
+}
+
 async function materializeWorktree(repoDir: string, projectId: string, headCommit: string): Promise<MaterializedReview> {
   const workRoot = path.join(reposRoot(), "work");
   mkdirSync(workRoot, { recursive: true });
   const worktree = path.join(workRoot, randomUUID());
   await git(repoDir, ["worktree", "add", "--quiet", "--detach", worktree, headCommit]);
+  if (process.env.PIR_CODEGRAPH === "1") {
+    await activateCodegraph(repoDir, worktree);
+  }
   return {
     worktree,
     headCommit,

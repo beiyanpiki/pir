@@ -328,8 +328,27 @@ runs appear as historical records when their state is accessible to the server.
 The codegraph adapter is optional. An installed and initialized index provides
 symbol, caller, callee, and reference queries. If it cannot be used, pir exposes
 `degraded: true` and continues with pinned file/diff tools. It does not
-automatically run `codegraph init`; index synchronization is best effort and
-can be skipped with `--no-sync-index`.
+automatically run `codegraph init` on a user's checkout; index synchronization
+is best effort and can be skipped with `--no-sync-index`. Every run logs the
+codemap decision to stderr once — `codegraph active (N nodes, …)` or
+`codegraph degraded (<reason>)`.
+
+Serve mode needs one more step (#64): reviews execute in throwaway worktrees,
+and codegraph fixes its index at `<path>/.codegraph` with no external-index
+option, so an index in the project dir is invisible to the review by
+construction. `PIR_CODEGRAPH=1` (opt-in) makes materialization seed an index in
+the persistent project dir (registered clone or bundle cache), copy it into the
+fresh worktree, sync it to the reviewed head, and copy the database back so the
+next review syncs incrementally. Activation is best effort — on any failure the
+worktree index is stripped and the review runs degraded rather than blocked or
+served from a suspect index. Without the opt-in, serve reviews stay degraded
+even when the CLI is installed in the image.
+
+One known cost: activation runs inside the server's single serial request
+queue, so the first review of a project (full index build, minutes on large
+repos) head-of-line blocks unrelated queued reviews, and re-seeding after a
+dropped seed repeats it. That is the documented tradeoff of the opt-in; a
+per-project queue lane would remove it if serve ever grows one.
 
 Built-in `golang` and `typescript` packs activate from marker files at the
 selected head, or from `--plugins`. Both currently provide separate reviewer

@@ -60,10 +60,18 @@ export async function createAppContext(repoRoot: string, options: AppContextOpti
   // codegraph index a queued command may be relying on.
   if (!codeMapResult.degraded && !options.noSyncIndex && !options.readOnlyMemory) {
     try {
-      await codeMapResult.provider.ensureSynced();
+      codeMapResult.status = await codeMapResult.provider.ensureSynced();
     } catch {
       // sync is best-effort; queries still work off the existing index
     }
+  }
+  if (!codeMapResult.degraded) {
+    // The active counterpart of the degraded line above: serve logs must
+    // show the codemap decision either way, not only when it fails (#64).
+    const s = codeMapResult.status;
+    process.stderr.write(
+      `pir: codegraph active (${s?.nodeCount ?? 0} nodes, ${s?.edgeCount ?? 0} edges, last indexed ${s?.lastIndexed ?? "never"})\n`,
+    );
   }
   return {
     repoRoot,
