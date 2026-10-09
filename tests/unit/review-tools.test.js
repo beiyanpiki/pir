@@ -417,3 +417,22 @@ test("all structural results clearly label unpinned navigation-only provenance",
     assert.match((await createFindSymbolTool(ctx).execute({ query: "missing" })).text, /unpinned.*\nNo results/);
   } finally { repo.cleanup(); }
 });
+
+test("find_* descriptions lead with the use case, keep provenance caveats, and carry prompt snippets (#68)", () => {
+  const ctx = { repoRoot: "/unused", codeMap };
+  const useCase = {
+    find_symbol: /qualified name/,
+    find_callers: /call sites|who-calls-this/,
+    find_callees: /callees/,
+    find_references: /callers and dependents/,
+  };
+  for (const factory of [createFindSymbolTool, createFindCallersTool, createFindCalleesTool, createFindReferencesTool]) {
+    const tool = factory(ctx);
+    assert.ok(tool.promptSnippet, `${tool.name} needs a prompt snippet for system-prompt visibility`);
+    assert.match(tool.promptSnippet, /read_code|find_/);
+    assert.match(tool.description, useCase[tool.name], `${tool.name} description must state its use case`);
+    assert.ok(tool.description.indexOf("unpinned structural index") > tool.description.search(useCase[tool.name]),
+      `${tool.name} caveat must follow the use case, not replace it`);
+    assert.match(tool.description, /read_code/);
+  }
+});
