@@ -279,8 +279,10 @@ export class LiveRegistry {
 
   /**
    * Merge consecutive same-session/same-type deltas into one event with
-   * cumulative text and the newest seq/ts. Text content and emission order
-   * are preserved — only streaming granularity collapses.
+   * cumulative text and the newest seq/ts, marked `cumulative` so clients
+   * can tell a coalesced replay delta from a raw incremental one. Text
+   * content and emission order are preserved — only streaming granularity
+   * collapses.
    */
   private coalesceDeltas(state: LiveRunState): void {
     const merged: RunEvent[] = [];
@@ -290,7 +292,7 @@ export class LiveRegistry {
         event.kind === "session-delta" && last !== undefined && last.kind === "session-delta" &&
         last.sessionId === event.sessionId && last.deltaType === event.deltaType
       ) {
-        merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts };
+        merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts, cumulative: true };
         continue;
       }
       merged.push(event);

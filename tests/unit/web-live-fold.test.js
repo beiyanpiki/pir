@@ -106,11 +106,12 @@ test("live fold: an authoritative session-block supersedes the streamed buffer",
 
 // F-74: past the server's live-buffer event cap, a reconnect's SSE replay
 // hands over coalesced deltas whose text is cumulative from the streak's
-// start, stamped with the streak's newest seq — so the client's seq dedupe
-// lets them through even though they contain text already folded. An
-// unconditional append into the previous flush's last element duplicated
-// that already-streamed prefix (visible after any remount re-folds the
-// merged array); a prefix-extending delta must replace, not re-append.
+// start (marked `cumulative`), stamped with the streak's newest seq — so the
+// client's seq dedupe lets them through even though they contain text
+// already folded. An unconditional append into the previous flush's last
+// element duplicated that already-streamed prefix (visible after any
+// remount re-folds the merged array); a marked prefix-extending delta must
+// replace, not re-append.
 test("live fold: a replayed coalesced delta replaces the held prefix instead of duplicating it (dogfood F-74)", () => {
   const chunks = Array.from({ length: 6 }, (_, i) => `[part ${i} ] `);
   // Streamed live: the client folded the first five chunks incrementally.
@@ -123,8 +124,7 @@ test("live fold: a replayed coalesced delta replaces the held prefix instead of 
   }
   // Reconnect: the replay carries one coalesced delta covering the whole
   // streak so far (plus one unseen chunk), seq newer than anything held.
-  const coalesced = delta("s1", chunks.join(""), "text");
-  coalesced.seq = 10_000;
+  const coalesced = { ...delta("s1", chunks.join(""), "text"), seq: 10_000, cumulative: true };
   events = mergeEvents(events, [coalesced]);
 
   const liveTail = events[events.length - 1];
@@ -136,4 +136,21 @@ test("live fold: a replayed coalesced delta replaces the held prefix instead of 
   // derives the same text — no duplicated prefix anywhere.
   const refolded = createLiveFold();
   assert.equal(tailText(refolded.append(events), "s1"), chunks.join(""));
+});
+
+// F-78: text shape alone cannot identify a re-delivery. Raw incremental
+// chunks routinely BEGIN with the whole text held so far — markdown rule
+// and indent runs ("---" then "----") — and a startsWith heuristic silently
+// truncated those. Unmarked deltas must always append; only the explicit
+// `cumulative` mark licenses a replace.
+test("live fold: raw chunks that repeat the held prefix still append (dogfood F-78)", () => {
+  let events = mergeEvents([], [start("s1")]);
+  const fold = createLiveFold();
+  fold.append(events);
+  // A long horizontal rule split across chunks, then text.
+  for (const chunk of ["---", "----", "\ntext"]) {
+    events = mergeEvents(events, [delta("s1", chunk)]);
+    fold.append(events);
+  }
+  assert.equal(tailText(fold.append(events), "s1"), "-------\ntext", "repeated-prefix chunks concatenate, never truncate");
 });

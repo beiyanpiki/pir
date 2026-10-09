@@ -216,6 +216,9 @@ test("event cap: coalescing merges per streak, never across types", () => {
     assert.deepEqual(deltas.map((event) => event.deltaType),
       ["text", "thinking", "text", "thinking", "thinking", "thinking"],
       "thinking never bleeds into text streaks or vice versa");
+    assert.deepEqual(deltas.map((event) => event.cumulative === true),
+      [true, true, true, true, false, false],
+      "coalesced events are marked cumulative; raw tail events are not");
     assert.equal(deltas.map((event) => event.text).join(""), "a0a1a2a3b0b1b2b3c0c1c2c3d0d1d2d3", "every character preserved");
   } finally {
     registry.dispose();
