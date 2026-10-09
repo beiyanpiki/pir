@@ -7,7 +7,7 @@
  * successfully without network access.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,22 +63,34 @@ export function depsMarker(repoDir, sha) {
 
 /**
  * Ensure <repoDir> is a clone of repoUrl checked out (detached) at sha.
- * Pure git plumbing; testable against a local fixture remote.
+ * Pure git plumbing; testable against a local fixture remote. A broken
+ * cache (interrupted clone, corrupt object store) is disposable: one full
+ * wipe-and-reclone recovery before giving up.
  */
 export function ensurePinnedCheckout(repoDir, sha, { repoUrl = DEFAULT_REVIEWBENCH_REPO } = {}) {
-  if (!existsSync(repoDir)) {
-    mkdirSync(path.dirname(repoDir), { recursive: true });
-    execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe", timeout: GIT_TIMEOUT_MS });
-  }
+  const prepare = () => {
+    if (!existsSync(path.join(repoDir, ".git"))) {
+      rmSync(repoDir, { recursive: true, force: true });
+      mkdirSync(path.dirname(repoDir), { recursive: true });
+      execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe", timeout: GIT_TIMEOUT_MS });
+    }
+    try {
+      git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
+    } catch {
+      // The pinned SHA may not be reachable from the default branch tip.
+      git(repoDir, ["fetch", "-q", "origin", sha]);
+    }
+    git(repoDir, ["checkout", "-q", "--detach", sha]);
+    const head = git(repoDir, ["rev-parse", "HEAD"]).trim();
+    if (head !== sha) throw new Error(`checkout landed on ${head}, expected ${sha}`);
+  };
   try {
-    git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
-  } catch {
-    // The pinned SHA may not be reachable from the default branch tip.
-    git(repoDir, ["fetch", "-q", "origin", sha]);
+    prepare();
+  } catch (error) {
+    console.error(`judge clone unusable (${String(error.message ?? error)}); wiping and re-cloning at ${sha.slice(0, 8)}…`);
+    rmSync(repoDir, { recursive: true, force: true });
+    prepare();
   }
-  git(repoDir, ["checkout", "-q", "--detach", sha]);
-  const head = git(repoDir, ["rev-parse", "HEAD"]).trim();
-  if (head !== sha) throw new Error(`checkout landed on ${head}, expected ${sha}`);
   return repoDir;
 }
 

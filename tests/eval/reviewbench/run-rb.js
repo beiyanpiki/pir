@@ -94,7 +94,7 @@ export function parseOptions(argv = [], env = process.env) {
     model: env.PIR_MODEL,
     maxRounds: env.PIR_EVAL_MAX_ROUNDS ?? "2",
     maxTokens: env.PIR_EVAL_MAX_TOKENS ?? "400000",
-    maxFindings: env.PIR_EVAL_MAX_FINDINGS ?? "10",
+    maxFindings: env.PIR_EVAL_MAX_FINDINGS ?? "unlimited",
     taskTimeoutMs: env.PIR_EVAL_TASK_TIMEOUT_MS ?? "1800000",
     fetchTimeoutMs: env.PIR_EVAL_RB_FETCH_TIMEOUT_MS ?? "900000",
     round: env.PIR_EVAL_RB_ROUND,
@@ -121,11 +121,22 @@ export function parseOptions(argv = [], env = process.env) {
     if (!key || !argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
     values[key] = argv[++i];
   }
-  for (const key of ["repeats", "maxRounds", "maxTokens", "maxFindings", "taskTimeoutMs", "fetchTimeoutMs"]) {
+  for (const key of ["repeats", "maxRounds", "maxTokens", "taskTimeoutMs", "fetchTimeoutMs"]) {
     if (!/^\d+$/.test(String(values[key])) || !Number.isSafeInteger(Number(values[key])) || Number(values[key]) < 1) {
       throw new Error(`${key} must be a positive integer`);
     }
     values[key] = Number(values[key]);
+  }
+  // "unlimited" by default: 14 of the 25 vendored tasks carry more than 10
+  // tp golden findings (max 36), so the scenario runner's 10-cap would
+  // structurally cap recall — measuring the cap, not the engine.
+  if (String(values.maxFindings).toLowerCase() === "unlimited") {
+    values.maxFindings = "unlimited";
+  } else {
+    if (!/^\d+$/.test(String(values.maxFindings)) || !Number.isSafeInteger(Number(values.maxFindings)) || Number(values.maxFindings) < 1) {
+      throw new Error('maxFindings must be a positive integer or "unlimited"');
+    }
+    values.maxFindings = Number(values.maxFindings);
   }
   if (values.limit !== undefined) {
     if (!/^\d+$/.test(String(values.limit)) || Number(values.limit) < 1) throw new Error("limit must be a positive integer");

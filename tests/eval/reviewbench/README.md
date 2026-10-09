@@ -28,7 +28,10 @@ tests/eval/reviewbench/
 ```
 
 `tests/eval/rb-out/` (round outputs) and `.cache/` (mirror object caches,
-worktrees, per-task run sandboxes, judge clone) are gitignored.
+worktrees, the judge clone) are gitignored and **disposable**: if the judge
+clone ever ends up in a bad state (interrupted clone, failed checkout),
+delete `tests/eval/reviewbench/.cache/reviewbench/` and re-run
+`bench:judge` — it re-clones at the pinned SHA and re-installs.
 
 ## Opt-in gate
 
@@ -61,7 +64,10 @@ out head as a detached worktree, run pir with the scenario runner's env
 isolation and a **fresh memory DB per task** (cold memory, deliberately:
 the benchmark measures the review engine, not accumulated decisions), and
 normalize the outcome. Failed or timed-out tasks (default 30 min,
-`--task-timeout`) become error rows and the run continues.
+`--task-timeout`) become error rows and the run continues. `--max-findings`
+defaults to `unlimited` here — 14 of the 25 tasks carry more than 10 tp
+golden findings (max 36), so the scenario harness's 10-cap would
+structurally cap recall; rounds/token/task timeouts still bound the run.
 
 ### Output layout
 

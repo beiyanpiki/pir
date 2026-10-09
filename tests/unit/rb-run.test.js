@@ -43,11 +43,17 @@ test("parseOptions: defaults match the scenario-runner surface plus RB flags", (
   assert.equal(options.repeats, 1);
   assert.equal(options.taskTimeoutMs, 1800000);
   assert.equal(options.fetchTimeoutMs, 900000);
+  // Unlimited by default: 14/25 vendored tasks carry >10 tp golden findings.
+  assert.equal(options.maxFindings, "unlimited");
   assert.equal(options.baselineCli, undefined);
   assert.ok(options.candidateCli.endsWith(path.join("dist", "cli", "cli.js")));
   assert.deepEqual(options.only, []);
   assert.equal(options.limit, undefined);
   assert.equal(options.json, false);
+
+  assert.equal(parseOptions(["--max-findings", "15"], {}).maxFindings, 15);
+  assert.equal(parseOptions(["--max-findings", "UNLIMITED"], {}).maxFindings, "unlimited");
+  assert.throws(() => parseOptions(["--max-findings", "0"], {}), /positive integer or "unlimited"/);
 });
 
 test("parseOptions: flags, repeatable --only, env fallbacks, and numeric validation", () => {
