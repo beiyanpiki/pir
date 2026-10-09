@@ -242,8 +242,9 @@ stdout is pure JSON (`data.findings[]` with `displayId` F-N, `severity`,
 Triage each finding the way you would treat code-review feedback: verify
 it against the code first — neither blind-fix nor blind-dismiss:
 
-- **valid** → fix it; commit message suffixed `(dogfood F-N)`; confirm with
-  `verify-fix F-N` or a re-run;
+- **valid** → fix it; commit message suffixed `(dogfood F-N)`; then mark it
+  `feedback F-N fixed --note "…"` (verify-fix refuses until you do) and
+  confirm with `verify-fix F-N` or a re-run;
 - **false positive** → `feedback F-N false-positive --note "…"` so repo
   memory records the verdict;
 - **intentional** → `feedback F-N expected --note "…"`.
