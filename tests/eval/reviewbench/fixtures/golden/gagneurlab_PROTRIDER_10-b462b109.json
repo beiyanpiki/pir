@@ -1,0 +1,597 @@
+{
+  "pr_key": "gagneurlab_PROTRIDER_10-b462b109",
+  "pr": {
+    "repo": "https://github.com/gagneurlab/PROTRIDER",
+    "pr_number": 10,
+    "base": "22740c695315543a1064915930f806abf5b058ce",
+    "head": "b462b109b630dd1e1a9a78088b18429d2baaae9b"
+  },
+  "findings": [
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 75,
+      "end_line": 86,
+      "message": "NameError when training loss is non-finite: the branch assigns `auc_prec_rec = np.nan` but `return auprc` is executed unconditionally below it. If `~np.isfinite(loss)` is True, `auprc` is never defined in the local scope, so calling this with a diverged model raises NameError and crashes grid/binary search.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: lines 73-86 of model_helper.py show the `if ~np.isfinite(loss):` branch assigns `auc_prec_rec = np.nan` (never used), while `return auprc` is unconditional. `auprc` is only assigned in the `else` branch, so a non-finite loss causes NameError at `return auprc`.",
+      "severity_justification": "Crashes grid search and binary search when a model diverges during training, which is a plausible real-world scenario. However it only affects the latent-dim search methods (gs/bs), not the default OHT method.",
+      "category_justification": "Logic error: wrong variable name in the non-finite branch causes a NameError at runtime rather than gracefully returning NaN.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 148,
+      "end_line": 163,
+      "message": "Binary search logic error: after the 'shrink the interval' block (when fM >= fL and fM >= fR) runs and updates L, fL, R, fR, control falls through to the bare `if fR > fM:` block instead of an `elif`. This causes the interval to be shifted in the same iteration it was already shrunk, producing incorrect search behaviour.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Confirmed: the shrink block uses `if fM >= fL and fM >= fR:` and the shift block uses a plain `if fR > fM:` (not `elif`). When both execute in one iteration, the interval is first shrunk then immediately shifted using stale comparisons between the new fR and the old fM, which is logically incorrect. The comment 'otherwise shift toward the better side' makes clear the intent was `elif`.",
+      "severity_justification": "Produces incorrect binary-search behavior for latent dimension selection, potentially choosing a suboptimal q. However, the impact is bounded: the best q seen is still tracked separately and there's a fallback to the OHT estimate, so it degrades quality rather than crashing.",
+      "category_justification": "Control-flow logic error in the binary search algorithm that causes double mutation of the search state per iteration.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 134,
+      "end_line": 135,
+      "message": "Loop variable `for q, fv in [(L,fL), (M,fM), (R,fR)]` shadows the outer `q` that holds the OHT-derived latent dimension used to seed L, M, R. After the inner for-loop, `q` equals `R` (the last tuple element). While `q = best_q` later restores the right value, any code between the loop and that assignment reads a corrupt `q`.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The variable shadowing is real and verifiable — the inner `for q, fv` loop clobbers the outer `q` each iteration. However, no code between the inner loop and the final `q = best_q` assignment reads `q`, so there is no current functional impact. The finding's claim that 'code between the loop and assignment reads corrupt q' is overstated, but the underlying shadowing issue is genuine and creates a latent maintenance hazard.",
+      "severity_justification": "No current execution path reads the corrupted `q` — `q = best_q` restores the correct value before use. The risk is latent: future code added to the loop body could inadvertently use the corrupted `q`. Low but real concern.",
+      "category_justification": "The core problem is a variable naming/scoping issue (shadowing) rather than a currently triggered logic error.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 539,
+      "end_line": 540,
+      "message": "The checkpoint is always written after training because `checkpoint_path` is always a non-None Path object (either from config or defaulting to `out_dir/model.pt`). The PR claims checkpointing is now opt-in, but the code silently writes `out_dir/model.pt` on every run and reloads it on the next run, skipping retraining. This is a silent behaviour change for all users even when they have not set `checkpoint_path`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: checkpoint_path is always set to a Path (never None), so `if checkpoint_path:` at the save site is always True — the model is always written and reloaded on subsequent runs. The PR description claims checkpointing is now opt-in, but the code makes it always-on by default via `out_dir/model.pt`. This creates silent stale-model reuse if a user reruns with changed data or config.",
+      "severity_justification": "Users who rerun PROTRIDER (e.g. with updated input data or changed hyperparameters) will silently get predictions from the old model without any warning. This is a correctness hazard in everyday usage. The README does document the behavior, but it contradicts the PR's stated intent and is easy to miss.",
+      "category_justification": "The checkpoint-always-on logic causes silent model reuse across runs, producing incorrect results when inputs or config change without users knowing to delete the checkpoint.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/config.py",
+      "start_line": 79,
+      "end_line": 79,
+      "message": "`common_degrees_freedom` defaults to `True` in the Python dataclass but `config.yaml` explicitly sets it to `False`. Users invoking the Python API directly get the shared-df path; users running via config file get per-protein df. The two entry points produce different statistical results for the same data.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: ProtriderConfig.common_degrees_freedom defaults to True in config.py (line 77), while config.yaml explicitly sets it to False (line 56). Users invoking the Python API without specifying this parameter get shared-df t-distribution fitting; users running via the CLI config file get per-protein df fitting. These produce materially different p-values for the same data.",
+      "severity_justification": "The statistical outputs (p-values, z-scores, outlier calls) will differ depending on entry point, undermining reproducibility and causing confusion when comparing CLI vs API results. Not data-corrupting but a real inconsistency in a statistical method's key parameter.",
+      "category_justification": "Conflicting defaults between the Python API and the YAML config produce different statistical results for the same input data, which is a correctness issue.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/config.py",
+      "start_line": 49,
+      "end_line": 49,
+      "message": "`gs_epochs: int = None` is incorrectly typed. The field defaults to `None` but is declared as `int`, violating the dataclass type annotation. It should be `Optional[int] = None`. Type checkers and runtime validation tools will flag this, and it is inconsistent with every other nullable field in the class.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: line 49 has `gs_epochs: int = None`, while all other nullable fields in the class use `Optional[int]` (e.g. `batch_size: Optional[int] = None`, `h_dim: Optional[int] = None`, `seed: Optional[int] = 42`). The type annotation is incorrect and inconsistent with the codebase convention.",
+      "severity_justification": "Python dataclasses do not enforce type annotations at runtime, so this doesn't cause a runtime error. However it will be flagged by mypy/pyright and is inconsistent with every other nullable field in the same class.",
+      "category_justification": "Incorrect type annotation that violates the established convention in the same class, making the code inconsistent and confusing for type-checker users.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 185,
+      "end_line": 186,
+      "message": "Debug `print(data_shape)` left in `_get_gs_params`. This fires on every grid-search or binary-search run and cannot be suppressed by the `verbose` config flag, polluting all user output.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: `_get_gs_params` at line 188 has `print(data_shape)`, which fires on every grid-search or binary-search run. The rest of the module uses `logger.*` calls that can be controlled by logging configuration. This `print` is unsuppressable and is clearly a debug leftover.",
+      "severity_justification": "Cosmetic/noise issue — pollutes stdout on every gs/bs run but causes no functional harm. Still a real code quality issue that should be removed.",
+      "category_justification": "Debug print statement left in production code, inconsistent with the module's use of the logging framework.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/stats.py",
+      "start_line": 218,
+      "end_line": 236,
+      "message": "In the `use_common_df=False` branch of `_fit_t`, `df0` (the fallback for non-converged fits) is recomputed inside the sequential result loop from a partially-filled `df` array. Each non-converged protein is assigned a fallback derived only from previously processed proteins, so the fallback value changes unpredictably depending on processing order. This produces inconsistent per-protein df values compared to the intent described in the function's docstring.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: in the `use_common_df=False` branch, `df0` is recomputed inside the sequential result loop from the partially-filled `df` array. Non-converged proteins assigned early in the loop get a fallback of 10 (or a median from few converged fits), while later ones get a more stable median. The fallback is order-dependent, making per-protein df values inconsistent.",
+      "severity_justification": "Produces inconsistent per-protein degrees-of-freedom for non-converged proteins, which directly affects p-value computation. The impact depends on the fraction of non-converged fits, but in practice non-convergence can affect ~10% of proteins, making this a real statistical accuracy issue.",
+      "category_justification": "Logic error in the statistical fitting loop produces order-dependent and internally inconsistent df values, leading to incorrect p-values.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 122,
+      "end_line": 122,
+      "message": "`k_max = injected_dataset.X.shape[1]` is computed in the binary-search branch but never referenced afterwards. It appears to have been intended as an upper bound clamp for R (R = int(q * 3) can exceed the number of proteins), but the clamp was never applied. A latent dimension larger than the data dimension will cause model initialization to fail.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: `k_max = injected_dataset.X.shape[1]` at line 122 is never referenced, while R = int(q * 3) has no upper bound. The claimed hard failure is overstated — `initialize_wPCA` catches the dimension mismatch and silently skips PCA init — but R > n_prots is still a real bug that produces a degenerate over-parameterized encoder trained from random weights, which corrupts the binary search's AUPRC evaluation.",
+      "severity_justification": "An oversized R causes the binary search to evaluate a degenerate latent dimension (where encoder output dim > input dim), silently skipping PCA init and producing a poorly-initialized model. This corrupts the AUPRC signal used to guide the search, potentially selecting a bad latent dimension. The issue only manifests on small datasets or unusual OHT q values.",
+      "category_justification": "Missing upper bound on R allows testing latent dimensions larger than the data dimension, producing a degenerate model that poisons the binary search evaluation.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model.py",
+      "start_line": 232,
+      "end_line": 271,
+      "message": "If `n_epochs` is reached without the early-stopping counter triggering, `early_stopping_epoch` remains 0 (set before the loop). The log message 'Restoring model weights from epoch 0' is misleading, but more critically it always restores `best_model_wts`, which is correctly set whenever a new best is found; however if no improvement ever occurs (e.g. `n_epochs=1` with an already-optimal init), `best_model_wts` holds the weights from before the first epoch completes because it is initialised from `model.state_dict()` prior to training, meaning the first epoch's update is discarded.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding's key claim is factually incorrect. `min_train_loss = float('inf')` means `float('inf') - running_loss > min_delta` is always True on the first epoch with any finite loss, so `best_model_wts` is always updated after epoch 1 and never holds pre-training weights in normal operation. The 'epoch 0' log message only occurs if every epoch produces NaN/Inf loss, not in the 'already-optimal init' scenario described.",
+      "severity_justification": "Even granting the edge case where all losses are NaN/Inf, loading pre-training weights in a fully-diverged model is arguably correct fallback behavior. The actual described scenario (n_epochs=1, optimal init) doesn't trigger the bug.",
+      "category_justification": "The finding claims a correctness issue in weight restoration logic.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/datasets/protein_intensities.py",
+      "start_line": 28,
+      "end_line": 28,
+      "message": "The `read_parquet` call is now hardcoded to use `engine='fastparquet'`. This will cause a runtime error if the `fastparquet` library is not installed, as it is not a direct dependency of `pandas`. While it is a dependency of this project, it would be more robust to let pandas select the engine automatically or catch the `ImportError` if a specific engine is required.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Both `fastparquet` and `pyarrow` are explicit dependencies in pyproject.toml (lines 34-35), so fastparquet is always installed. The finding's robustness argument — that a missing fastparquet could cause a runtime error — doesn't apply. The engine='fastparquet' spec is intentional (the PR was specifically fixing a bad argument on this call) and is safe given the declared dependency.",
+      "severity_justification": "Even if treated as a valid concern, the risk is negligible since fastparquet is a declared project dependency.",
+      "category_justification": "The finding concerns potential runtime failure if a dependency is absent.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 32,
+      "end_line": 37,
+      "message": "[trailofbits.python.pickles-in-pytorch.pickles-in-pytorch] Functions reliant on pickle can result in arbitrary code execution.  Consider loading from `state_dict`, using fickling, or switching to a safer serialization method like ONNX",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic static analysis alert about pickle-based deserialization. The checkpoint is written and read by the same user process to a local path (out_dir/model.pt or a user-specified path). There is no data flow from an untrusted external source to torch.load. The finding restates a general class of risk without demonstrating a concrete exploitable vulnerability in this codebase.",
+      "severity_justification": "Even granting the concern, the attack surface requires a malicious actor to have already placed a crafted .pt file at the user's local checkpoint path — equivalent to arbitrary write access, which already implies full compromise.",
+      "category_justification": "The finding concerns unsafe deserialization via pickle.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "trailofbits.python.pickles-in-pytorch.pickles-in-pytorch"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 62,
+      "end_line": 62,
+      "message": "[trailofbits.python.pickles-in-pytorch.pickles-in-pytorch] Functions reliant on pickle can result in arbitrary code execution.  Consider loading from `state_dict`, using fickling, or switching to a safer serialization method like ONNX",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Identical generic static analysis alert as finding 12, this time on the torch.load call at line 62. The checkpoint is written by the same process to a local user-controlled path. No data flow from an untrusted external source to torch.load exists in this codebase. This is a boilerplate tool alert with no demonstrated exploitable vulnerability.",
+      "severity_justification": "Same reasoning as finding 12 — exploiting this would require the attacker to already have write access to the user's local filesystem at the checkpoint path.",
+      "category_justification": "The finding concerns unsafe deserialization via pickle in torch.load.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "trailofbits.python.pickles-in-pytorch.pickles-in-pytorch"
+      }
+    },
+    {
+      "file": "tests/test_model_save_load.py",
+      "start_line": 66,
+      "end_line": 66,
+      "message": "[trailofbits.python.pickles-in-pytorch.pickles-in-pytorch] Functions reliant on pickle can result in arbitrary code execution.  Consider loading from `state_dict`, using fickling, or switching to a safer serialization method like ONNX",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Same generic pickle/torch.load alert from the same static analysis tool, now flagging a test assertion that loads a checkpoint from a pytest-created tempdir. The file being loaded was written 3 lines earlier by the test itself. There is no untrusted input, no external data flow, and no exploitable vulnerability. This is a boilerplate template alert.",
+      "severity_justification": "Test code loading its own just-written temp files has essentially zero security surface.",
+      "category_justification": "The finding concerns unsafe deserialization via pickle.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "trailofbits.python.pickles-in-pytorch.pickles-in-pytorch"
+      }
+    },
+    {
+      "file": "src/protrider/datasets/protein_intensities.py",
+      "start_line": 32,
+      "end_line": 32,
+      "message": "The PR description claims this is a small two-issue fix (removing an invalid `index=False` arg from `pd.read_parquet` and commenting out `checkpoint_path` in `config.yaml`). However, the actual diff is a large refactor: it removes cross-validation support entirely (deletes `cv.py`, `train_val`, `plot_cv_loss`, `tests/test_pipeline_cv.py`, and CV-related config fields), adds wandb integration, adds a binary-search `find_q_method`, introduces model save/load checkpointing, restructures `_fit_t` and `find_latent_dim`, changes `run()`'s return signature from a 2-tuple to a 4-tuple, switches activations from `ReLU` to `GELU`, etc. None of this is mentioned in the PR description. Either the PR description needs to be rewritten to accurately describe the scope of changes, or this PR should be split so the two small reviewer-flagged fixes are not bundled with an unrelated, much larger refactor.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Factually correct. The diff includes CV removal (deletes cv.py, train_val, plot_cv_loss, test_pipeline_cv.py), wandb integration, binary-search find_q_method, model checkpointing, FitParameters dataclass, run() returning 4-tuple instead of 2-tuple, ReLU→GELU activation change, and README overhaul — none of which is mentioned in the PR description. The git log confirms the PR branch bundled a large refactor with the two small reviewer-flagged fixes.",
+      "severity_justification": "The mismatch between PR description and actual changes doesn't affect code correctness or runtime behavior, but makes the PR significantly harder to review and audit meaningfully.",
+      "category_justification": "The issue is that the PR description/title inaccurately describes the scope of changes, which is a documentation and process concern.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 44,
+      "end_line": 93,
+      "message": "For `method == \"OHT\"`, the branch body is just a log message — it relies on `q` computed unconditionally at lines 44-45. But for `method == \"gs\"`, lines 92-93 redundantly recompute `perform_svd()` and `find_enc_dim_optht()` (already done at lines 44-45). Additionally, for an integer `method` (e.g. `\"5\"`), the OHT computation at lines 44-45 is wasted work since `q` is overwritten at line 164. Consider moving the unconditional `perform_svd()` / `find_enc_dim_optht()` into the branches that actually need it (OHT and the `gs`/`bs` initial estimate).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in model_helper.py: perform_svd() and find_enc_dim_optht() are called unconditionally before the method dispatch (lines 44-45). The 'gs' branch then redundantly calls both again. The integer method path (else) overwrites q entirely, making the top-level SVD computation wasted work. All three sub-claims are factually correct.",
+      "severity_justification": "The redundancy (double SVD for gs, wasted SVD for integer q) is inefficient since SVD can be expensive on large datasets, but functionally the code still produces correct results.",
+      "category_justification": "This is a code structure/redundancy issue — the unconditional pre-dispatch computation creates confusion and wasted work rather than a correctness or security bug.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 509,
+      "end_line": 510,
+      "message": "`model_was_loaded` is computed as `(checkpoint_path and checkpoint_path.exists() and q is not None)`, but at this point in the code `q` is always set (either by `load_model` or by `find_latent_dim`), and `checkpoint_path.exists()` is also true if a previous run wrote a file even when loading just failed and a new untrained model was built at lines 485-491. In that failure case `should_train` becomes `False` and we run inference + statistics on a freshly initialized, untrained model. A more robust check is to track whether the load actually succeeded (e.g. set a flag right after the successful `load_model` call) instead of re-inferring it from path state and `q`.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: if load_model() fails (returns None, None) but the checkpoint file still exists on disk, the find_latent_dim branch creates a fresh untrained model. Then model_was_loaded re-evaluates checkpoint_path.exists() which is still True, plus q is now set by find_latent_dim, so model_was_loaded=True and should_train=False. Training is silently skipped and statistics are computed from an untrained model. A boolean flag set directly after successful load_model would correctly prevent this.",
+      "severity_justification": "In the corruption/failure recovery path, the pipeline silently produces completely wrong statistical results (p-values, z-scores, outlier calls) from an untrained model, with no error raised. Users would not know their results are invalid.",
+      "category_justification": "The logic bug causes the wrong model state to be used for inference — a behavior that contradicts the described intent of skipping training only when a model was successfully loaded.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/test_model_save_load.py",
+      "start_line": 33,
+      "end_line": 40,
+      "message": "These tests use hardcoded relative paths (`'sample_data/protrider_sample_dataset.tsv'`, `'sample_data/sample_annotations.tsv'`) that only resolve correctly when pytest is invoked from the repo root. The other test files in this directory consistently use the `protein_intensities_path` / `covariates_path` fixtures (see e.g. `tests/test_pipeline_standard.py`) which return absolute paths and are robust to the working directory. Please switch this file to the existing fixtures for consistency and to avoid flaky test discovery.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The test file does use hardcoded strings instead of the existing conftest fixtures, creating a DRY violation — if the sample data path changes, test_model_save_load.py needs separate updates. However, the finding's specific claim that conftest fixtures 'return absolute paths' is factually wrong: conftest.py defines `Path('sample_data/...')` which is also relative. The core inconsistency concern is valid despite the incorrect justification.",
+      "severity_justification": "This is a test maintenance issue — the inconsistency with conftest fixtures means path changes require multiple updates, but there's no runtime behavior impact and both approaches have the same working-directory dependency.",
+      "category_justification": "The issue concerns test design consistency — specifically, the new test file failing to use the established fixture pattern from conftest.py.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/test_pipeline_cv.py",
+      "start_line": 1,
+      "end_line": 1,
+      "message": "Test cases for cross-validation are deleted along with the CV code, but there is no replacement test coverage added for the substantial new functionality introduced in this PR: `load_model` error/failure paths, the binary-search (`bs`) `find_q_method`, the wandb integration code path, the `common_degrees_freedom=False` branch of `_fit_t`, and the early-stopping path in the new `train` function. Given the rest of the project has comprehensive pipeline tests, please add corresponding tests for at least the new public-facing options (`find_q_method='bs'`, `common_degrees_freedom=False`).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The core concern about missing test coverage is verified: find_q_method='bs', wandb integration, load_model failure on corrupt file, and early-stopping in the new train() function have no test coverage. The finding incorrectly claims common_degrees_freedom=False is untested — it is covered in test_pipeline_features.py:30 — but the remaining gaps are real and constitute meaningful missing coverage for new public-facing functionality.",
+      "severity_justification": "Missing tests don't break functionality, but the new binary-search method and load-failure path in particular have non-trivial logic (bs search, exception handling falling through to wrong model_was_loaded state from finding 3) that warrants coverage.",
+      "category_justification": "The finding is about gaps in test coverage for newly introduced code paths.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/cli.py",
+      "start_line": 258,
+      "end_line": 262,
+      "message": "The CLI now unconditionally calls `fit_parameters.to_csv(config.out_dir)`. However, `gs_results` is conditionally `None` (when `find_q_method == 'OHT'` no grid search runs and `gs_result = None` per `pipeline.py:455`), while `fit_parameters` is always returned. This is fine, but for consistency the `if gs_results is not None` guard pattern should likely also apply if `fit_parameters` can ever be `None` in future. Lower-priority: the unconditional `.to_csv(out_dir)` will overwrite any prior `fit_parameters.csv` without warning — confirm this is the desired behavior.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "fit_parameters is never None in the current code — fit_residuals always returns a FitParameters object and pipeline.run always passes it through. The silent-overwrite concern applies equally to every other save call in the same block and is clearly intentional. Both concerns are either speculative about future states or generic best-practice advice with no concrete current defect.",
+      "severity_justification": "Even if taken seriously, the concerns are about defensive coding style, not about any observable incorrect behavior.",
+      "category_justification": "The suggestions are about guard-clause consistency and overwrite behavior, both style/robustness concerns rather than correctness issues.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/stats.py",
+      "start_line": 34,
+      "end_line": 36,
+      "message": "`fit_residuals` is exported as a public helper and previously accepted NumPy arrays, but it now unconditionally reads `res.columns`. Passing an array now raises `AttributeError`, which breaks existing callers unless the function either wraps arrays in a DataFrame or documents/restricts the input type.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: fit_residuals now calls res.columns unconditionally, which fails with AttributeError if passed a numpy array. All internal callers were updated to pass DataFrames, so no current callers break. However, the function is in __all__, its signature is untyped (res), and it previously accepted arrays — external callers using the old contract would silently break with AttributeError. The type constraint should be documented or enforced in the signature.",
+      "severity_justification": "No internal callers are broken. The risk is limited to external users of this exported function who relied on the prior array-accepting behavior, which is low-impact for a research library without formal API versioning.",
+      "category_justification": "This is a public API contract change — a previously array-accepting function now requires a DataFrame without the change being reflected in the type signature or documentation.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 218,
+      "end_line": 220,
+      "message": "The long-format save path no longer returns `df_res`, even though the docstring still says it returns the DataFrame and previous behavior did so. This silently breaks callers that use `summary = result.save(..., format='long')`; return `df_res` after writing it or update the API/documentation consistently.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: the `save` docstring still declares 'Returns: DataFrame if format=\"long\"' but the long-format branch no longer returns df_res (removed in this PR). The contract is broken. However, no callers in the codebase (cli.py, test_pipeline_standard.py, test_pipeline_misc.py) capture the return value, so there is no active runtime breakage — only a stale docstring that could mislead external users.",
+      "severity_justification": "The return-value contract mismatch is real but has no runtime impact in the current codebase since no caller uses the return value. It's a documentation correctness issue with minor external-API impact.",
+      "category_justification": "The core issue is a stale docstring — the Returns section claims a DataFrame is returned for format='long' but the code now returns None implicitly.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 426,
+      "end_line": 428,
+      "message": "Cross-validation support has been removed from the dispatcher instead of preserved behind `config.cross_val`; `cross_val` now fails config loading and the CV generators/tests were deleted. This is a breaking feature removal that is not part of the stated parquet/checkpoint fix and leaves existing users unable to run the documented k-fold/LOOCV workflow.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: all CV fields (cross_val, n_folds, early_stopping_patience, fit_every_fold) are removed from ProtriderConfig, cv.py and test_pipeline_cv.py are deleted, and load_config passes the dict directly to the dataclass constructor which raises ValueError on unexpected keyword arguments. Existing users with cross_val: True in their configs cannot load the config at all. This is a real breaking feature removal bundled into a PR titled as a two-issue bugfix.",
+      "severity_justification": "Existing users relying on k-fold or LOOCV workflows (documented in the previous README/code) cannot run their pipelines after upgrading. Config loading fails hard with ValueError rather than degrading gracefully. The CV feature was non-trivial (144 lines of cv.py plus 136 lines of tests).",
+      "category_justification": "This is a breaking removal of a public-facing API feature — config fields, a pipeline mode, and dataset classes that were part of the documented interface.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/stats.py",
+      "start_line": 245,
+      "end_line": 249,
+      "message": "Although the validation above allows `mu`, `sigma`, and `df` to be scalars, these expressions unconditionally call `len()` on each value. Passing scalar distribution parameters now raises `TypeError`; branch on scalar types before indexing or calling `len`.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "exacerbated-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The bug is real: process_column_with_df calls len(mu), len(sigma), and len(df) gated only on 'is not None', not on type-checking for scalars. The outer validation at lines 236-241 allows int/float but the inner closure would raise TypeError on them. The mu/sigma part is pre-existing; the PR introduced the same pattern for df by changing df from an enforced scalar (old: assert isinstance(df0,(int,float))) to a potentially scalar/array parameter. In practice, all production callers pass arrays from FitParameters, so this never triggers at runtime.",
+      "severity_justification": "No current production code path passes scalar mu/sigma/df to get_pv_t — all callers receive FitParameters which always contains numpy arrays from fit_residuals. The bug only affects direct callers with scalar parameters, which is an edge case with no evidence of use.",
+      "category_justification": "Calling len() on a scalar raises TypeError — this is an incorrect behavior that contradicts the function's own validation which permits scalars.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/model/model_helper.py",
+      "start_line": 30,
+      "end_line": 32,
+      "message": "Grid-search results are now saved as `grid_search_results.csv` with columns `enc_dim`/`auprc`, but `plot_encoding_dim` still reads `grid_search.csv` and expects `encod_dim`/`aucpr`. After a `find_q_method='gs'` run, `protrider plot ... encoding_dim` will fail because the file and column names no longer match.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified three-way mismatch: GridSearchResult.to_csv writes 'grid_search_results.csv' with columns 'enc_dim'/'auprc', but plot_encoding_dim reads 'grid_search.csv' and references columns 'encod_dim'/'aucpr'. The plot command will fail with a FileNotFoundError (or at column indexing) for any find_q_method='gs' run.",
+      "severity_justification": "Any user running find_q_method='gs' and then plotting the encoding dimension will get a hard runtime error. This silently breaks a documented plot type for the grid-search workflow.",
+      "category_justification": "A concrete runtime failure — the file and column names are mismatched between the writer and reader, causing the plot command to error out.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "tests/test_model_save_load.py",
+      "start_line": 179,
+      "end_line": 181,
+      "message": "This expectation locks in automatic checkpointing when `checkpoint_path` is omitted, but the PR is supposed to make checkpointing opt-in. The test should assert that no checkpoint is written by default instead of requiring `<out_dir>/model.pt`.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The PR's 'opt-in' fix targeted the custom checkpoint PATH (commenting out `checkpoint_path: 'checkpoint.pt'` in config.yaml to avoid writing outside out_dir), not disabling checkpointing entirely. The README explicitly states 'PROTRIDER automatically saves trained models... By default saved to <out_dir>/model.pt' and config.yaml comments confirm 'If None: saves to out_dir/model.pt'. The test correctly validates this intended always-on behavior. The finding misreads 'opt-in' as meaning no-save-by-default.",
+      "severity_justification": "Even if taken at face value, this would only be a test design concern with no runtime impact.",
+      "category_justification": "The finding is about whether the test's assertion matches the stated design intent.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 32,
+      "end_line": 36,
+      "message": "The new checkpoint format does not persist `h_dim`, but `load_model()` reconstructs the architecture from the current config. A checkpoint trained with `n_layers > 1` and a custom `h_dim` will fail to load, or load only when the caller happens to supply the same config value; architecture metadata needed for reconstruction should be saved with the checkpoint.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: save_model omits h_dim from the checkpoint. load_model reconstructs the model using config.h_dim. For n_layers > 1, the hidden layer dimensions depend on h_dim; a mismatch causes load_state_dict to raise a size-mismatch RuntimeError (caught, returns None, None), silently falling back to full retraining. The fix is to save h_dim in the checkpoint and restore it at load time, independent of the current config.",
+      "severity_justification": "The bug silently breaks checkpointing (falls back to full retrain with no error visible to the user) for any multi-layer model. While n_layers=1 is the default, the feature is documented and the failure mode is subtle.",
+      "category_justification": "Incomplete checkpoint metadata causes architecture reconstruction to fail for a valid, documented configuration (n_layers > 1, custom h_dim), which is a concrete behavioral defect.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "config.yaml",
+      "start_line": 67,
+      "end_line": 71,
+      "message": "The sample config documents that omitting `checkpoint_path` still saves to `out_dir/model.pt`, which contradicts the PR's stated opt-in checkpointing behavior. Users following this config will still get default checkpoint writes unless the default path behavior is removed.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "documentation",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The config.yaml comment deliberately documents the default save-to-out_dir/model.pt behavior. The README explicitly states 'PROTRIDER automatically saves trained models... By default the model is saved to <out_dir>/model.pt'. The PR's 'opt-in' fix was specifically about preventing checkpoint writes *outside* out_dir (the old default was ./checkpoint.pt). Auto-save to out_dir is the intentional design, not a contradiction. This finding repeats the same misinterpretation as finding 12.",
+      "severity_justification": "The config comment accurately reflects the code behavior and README documentation — there is no actual inconsistency.",
+      "category_justification": "The finding is about whether config documentation contradicts stated design intent.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/protrider/pipeline.py",
+      "start_line": 402,
+      "end_line": 402,
+      "message": "The return annotation says the fourth value is always `GridSearchResult`, but `gs_result` remains `None` when a checkpoint is loaded. Mark this as optional so API consumers and type checkers don't assume `to_csv()` is always available.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: gs_result is initialized to None at line 455 and only assigned a GridSearchResult inside 'if model is None:'. When a checkpoint is loaded, that branch is skipped and gs_result stays None. The return annotation Tuple[Result, ModelInfo, FitParameters, GridSearchResult] incorrectly implies the fourth element is always a GridSearchResult. The CLI's own guard 'if gs_results is not None' confirms the None case is real.",
+      "severity_justification": "The annotation mismatch doesn't cause runtime failures (the CLI handles None, and OHT returns an empty-array GridSearchResult), but type checkers and API consumers would incorrectly assume .to_csv() is always callable on the returned value.",
+      "category_justification": "This is a type annotation / public API contract issue — the function signature misleads callers about the possible return values.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,369 @@
+{
+  "pr_key": "simnaut_emdash_2-41d75006",
+  "pr": {
+    "repo": "https://github.com/simnaut/emdash",
+    "pr_number": 2,
+    "base": "5beb0ddc334deb862ba90cedbf03f052b58e4974",
+    "head": "41d750067fc7a39eb29f6a530cf0d4ae0f8bdb41"
+  },
+  "findings": [
+    {
+      "file": "packages/auth-atproto/src/routes/login.ts",
+      "start_line": 27,
+      "end_line": 34,
+      "message": "The AT Protocol login route uses `url.origin` (the raw internal request origin) as `baseUrl` for the OAuth client, rather than `getPublicOrigin(url, emdash?.config)`. Behind a TLS-terminating reverse proxy, the internal origin is `http://localhost:4321` while the browser-facing origin is `https://example.com`. The AT Protocol PDS will attempt to fetch the client metadata document from the internal URL (unreachable), and the `client_id` will be wrong, causing the OAuth authorization flow to fail in all production reverse-proxy deployments. GitHub/Google OAuth in `[provider].ts` correctly use `getPublicOrigin(url, emdash?.config)`. The same problem exists in `callback.ts` line 42 and `setup-admin.ts` line 56.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "All three AT Protocol route files use `url.origin` directly instead of `getPublicOrigin(url, emdash?.config)`. The core GitHub/Google OAuth routes correctly use `getPublicOrigin`. The `getPublicOrigin` helper resolves `config.siteUrl` and env vars for reverse-proxy deployments; skipping it means `client_id` and `redirect_uri` point to the internal origin in production, which breaks the AT Protocol OAuth flow entirely.",
+      "severity_justification": "The AT Protocol OAuth flow would fail in all production reverse-proxy deployments (the common production setup), since the PDS would try to fetch client metadata from an unreachable internal URL and the redirect_uri would be wrong. This makes the feature non-functional in its primary deployment target.",
+      "category_justification": "The code produces an incorrect `baseUrl` (internal origin instead of public origin) that causes the AT Protocol OAuth flow to fail in reverse-proxy production environments.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/auth-atproto/src/routes/callback.ts",
+      "start_line": 41,
+      "end_line": 60,
+      "message": "Same reverse-proxy bug as in login.ts: `baseUrl` is set to `url.origin` instead of `getPublicOrigin(url, emdash?.config)`. The callback route creates an OAuthClient with the internal URL, which must match the `client_id` and `redirect_uri` registered during authorization. While both authorize and callback using the same wrong URL means they're consistent with each other, the `client_id` still points to an unreachable metadata URL in production, breaking the OAuth flow.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "callback.ts line 42 confirms `const baseUrl = url.origin` is used instead of `getPublicOrigin`. The AT Protocol PDS needs to fetch the client metadata document from the `client_id` URL; with an internal origin that URL is unreachable to the external PDS, breaking the OAuth flow even if login.ts and callback.ts are internally consistent with each other.",
+      "severity_justification": "Same root cause as Finding 1 — the AT Protocol OAuth flow fails in all production reverse-proxy deployments because the PDS cannot reach the internal client_id metadata URL.",
+      "category_justification": "Using the raw internal request origin instead of the public-facing origin produces an incorrect client_id/redirect_uri that breaks the OAuth flow with external AT Protocol PDSes.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/core/src/database/migrations/034_published_at_index.ts",
+      "start_line": 12,
+      "end_line": 15,
+      "message": "The `CREATE INDEX` statement for `idx_{table}_deleted_published_id` is missing `IF NOT EXISTS`. The `SchemaRegistry.createCollectionTable()` (also changed in this PR, at registry.ts line 600) creates the same index when any new collection is created. If a user runs the version of EmDash that adds the SchemaRegistry index creation (part of this PR) and creates a new collection, then for some reason runs migrations again (e.g., a test environment that tears down and rebuilds), migration 034 would fail with 'index already exists'. This is the exact issue that was documented as fixed in migration 033 (`CREATE INDEX IF NOT EXISTS`).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Migration 034 is confirmed to use `CREATE INDEX` without `IF NOT EXISTS`, inconsistent with migration 033 which uses `CREATE INDEX IF NOT EXISTS` throughout. The same index name is also created by `registry.ts` line 600 without `IF NOT EXISTS`. While the primary failure scenario requires bypassing the migration tracker, the omission is a real inconsistency with the established pattern in the adjacent migration.",
+      "severity_justification": "The failure scenario requires a non-standard migration replay (bypassing the migration tracker), which doesn't happen in normal operation. New installs won't have the conflict, and upgrades are only at risk if migration state is manually reset.",
+      "category_justification": "This is an idempotency/fault-tolerance issue with database migration execution — a missing defensive guard that could cause migration failures in edge-case replay scenarios.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/auth-atproto/src/oauth-client.ts",
+      "start_line": 59,
+      "end_line": 102,
+      "message": "Module-level mutable `_currentStorage` is shared state that is overwritten on every request (`if (storage) _currentStorage = storage`). The DB-backed stores close over this variable via a getter function. On Cloudflare Workers (single request per isolate), this is safe. On Node.js deployments (concurrent requests), two simultaneous AT Protocol OAuth requests can race: request A sets `_currentStorage = storageA`, then request B sets `_currentStorage = storageB`, then request A's PKCE state store reads from B's database binding, leading to `oauth_state_not_found` errors or cross-request OAuth state corruption. AT Protocol auth on Node.js is unusable under any concurrent load.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "While `_currentStorage` is mutable shared module-level state, on Node.js all concurrent requests receive the same `emdash.db` singleton (same Kysely pool), so `storageA` and `storageB` are functionally identical objects. Swapping `_currentStorage` between them doesn't cause cross-request data corruption because both access the same database/namespace. On Cloudflare Workers, the isolate-per-request model prevents the race entirely. The claimed failure mode ('cross-request OAuth state corruption', 'unusable under concurrent load') doesn't materialize.",
+      "severity_justification": "The mutable singleton design is a code smell but doesn't produce the described failure in practice. Even the theoretical worst case would cause an unnecessary DB lookup using an equivalent storage object.",
+      "category_justification": "The concern is about concurrency safety of shared mutable module state in a multi-request environment.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/auth-atproto/src/routes/setup-admin.ts",
+      "start_line": 55,
+      "end_line": 61,
+      "message": "Same reverse-proxy bug: `baseUrl = url.origin` instead of `getPublicOrigin()`. During the setup wizard, if the server is behind a reverse proxy, the AT Protocol OAuth URL generated here will use the internal origin as `client_id`, causing the PDS to fail when it attempts to fetch the metadata document or validate the redirect URI.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Confirmed in prior investigation: setup-admin.ts line 56 uses `url.origin` directly instead of `getPublicOrigin(url, emdash?.config)`, which is what all core OAuth routes use for reverse-proxy correctness. The AT Protocol PDS will fail to fetch client metadata from the internal origin URL.",
+      "severity_justification": "Same root cause as Findings 1 and 2 — AT Protocol auth during setup would fail in all production reverse-proxy deployments, making the setup wizard's AT Protocol path non-functional in production.",
+      "category_justification": "Using the raw internal request origin instead of the configured public origin produces an incorrect client_id/redirect_uri that breaks the OAuth flow with external AT Protocol PDSes.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/core/src/astro/middleware.ts",
+      "start_line": 192,
+      "end_line": 205,
+      "message": "The fast-path for plugin routes outside `/_emdash/` (e.g., `/.well-known/atproto-client-metadata.json`) bypasses the entire middleware chain, including CSRF protection. While GET requests don't need CSRF protection, any future state-changing route injected by an auth provider at a non-`/_emdash/` path would receive no CSRF check. The fast-path calls `next()` directly without invoking `checkPublicCsrf`. This is currently OK because `client-metadata.json` is GET-only, but the architecture silently skips CSRF for all methods on fast-path routes.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Confirmed: the fast-path in middleware.ts calls `next()` without invoking the auth middleware's CSRF checks. The auth middleware in auth.ts explicitly applies `checkPublicCsrf()` to non-GET methods on public API routes and plugin routes, but the fast-path for non-`/_emdash/` plugin routes bypasses this entirely. Currently only a GET-only route uses this path, so no immediate exploitability, but the architecture silently drops CSRF protection for any future state-changing route registered outside `/_emdash/`.",
+      "severity_justification": "No currently exploitable CSRF vector exists — only GET-only metadata routes use the fast path. The risk is forward-looking: a future auth provider that registers a state-changing non-`/_emdash/` route would silently lack CSRF protection with no framework-level warning.",
+      "category_justification": "CSRF protection gap in the middleware architecture for a specific class of routes, with potential for exploitation if the pattern is extended to state-changing endpoints.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/admin/src/components/ContentList.tsx",
+      "start_line": 108,
+      "end_line": 112,
+      "message": "The auto-fetch `useEffect` fires immediately on mount when `page=0` and `totalPages=1` (i.e., when the total number of items fits on the first client-side page). With `PAGE_SIZE=20`, any collection with fewer than 20 items and a next cursor will trigger `onLoadMore()` on every render cycle of the list (e.g., locale changes, filter changes). The test explicitly acknowledges this: 'the auto-fetch effect fires on mount because page 0 is already the last client-side page'. This means an initial load of a small collection with `hasMore=true` immediately fetches the next API page, potentially doubling API calls on every navigation to that list.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The on-mount auto-fetch for small collections is the explicitly intended behavior, as documented in the changeset ('Fix content list not fetching beyond the first API page') and in the test comment ('the auto-fetch effect fires on mount because page 0 is already the last client-side page'). Triggering an immediate second API call when items fit on one page is the correct behavior to avoid showing incomplete data to users.",
+      "severity_justification": "Even if framed as an issue, it causes at most one additional API call per navigation for small collections, with appropriate guards preventing infinite loops.",
+      "category_justification": "The finding is about API call frequency — an extra call per navigation to small collections.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/core/src/astro/routes/api/auth/mode.ts",
+      "start_line": 19,
+      "end_line": 46,
+      "message": "The `/auth/mode` endpoint is public and returns the configured auth provider list (`providers`). When `emdash` is not initialized (e.g., before first setup), `emdash?.config?.authProviders` is `undefined` and `providers` defaults to `[]`. However, `getAuthMode(emdash?.config)` is called with `undefined` config, which returns the default passkey mode. This is correct. But `emdash?.db` check for signup detection is done with optional chaining, so when the DB is uninitialized, `signupEnabled` stays `false`. The catch block silently swallows errors from the `allowed_domains` query. If the table query fails for reasons other than the table not existing (e.g., DB corruption), the signup state would incorrectly report false. This is minor but could mask real DB errors.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The catch block is confirmed empty with no logging, silently treating all errors (DB corruption, permission failures, etc.) identically to 'table not found'. Only the 'table may not exist yet' case is the intended exception. Any other DB error silently produces signupEnabled=false with no visibility.",
+      "severity_justification": "The worst-case outcome is the signup link not appearing on the login page when it should. No data corruption, auth bypass, or system failure results. The affected functionality (signup status on a public status endpoint) is a minor UI detail.",
+      "category_justification": "Overly broad error suppression that masks real DB errors rather than handling them distinctly — a reliability and observability concern.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "Dockerfile",
+      "start_line": 49,
+      "end_line": 49,
+      "message": "[dockerfile.security.missing-user.missing-user] By not specifying a USER, a program in the container may run as 'root'. This is a security hazard. If an attacker can control a process running as root, they may have control over the container. Ensure that the last USER in a Dockerfile is a USER other than 'root'.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "This is a generic automated scanner finding with a template rule ID. It identifies the absence of a USER instruction, which is a real best practice, but makes no claim specific to this codebase — the exact same alert would fire on any Dockerfile without a USER directive. No concrete exploit path is demonstrated.",
+      "severity_justification": "Running as root in a container does increase attack surface if the container is compromised, but this is a general container hardening concern with no demonstrated impact on this specific application.",
+      "category_justification": "Container privilege escalation risk from running as root.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "dockerfile.security.missing-user.missing-user"
+      }
+    },
+    {
+      "file": "packages/auth-atproto/src/routes/callback.ts",
+      "start_line": 138,
+      "end_line": 138,
+      "message": "[javascript.lang.correctness.no-replaceall.no-replaceall] The string method replaceAll is not supported in all versions of javascript, and is not supported by older browser versions. Consider using replace() with a regex as the first argument instead like mystring.replace(/bad/g, \"good\") instead of mystring.replaceAll(\"bad\", \"good\") (https://discourse.threejs.org/t/replaceall-is-not-a-function/14585)",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The code runs server-side in Node.js 22 (as specified in the Dockerfile), where `replaceAll` has been available since Node.js 15. The TypeScript config uses `lib: [\"es2023\"]` which includes `replaceAll`. The finding applies a browser compatibility warning to server-side route code, making it factually inapplicable.",
+      "severity_justification": "Even if the concern were valid, the worst case would be a simple fix (use `.replace(/:g/, '-')`). But it's not valid here.",
+      "category_justification": "The tool claims a compatibility issue that doesn't exist in this runtime context.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.correctness.no-replaceall.no-replaceall"
+      }
+    },
+    {
+      "file": "packages/auth-atproto/src/routes/callback.ts",
+      "start_line": 140,
+      "end_line": 140,
+      "message": "[javascript.lang.correctness.no-replaceall.no-replaceall] The string method replaceAll is not supported in all versions of javascript, and is not supported by older browser versions. Consider using replace() with a regex as the first argument instead like mystring.replace(/bad/g, \"good\") instead of mystring.replaceAll(\"bad\", \"good\") (https://discourse.threejs.org/t/replaceall-is-not-a-function/14585)",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Identical automated tool alert as Finding 10 — same rule ID, same file, same server-side Node.js 22 context where `replaceAll` is fully supported (available since Node.js 15). The browser compatibility warning is inapplicable to a server-side Astro route handler.",
+      "severity_justification": "No actual compatibility issue exists in this Node.js 22 server-side context.",
+      "category_justification": "The tool incorrectly claims a compatibility issue that doesn't exist for this runtime.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.correctness.no-replaceall.no-replaceall"
+      }
+    },
+    {
+      "file": "packages/core/src/database/repositories/options.ts",
+      "start_line": 6,
+      "end_line": 6,
+      "message": "[javascript.lang.correctness.no-replaceall.no-replaceall] The string method replaceAll is not supported in all versions of javascript, and is not supported by older browser versions. Consider using replace() with a regex as the first argument instead like mystring.replace(/bad/g, \"good\") instead of mystring.replaceAll(\"bad\", \"good\") (https://discourse.threejs.org/t/replaceall-is-not-a-function/14585)",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Same automated tool alert as Findings 10 and 11 — rule `javascript.lang.correctness.no-replaceall.no-replaceall` applied to server-side Node.js code in a core package. `replaceAll` is fully supported in Node.js 15+ and the project targets Node.js 22. Browser compatibility warnings are irrelevant for database repository code.",
+      "severity_justification": "No actual compatibility issue in this server-side Node.js 22 context.",
+      "category_justification": "The tool incorrectly claims a compatibility issue that doesn't exist for this runtime.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.correctness.no-replaceall.no-replaceall"
+      }
+    },
+    {
+      "file": "packages/core/src/emdash-runtime.ts",
+      "start_line": 2046,
+      "end_line": 2046,
+      "message": "[javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring] Detected string concatenation with a non-literal variable in a util.format / console.log function. If an attacker injects a format specifier in the string, it will forge the log message. Try to use constant values for the format string.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic automated tool alert applying C-style format string injection concerns to JavaScript. `pluginId` is a system-internal plugin identifier (not user input), JavaScript's `console.error` with a template literal doesn't perform printf-style format parsing that would be exploitable, and `err` is a separate argument not embedded in the format string. No concrete exploit path exists.",
+      "severity_justification": "Even granting the tool's framing, `pluginId` is from internal configuration and this is server-side logging code with no user-facing output path.",
+      "category_justification": "The finding asserts a log injection / format string vulnerability.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring"
+      }
+    },
+    {
+      "file": "packages/core/src/emdash-runtime.ts",
+      "start_line": 2067,
+      "end_line": 2067,
+      "message": "[javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring] Detected string concatenation with a non-literal variable in a util.format / console.log function. If an attacker injects a format specifier in the string, it will forge the log message. Try to use constant values for the format string.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Identical automated tool alert as Finding 15 — same rule ID applied to `console.error('EmDash: Sandboxed plugin ${pluginId} afterUnpublish error:', err)`. `pluginId` is a system-internal identifier not from user input, JavaScript template literals don't expose printf-style format string vulnerabilities, and `err` is a separate argument. No concrete exploit path exists.",
+      "severity_justification": "Server-side internal logging with no user-facing output; `pluginId` sourced from plugin config, not user input.",
+      "category_justification": "The finding asserts a log injection / format string vulnerability.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring"
+      }
+    },
+    {
+      "file": "packages/core/tests/unit/astro/routes.test.ts",
+      "start_line": 32,
+      "end_line": 32,
+      "message": "[javascript.lang.correctness.no-replaceall.no-replaceall] The string method replaceAll is not supported in all versions of javascript, and is not supported by older browser versions. Consider using replace() with a regex as the first argument instead like mystring.replace(/bad/g, \"good\") instead of mystring.replaceAll(\"bad\", \"good\") (https://discourse.threejs.org/t/replaceall-is-not-a-function/14585)",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Same automated tool alert as Findings 10-14 — rule `javascript.lang.correctness.no-replaceall.no-replaceall` applied to a test file running in Node.js 22, where `replaceAll` has been fully supported since Node.js 15. Browser compatibility warnings are irrelevant for server-side test code.",
+      "severity_justification": "No actual compatibility issue in this Node.js 22 test context.",
+      "category_justification": "The tool incorrectly claims a compatibility issue that doesn't exist for this runtime.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.correctness.no-replaceall.no-replaceall"
+      }
+    },
+    {
+      "file": "packages/core/tests/unit/menus/menus.test.ts",
+      "start_line": 250,
+      "end_line": 250,
+      "message": "[javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag] Cannot determine what 'itemId' is and it is used with a '<script>' tag. This could be susceptible to cross-site scripting (XSS). Ensure 'itemId' is not externally controlled, or sanitize this data.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "This is test code deliberately inserting an XSS payload as a test value for `custom_url` to validate sanitization behavior. `itemId` is a database primary key with no relation to the `<script>` content — the scanner incorrectly associates them because they appear in the same insert statement. No actual XSS data flow from `itemId` to HTML output exists.",
+      "severity_justification": "The flagged code is in a test file with intentional test data, not production code handling user input.",
+      "category_justification": "The finding asserts a potential XSS vulnerability.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag"
+      }
+    },
+    {
+      "file": "packages/core/tests/unit/menus/menus.test.ts",
+      "start_line": 251,
+      "end_line": 251,
+      "message": "[javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag] Cannot determine what 'menuId' is and it is used with a '<script>' tag. This could be susceptible to cross-site scripting (XSS). Ensure 'menuId' is not externally controlled, or sanitize this data.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Exact same scenario as Finding 18 — `menuId` is a database primary key in the same test `insertInto` statement that contains an intentional XSS test payload in `custom_url`. The scanner incorrectly associates `menuId` with the `<script>` tag due to proximity in the same statement. This is test code deliberately exercising XSS payloads to validate sanitization, not production code with a real data flow from `menuId` to HTML output.",
+      "severity_justification": "Test file with intentional test data; no production code path involved.",
+      "category_justification": "The finding asserts a potential XSS vulnerability.",
+      "producer": "deterministic_tool:semgrep",
+      "source": {
+        "type": "tool",
+        "alignment": "generated",
+        "tool": "semgrep",
+        "rule_id": "javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag"
+      }
+    }
+  ]
+}

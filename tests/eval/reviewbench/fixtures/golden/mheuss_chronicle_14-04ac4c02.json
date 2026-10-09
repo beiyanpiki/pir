@@ -1,0 +1,371 @@
+{
+  "pr_key": "mheuss_chronicle_14-04ac4c02",
+  "pr": {
+    "repo": "https://github.com/mheuss/chronicle",
+    "pr_number": 14,
+    "base": "17e33ca1ebf643d47201a8f94b8ab3e88848cf23",
+    "head": "04ac4c02d48083676c14dd3fa70d26ca102bd50e"
+  },
+  "findings": [
+    {
+      "file": "chronicle-daemon/src/pipeline.rs",
+      "start_line": 200,
+      "end_line": 200,
+      "message": "The call to `storage.media_manager().move_file()` correctly renames the file and sets permissions. However, if `set_permissions` fails inside `move_file`, the file is deleted as part of error handling. But `process_audio_segment` continues and attempts to insert a database record for a file that no longer exists, leading to an inconsistent state where the database points to a nonexistent file.",
+      "tp_fp": "fp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The `move_file` call on line 197 uses the `?` operator, which propagates the error and returns early from `process_audio_segment` if `set_permissions` fails. The function never reaches `insert_audio_segment` in that error path. The finding incorrectly claims the function continues after `move_file` returns an error.",
+      "severity_justification": "If the described scenario were real (stale DB record pointing to a deleted file), it would cause data integrity issues. But since it doesn't occur, the severity is moot.",
+      "category_justification": "The finding is about incorrect control flow leading to an inconsistent state — a correctness concern.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 296,
+      "end_line": 313,
+      "message": "The function `walk_files_recursive` is designed to be a best-effort walk and swallows errors by logging a warning and returning. However, its public-facing caller `MediaManager::walk_files` does not propagate any error information, returning an empty `Vec`. This loss of information could mask filesystem issues, such as permission errors on subdirectories, from callers like `sweep_orphans` which might silently fail to scan parts of the media directory, leaving orphan files behind.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding is factually correct: walk_files returns Vec<PathBuf> and walk_files_recursive swallows directory read errors with only a log warning, so sweep_orphans cannot distinguish a complete scan from a partial one. Orphan files in unreadable subdirectories will silently be missed.",
+      "severity_justification": "The impact is limited to disk waste from un-swept orphan files; no data loss or corruption occurs. The daemon owns its directories with 0o700 permissions making the failure mode unlikely, and the behavior is explicitly documented as best-effort.",
+      "category_justification": "The issue is about silent partial failure in a maintenance operation — a reliability/error-handling concern rather than a correctness bug.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 133,
+      "end_line": 139,
+      "message": "In `delete_file`, the path validation is skipped if `path` and its parent do not exist, returning `Ok(0)`. However, there's a race condition: if the parent directory is deleted by another thread *after* `self.validate_path(path)` fails but *before* the `!path.exists()` check, this logic will be bypassed. The function will then proceed to return the original validation error, even though the file is gone and the operation could be considered successful. A more robust approach would be to check for `ErrorKind::NotFound` on the final `remove_file` call.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding has the race direction backwards. Deleting the parent after validate_path fails would cause !parent.exists() to be true, triggering the Ok(0) return — the opposite of the claimed 'returns the original error'. Additionally, the suggested fix (ErrorKind::NotFound on remove_file) is already implemented in lines 143–145. The specific claims about behavior are factually incorrect.",
+      "severity_justification": "Even if the race described existed, the impact would be minor: returning an error instead of Ok(0) for a non-existent file causes no data loss.",
+      "category_justification": "The finding concerns incorrect control flow and TOCTOU race conditions — a correctness issue.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/src/pipeline.rs",
+      "start_line": 59,
+      "end_line": 67,
+      "message": "The error handling for `harden_file` attempts to clean up the newly created HEIF file on failure. However, if `storage.media_manager().delete_file()` also fails, the error from the deletion is logged but not propagated. The original error from `harden_file` is returned, but the file remains on disk with incorrect permissions, and the system is in a state where manual intervention may be required to fix both permissions and potential orphan files. This could be problematic if the permissions failure is persistent.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is factually correct: when both harden_file and delete_file fail, the screenshot file remains on disk with whatever permissive permissions encode_heif created it with, logged but otherwise unaddressed. The original harden_file error is returned, leaving an orphan file with incorrect permissions.",
+      "severity_justification": "HEIF screenshot files contain sensitive user screen captures. Leaving them with permissive permissions (potentially 0o644) when the whole PR is about permission hardening is a real privacy concern. The orphan sweep provides a safety net but would also fail if deletion is persistently broken.",
+      "category_justification": "The issue is about files containing sensitive screenshot data persisting with overly permissive permissions when the permission-hardening step fails — a security/privacy concern.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/src/main.rs",
+      "start_line": 24,
+      "end_line": 31,
+      "message": "The startup orphan sweep logs errors but continues with daemon startup. If the sweep fails due to a transient issue, it's missed until the next restart. If it fails due to a persistent issue (e.g., directory permissions), it will fail on every startup, but the daemon will run anyway, potentially accumulating orphan files over time. Depending on the severity of the failure, a fatal exit might be more appropriate to alert an operator.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is factually correct: sweep failures are logged and the daemon continues. The concern about persistent failure causing orphan accumulation is real. The finding is specific to this code, not generic boilerplate.",
+      "severity_justification": "Orphan file accumulation is disk waste, not data loss or corruption. The daemon's primary capture functionality is unaffected. Making the sweep fatal would be overly aggressive for a maintenance operation.",
+      "category_justification": "The issue is about error handling strategy for a startup maintenance operation and how persistent failures are surfaced to operators.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/retention.rs",
+      "start_line": 78,
+      "end_line": 86,
+      "message": "In `cleanup_media`, if `media_mgr.delete_file` fails, the error is logged and the loop continues. This means the corresponding database row will still be deleted, but the file will be left on disk, creating an orphan. A more robust approach would be to skip the deletion of the database row for files that failed to be deleted, or to retry file deletion.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The behavior is intentionally designed: the 'file first' ordering comment explicitly documents this approach, and the orphan sweep (run at startup and on-demand) is the designated fallback to clean up any files whose deletion failed. The finding describes known, documented behavior that has a designed mitigation path.",
+      "severity_justification": "Even if considered a real issue, the worst outcome is temporary disk accumulation of expired files until the next orphan sweep run.",
+      "category_justification": "The concern is about error handling in a cleanup/maintenance operation and whether file deletion failures are properly handled.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/retention.rs",
+      "start_line": 150,
+      "end_line": 166,
+      "message": "In `sweep_media_orphans`, if `media_mgr.delete_file` fails, the error is logged and the function continues. This could lead to a situation where `sweep_orphans` reports success (returning `Ok(bytes_freed)`) even if it failed to delete some or all of the orphan files it found, leaving them on disk.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Factually correct: delete_file failures are swallowed and the function returns Ok(bytes_freed), making it impossible for callers to distinguish 'no orphans found' from 'orphans found but all deletions failed'. The call site in main.rs only checks bytes_freed > 0, so partial failure is invisible at the application level beyond log warnings.",
+      "severity_justification": "Impact is limited to orphan files accumulating on disk until the next sweep. No data loss or corruption. Failures are visible in logs. The sweep retries on next startup.",
+      "category_justification": "The issue is about error handling in a maintenance operation where partial failures are silently absorbed into an Ok return, making failure modes hard to observe.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 46,
+      "end_line": 78,
+      "message": "The `validate_path` method depends on canonicalization of paths for security checks but does not consider potential race conditions where the target path might be swapped after validation but before access (TOCTOU). This could potentially allow an attacker to place an unsafe target after validation passes.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The finding restates a generic TOCTOU pattern without demonstrating a concrete, exploitable attack path. The storage directory is 0o700 owner-only, paths originate from internal allocation or trusted DB records, and exploiting the race window would require write access to the storage directory which already implies full compromise. No specific data flow from untrusted input to a dangerous sink is demonstrated.",
+      "severity_justification": "Even if the concern were valid, the attack requires local access to the daemon user's storage directory which is already protected by 0o700 permissions.",
+      "category_justification": "The finding is framed as a security vulnerability (TOCTOU allowing path escape).",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 107,
+      "end_line": 114,
+      "message": "The `move_file` operation includes a file type check on the source, but there is a potential race condition between the symlink metadata check and the move operation, where the file could be replaced with an unsafe target in the staging directory.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "Generic TOCTOU warning without a concrete demonstrated attack path. The staging directory is inside the 0o700-protected base_dir, requiring write access that already implies full compromise. Even if the race were won, the 'unsafe' outcome would be set_permissions calling chmod to 0o600 on an external file (more restrictive, not less) — not a meaningful security breach. The finding doesn't identify what specific harm results.",
+      "severity_justification": "The attack requires write access to a 0o700-protected directory, and even a successful race would result in chmod to 0o600 on an external file, which is benign.",
+      "category_justification": "The finding is framed as a TOCTOU security vulnerability in file operations.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 153,
+      "end_line": 161,
+      "message": "The `delete_file` operation validates paths before deletion, but the existence checks and metadata handling do not account for concurrent modifications that could change the target of deletion after the validation but before the removal.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "This is the same generic TOCTOU pattern as findings 8 and 9, applied to delete_file. It makes no concrete claim about an exploitable attack path — just that concurrent modifications could change the target after validation. The storage directory is 0o700 owner-only, paths come from internal sources (allocate_path or DB records), and remove_file on a path that has been swapped to a symlink removes the symlink itself (not the target). No specific data flow from untrusted input to a dangerous sink is demonstrated.",
+      "severity_justification": "Exploiting the race requires write access to the 0o700-protected storage directory. Even a successful race on remove_file removes the symlink entry, not the symlink target, so no external files are at risk.",
+      "category_justification": "The finding is framed as a security concern about concurrent modifications bypassing path validation.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 226,
+      "end_line": 266,
+      "message": "The `allocate_path` implementation uses string concatenation and manual validation, which makes it hard to guarantee correctness and prevent edge cases. While sanitized, the logic does not explicitly prevent non-Unix paths (e.g., mixed drive targets on Windows) when executed cross-platform, which could create security gaps.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The project is explicitly macOS-only (README states 'macOS 14+', models.rs comment says 'Chronicle is macOS-only'). The code already uses Unix-only APIs (DirBuilderExt::mode, PermissionsExt) that would not compile on Windows. The Windows/cross-platform concern is entirely inapplicable to this codebase. The alternative concern about 'string concatenation' is too vague to be actionable.",
+      "severity_justification": "The concern is non-applicable to a macOS-only application using Unix-only APIs throughout.",
+      "category_justification": "The finding is framed as a security gap from cross-platform path handling.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 340,
+      "end_line": 356,
+      "message": "The `dir_size` function performs recursive traversal of directories but does not handle cases where an external process might introduce highly nested directories to cause denial-of-service through resource exhaustion. Symlink checks are done, but additional safeguards against nested directories should be implemented.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "This is a generic DoS-via-deep-nesting warning without a concrete attack path. The storage directory is 0o700 owner-only — an 'external process' creating deeply nested directories inside it would require the same access level that already implies full compromise of the user's storage. The path creation in allocate_path only creates YYYY/MM/DD depth (3 levels), and no external input controls directory structure depth. The finding doesn't demonstrate how an attacker gains write access to the 0o700 directory to plant the deep nesting.",
+      "severity_justification": "Exploiting this would require write access to a 0o700-protected directory. The actual directory depth created by the daemon is bounded (YYYY/MM/DD = 3 levels under each subdir).",
+      "category_justification": "The finding is framed as a denial-of-service security concern via resource exhaustion.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/files.rs",
+      "start_line": 1,
+      "end_line": 42,
+      "message": "After this refactor, the entire `files` module consists only of `#[cfg(test)]` helpers (`sanitize_id`, `date_parts`, `screenshot_path`, `audio_path`) and their tests. None of its functions are referenced from production code anymore, and the helpers reimplement the path/date logic that now lives in `media.rs` — so the tests verify a parallel implementation, not the real code path. Consider removing this module entirely (and the `pub(crate) mod files;` declaration in `lib.rs`) to avoid dead code drift, or convert these into tests of `MediaManager::allocate_path` that assert the expected `YYYY/MM/DD/<ts>_<id>.<ext>` layout against the actual production code.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: all symbols in files.rs are behind #[cfg(test)], the module is declared pub(crate) in lib.rs but contributes nothing to production code, and sanitize_id/date_parts are reimplementations of identically-named functions in media.rs. The tests in files.rs exercise a parallel implementation, not the real production path.",
+      "severity_justification": "No runtime behavior is affected — all code is test-only. The risk is test drift (tests pass while the actual MediaManager diverges), but the impact is maintainability rather than correctness.",
+      "category_justification": "Dead module with duplicated logic that tests a shadow implementation instead of the production code path — a code quality / DRY concern.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/retention.rs",
+      "start_line": 187,
+      "end_line": 191,
+      "message": "`dummy_media_mgr()` uses a hard-coded shared path `/tmp/chronicle-test-dummy` that is created (but never cleaned up) and reused across every test that calls it. Because `cargo test` runs tests in parallel by default, several tests may concurrently share/own this directory, and on systems where `/tmp` is a symlink (e.g. macOS where `/tmp -> /private/tmp`) the canonicalization in `MediaManager::new` will resolve to a different path than the literal one passed in — which is fine here only because the dummy is never used for actual writes. Prefer creating a per-test `tempfile::tempdir()` (as `cleanup_handles_missing_files_gracefully` and the other tests already do) so each test gets an isolated, automatically-cleaned-up base directory.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "dummy_media_mgr() uses a hardcoded /tmp/chronicle-test-dummy path while the test image paths (/tmp/old_shot.heif, etc.) are outside that root. validate_path rejects them, so file deletions silently fail in all three callers — the tests only verify DB row deletion, not actual file cleanup. The shared persistent path also poses isolation concerns in parallel test runs.",
+      "severity_justification": "No production code is affected and the tests still pass. The issue is that three tests give false confidence about file deletion behavior — a testing quality problem without runtime consequences.",
+      "category_justification": "The problem is test design: a shared hard-coded path produces a MediaManager whose base_dir rejects all the image paths used in those tests, meaning file-deletion behavior goes untested.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 238,
+      "end_line": 241,
+      "message": "`DirBuilder::mode` only affects directories created by this call. If the media/date directory already exists with more permissive permissions (for example from an older install or a previous run), this leaves it unchanged, so the storage hardening does not consistently enforce 0o700 on media directories.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "DirBuilder::recursive(true).mode() only sets permissions on newly created directories; if the path already exists it is left unchanged. This is standard Unix mkdir -p behavior and is verified by the Rust stdlib. The base directory is unconditionally hardened via set_permissions, but media subdirectories are not, leaving a gap in the PR's stated permission-hardening goal.",
+      "severity_justification": "Practical impact is reduced because the base directory is always hardened to 0o700 on startup, restricting access to everything beneath it. The gap is a real but secondary hardening concern affecting only upgrading installs where subdirs were previously created with looser permissions.",
+      "category_justification": "The finding identifies a gap in the permission-hardening goal of the PR — pre-existing media subdirectories retain more permissive modes than intended.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/media.rs",
+      "start_line": 55,
+      "end_line": 67,
+      "message": "This validation only constrains paths to the storage root, but `delete_file` is used on paths read from the database and `insert_screenshot`/`insert_audio_segment` accept caller-supplied paths. A malformed or legacy row pointing at another file under the root (for example `chronicle.db` or the IPC socket) would pass validation and be removable during cleanup; media operations should be constrained to the intended media subdirectories or validated at insert time.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "security",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "validate_path only checks containment under the storage root, not under a media subdirectory. A DB row with image_path pointing at chronicle.db or chronicle.sock would pass validation and be deletable during cleanup. This is factually correct. However, in practice paths only enter the DB via allocate_path which already constrains them to screenshots/ or audio/, and the IPC layer has no insert path, so exploitation requires direct DB write access.",
+      "severity_justification": "The attack path requires direct write access to the SQLite database, at which point the system is already fully compromised. There is no external interface that can inject arbitrary paths into the DB currently. It is a valid defense-in-depth gap but not an exploitable vulnerability in the current architecture.",
+      "category_justification": "The finding identifies a gap between the intended security boundary (media subdirectories) and the actual enforcement boundary (storage root), which could allow deletion of non-media files in a compromised state.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/lib.rs",
+      "start_line": 16,
+      "end_line": 16,
+      "message": "`files` no longer has any non-test items or non-test references after moving file lifecycle logic into `media` (a repository search for `files::` returns no uses). Keeping it as a normal module leaves a dead production module just to host test-only helpers; consider removing it or moving those tests under `media` to avoid carrying obsolete structure.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: grep for 'files::' returns no results anywhere in the codebase. Line 16 of lib.rs declares pub(crate) mod files; but files.rs contains only #[cfg(test)]-gated code with zero production-visible symbols. The module is dead as a production artifact.",
+      "severity_justification": "No runtime impact. The concern is carrying an obsolete module declaration and duplicate test-only logic, which is a maintainability issue without behavioral consequences.",
+      "category_justification": "Dead module declaration with no production symbols — a code hygiene issue introduced by the refactor that moved production logic to media.rs.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "chronicle-daemon/crates/storage/src/retention.rs",
+      "start_line": 187,
+      "end_line": 190,
+      "message": "This test helper uses a fixed `/tmp/chronicle-test-dummy` directory instead of a per-test temp directory, so tests can interfere across concurrent runs and leave persistent state on the developer/CI machine. Prefer returning a `TempDir` alongside the manager or constructing the manager from each test's existing temp root.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified in Finding 2 investigation: dummy_media_mgr() hardcodes /tmp/chronicle-test-dummy, creates it without cleanup, and returns a MediaManager whose base_dir excludes the image paths used by the three callers. The claim about shared state and persistent directory is accurate.",
+      "severity_justification": "No production impact; test isolation concern only. Tests still pass because file deletion errors are swallowed in cleanup_media. Risk is limited to leftover /tmp directory and potential flakiness in unusual CI environments.",
+      "category_justification": "Test helper design issue: hardcoded shared path instead of per-test isolated tempdir, causing potential interference and persistent state.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,371 @@
+{
+  "pr_key": "konturio_disaster-ninja-fe_1230-d169e9da",
+  "pr": {
+    "repo": "https://github.com/konturio/disaster-ninja-fe",
+    "pr_number": 1230,
+    "base": "3c1900acccaae22cb69adb02dd8351f24fe4e8b5",
+    "head": "d169e9da6b816d04a9697359406cdf154b2f8067"
+  },
+  "findings": [
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 239,
+      "end_line": 240,
+      "message": "layer('disable') and layer('enable') are not valid reatom v2 API calls. LayerAtom is AtomSelfBinded<LogicalLayerState, LogicalLayerActions>; actions must be dispatched via store.dispatch([layer.disable()]) and store.dispatch([layer.enable()]), as demonstrated in applyNewLayerSource.ts. Calling the atom as a plain function with a string argument invokes the reducer directly with an invalid argument — not the action handler — so the remounting logic is a no-op. store is not imported in GenericRenderer.ts, so this cannot be fixed without adding that import.",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: LayerAtom is AtomSelfBinded<LogicalLayerState, LogicalLayerActions>. The correct reatom v2 pattern (confirmed in applyNewLayerSource.ts) is store.dispatch([layerAtom.disable()]) / store.dispatch([layerAtom.enable()]). Calling the atom as layer('disable') passes a string to the atom's reducer, not a proper dispatched action. Additionally, store is not imported in GenericRenderer.ts. The test uses vi.fn() for otherLayer which accepts any call, hiding the bug.",
+      "severity_justification": "The entire remounting logic (the main feature of this PR) is a no-op — other layers will not be properly re-enabled after a basemap style change, meaning the feature does not work as intended.",
+      "category_justification": "The code calls the atom with an invalid API causing the remounting behavior to be a no-op — a logic/behavioral bug.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 237,
+      "end_line": 237,
+      "message": "layersOrderManager.init() is called without first calling layersOrderManager.destroy(). The init() method unconditionally pushes a new layersSettingsAtom subscription to the private _unsubscribe array (layersOrder.ts line 51-54). Every basemap switch therefore leaks one subscription. Additionally, destroy() never clears _unsubscribe, so previously-cancelled functions accumulate across successive init/destroy cycles.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: GenericRenderer.ts line 237 calls layersOrderManager.init() without a preceding destroy(). init() unconditionally pushes to _unsubscribe (layersOrder.ts lines 52-54). destroy() calls each fn but does not clear the array. Each basemap switch leaks one subscription to layersSettingsAtom.",
+      "severity_justification": "Subscriptions accumulate with each basemap switch — leaked subscriptions fire on every layersSettings change, wasting work and growing indefinitely. No immediate catastrophic failure but a real resource/subscription leak.",
+      "category_justification": "This is a resource/memory leak from incorrect lifecycle management — accumulated subscriptions that are never cleaned up.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 235,
+      "end_line": 238,
+      "message": "styledata is the wrong event to wait for after setStyle. MapLibre fires styledata for each incremental style update and it can fire before the basemap's own layers are fully parsed. As a result, map.getStyle().layers may be incomplete when layersOrderManager.init() reads it to set _baseMapFirstLayerIdx, producing an incorrect index that causes subsequent user layers to be inserted below basemap layers. The correct event to await full style load after setStyle is style.load.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: The PR uses map.once('styledata', ...) while the codebase uses style.load in fixture code for post-setStyle callbacks and map.once('load', ...) for initial layersOrderManager.init(). styledata fires incrementally during style loading; using once() means it fires at the first incremental event before all layers are available. layersOrderManager.init() captures map.getStyle().layers.length at that point, giving an incorrect _baseMapFirstLayerIdx that could cause user layers to be inserted below basemap layers.",
+      "severity_justification": "Incorrect _baseMapFirstLayerIdx causes user overlay layers to be inserted at the wrong z-order relative to basemap layers, a visual rendering correctness issue after each basemap switch.",
+      "category_justification": "Using the wrong event to determine when style is ready leads to incorrect layer ordering state being captured.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 229,
+      "end_line": 244,
+      "message": "There is no guard against concurrent style switches. If willMount or willSourceUpdate is called again (e.g. rapid toggling) while the previous setStyle has not yet fired its styledata event, a second map.once('styledata', ...) listener is queued. Each styledata event will then trigger the next queued handler, causing double init of layersOrderManager and double remount of all layers, leaving the map in an unpredictable state.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: _updateMap() is async but proceeds immediately once map._loaded is true. There is no in-progress guard, no removal of a prior styledata listener, and no cancellation mechanism. A second call before the first styledata fires queues a second once('styledata', ...) handler. Both handlers will eventually fire on successive styledata events, causing double layersOrderManager.init() and double remounting of all layers.",
+      "severity_justification": "Rapid basemap toggling is a realistic user scenario. Double init of layersOrderManager (resetting _baseMapFirstLayerIdx) and double layer remounting leaves the map in an unpredictable state with incorrectly ordered or duplicated layers.",
+      "category_justification": "This is a race condition / missing concurrency guard that can leave the map in an unpredictable state under rapid user interaction.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 236,
+      "end_line": 236,
+      "message": "mapLibreParentsIds.clear() removes all maplibre-layer-to-UI-layer mappings immediately, including entries for layers that will not be successfully remounted (because the remounting API is broken). Any concurrent call to layersOrderManager that still references those IDs (e.g. _getMountedOrderedLayers) will silently skip those layers with a 'id was not found' warning and produce wrong ordering decisions.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The claim that mapLibreParentsIds.clear() before async remounting causes ordering queries to fail is verified in code: layerByOrder.ts populates mapLibreParentsIds synchronously per-layer as each layer adds itself, but remounting is async. During this window, ordering queries on partially-populated mapLibreParentsIds produce incomplete results. The specific mechanism described (concurrent calls referencing cleared IDs) is imprecise — it's actually about mappings not being repopulated fast enough — but the core concern about a broken ordering window is valid.",
+      "severity_justification": "The practical harm is that layers may be inserted at the top of the map rather than their correct category position during the remounting window. Not a crash, and somewhat masked by the completely broken remounting API (Finding 1). Limited real-world impact on its own.",
+      "category_justification": "Clearing state before async repopulation causes ordering logic to produce incorrect layer positioning during the remounting window.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.test.ts",
+      "start_line": 47,
+      "end_line": 52,
+      "message": "The test validates the broken layer('disable') / layer('enable') call pattern by mocking otherLayer as a plain vi.fn() and checking call[0] === 'disable'. Real LayerAtom instances cannot be invoked this way; the production code path is broken, but the test passes because the mock accepts any arguments. This gives false confidence that remounting works.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: the test mocks otherLayer as vi.fn() and asserts call[0] === 'disable', which is exactly what the broken layer('disable') call produces on a mock. A real LayerAtom cannot be invoked this way; the test passes only because vi.fn() accepts any arguments. It validates the API call pattern rather than any actual remounting behavior, giving false confidence that the feature works.",
+      "severity_justification": "The test actively obscures a correctness bug (the broken remounting API from Finding 1). A developer seeing a green test would not realize the production behavior is a no-op. This makes the regression harder to detect and fix.",
+      "category_justification": "The test is structurally designed around a broken invocation pattern — it validates behavior of a mock rather than the real LayerAtom interface, constituting a test design flaw.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 226,
+      "end_line": 244,
+      "message": "After setStyle is called, all previously added sources and layers are wiped from the map. The basemap renderer itself never adds anything to this._layerIds for the maplibre-style-url branch, so _removeLayers is a no-op on unmount. However, willUnMount will still attempt to remove this._sourceId (SOURCE_IN_AREA_PREFIX + id) from the map even though it was never added, producing a console.warn on every basemap layer unmount.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "exacerbated-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: _sourceId (SOURCE_IN_AREA_PREFIX + id) is set in the constructor but never added to the map in the maplibre-style-url branch. willUnMount unconditionally tries map.getSource(this._sourceId) and console.warns when it's not found. This is a real warning that fires on every unmount of a basemap-type layer.",
+      "severity_justification": "Only a spurious console.warn — no functional impact. Minor noise in logs, but no crash or behavioral problem.",
+      "category_justification": "Incorrect lifecycle handling that generates unnecessary console warnings on every basemap layer unmount.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 228,
+      "end_line": 232,
+      "message": "layersToRemount is captured by reading mountedLayersAtom.getState() before setStyle. If the atom state has diverged from the last-updated snapshot (the file documents a known reatom v2 bug where atom state can be stale and the workaround _lastUpdatedState_DO_NOT_USE_OR_YOU_WILL_BE_FIRED exists), some mounted layers will be silently missed and not remounted after the style change.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: mountedLayers.ts documents a known reatom v2 bug where getState() can return stale state, and exports _lastUpdatedState_DO_NOT_USE_OR_YOU_WILL_BE_FIRED as the workaround. logicalLayerFabric.ts already uses this workaround. The PR uses mountedLayersAtom.getState() at line 231, bypassing the workaround and risking silently missing mounted layers when the reatom bug occurs.",
+      "severity_justification": "Documented as a rare-case bug. When triggered, some layers would silently fail to remount after a basemap switch. Low frequency but real impact when it occurs. Also partially masked by the broken remounting API (Finding 1).",
+      "category_justification": "Using a known-buggy API when a documented workaround is already established in the codebase — a reliability concern under a specific but real condition.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 226,
+      "end_line": 241,
+      "message": "Error handling is missing when setting the MapLibre style. If 'map.setStyle(styleUrl)' or 'map.once' fails (e.g., due to network issues or invalid style URLs), this could lead to unhandled errors or inconsistent state.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The callers of _updateMap (willMount, willSourceUpdate) already wrap in try/catch. map.setStyle() does not throw synchronously on network failure — MapLibre fires a map.error event instead, so a try/catch cannot intercept it regardless. map.once() is pure listener registration and does not fail. The finding does not identify a concrete unhandled exception path; it is a generic best-practice suggestion applicable to any map code.",
+      "severity_justification": "Even if valid, the real-world risk is limited — network failures in setStyle produce map.error events, not thrown exceptions, so the missing try/catch doesn't change the actual error-handling behavior.",
+      "category_justification": "The finding concerns error handling for async operations.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 227,
+      "end_line": 241,
+      "message": "Layer remount logic ignores potential errors or unexpected states during 'layer(\"disable\")' and 'layer(\"enable\")' calls. These calls should handle potential exceptions to avoid leaving layers in an inconsistent state.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "layer('disable') and layer('enable') are no-op calls (as shown in Finding 1 — calling a reatom atom directly with a string doesn't invoke the action handler). These calls don't throw exceptions in practice. The finding is a generic 'add try/catch to forEach callbacks' suggestion with no concrete exception path identified.",
+      "severity_justification": "The calls are effectively no-ops so there is nothing to throw.",
+      "category_justification": "The finding concerns exception handling in an iteration.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.test.ts",
+      "start_line": 34,
+      "end_line": 35,
+      "message": "The mocked implementation of 'map.once' immediately invokes the callback upon 'styledata' event with no delay. This does not accurately simulate real asynchronous event behavior and may produce misleading test results.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Synchronous invocation of callbacks in event-listener mocks is standard unit test practice. The test is verifying call sequences, not timing. The finding does not identify any specific concrete case where the synchronous mock produces a false positive or hides a real bug — it is generic advice that could apply to virtually any event mock.",
+      "severity_justification": "No concrete harm from synchronous mocks in this test scenario.",
+      "category_justification": "The finding is about test implementation fidelity.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.test.ts",
+      "start_line": 26,
+      "end_line": 27,
+      "message": "The test assumes 'mountedLayersAtom.set.dispatch' will work correctly but does not verify its actual result. This could mask potential issues with the state manager.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Not asserting the result of a setup/arrange step (mountedLayersAtom.set.dispatch) is standard test practice — the arrange step exists to set up state, not to be tested itself. The test does indirectly verify the dispatch worked by checking that otherLayer was called (which only happens if the atom state was populated correctly). This is a generic 'verify your setup calls' suggestion with no specific demonstrated failure mode.",
+      "severity_justification": "No concrete harm — the test indirectly validates that dispatch worked via the subsequent behavior assertions.",
+      "category_justification": "The finding concerns test setup verification.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 227,
+      "end_line": 241,
+      "message": "State restoration between basemap changes (e.g., restoring previous layer settings or style configurations) is not ensured, which could lead to user state mismatch or loss of configuration.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "This is a generic design-level concern that could be applied to any basemap-switching implementation. It does not identify a specific piece of state that is concretely lost, a specific code path where loss occurs, or a specific configuration that is not restored. The PR's explicit intent is to remount existing layers after style change — restoring their state is the whole point of the layersToRemount logic. The finding does not demonstrate a concrete gap beyond what is already covered (or broken for other identified reasons).",
+      "severity_justification": "Without a specific state artifact, code path, or user-visible regression identified, there is no concrete harm to evaluate.",
+      "category_justification": "The finding concerns behavioral correctness of state restoration after basemap switching.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 229,
+      "end_line": 243,
+      "message": "After `map.setStyle(styleUrl)`, execution falls through to the rest of `_updateMap` (the `if (!isVisible) this.willHide(...)`, tooltip provider registration, click listener registration, etc., starting at line 247). For a basemap layer this state is mostly empty, but it does mean `willHide` may be invoked while the new style is still loading asynchronously, and the layer-list cleanup runs before the styledata callback fires. Consider `return`ing after scheduling the styledata handler so the basemap branch doesn't accidentally execute logic intended only for data layers.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding is factually correct: the `maplibre-style-url` branch does not return after setting up the `styledata` callback, so execution falls through to `willHide`, click-listener, and tooltip registration code. While current practical impact is low (empty `_layerIds` makes `willHide` a no-op; `legend` is null skipping most tail logic), the missing `return` is a genuine structural defect that could cause subtle bugs as the method evolves.",
+      "severity_justification": "In practice the fall-through is mostly harmless today because `_layerIds` is empty and `legend` is null for basemap layers, but it is a real latent defect that warrants a `return`.",
+      "category_justification": "The issue is a control-flow defect — missing early return causes unintended code execution in the basemap branch of `_updateMap`.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 238,
+      "end_line": 240,
+      "message": "This remounts the snapshot taken before the async style change completed. If a user disables one of these layers while the new style is loading, this handler still calls `enable` on that stale layer and turns it back on, overriding the user's latest choice. Check the current mounted/enabled state when the style event fires instead of unconditionally disabling and enabling the snapshot.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The snapshot of mounted layers is captured before the async style change and used unconditionally in the styledata callback — any layer disabled by the user during style loading would be re-enabled. The finding is factually correct. Note that a separate bug (incorrect Reatom API: layer('disable') instead of store.dispatch(layer.disable())) currently masks the symptom, but the stale-snapshot design flaw is real and would cause the described UX issue if the API usage were fixed.",
+      "severity_justification": "If the Reatom dispatch bug were fixed, this race condition would override the user's layer-visibility choices silently — a meaningful UX defect. The window is narrow but the override is silent.",
+      "category_justification": "Race condition / stale-state bug: the captured snapshot is used unconditionally regardless of state changes that occur asynchronously before the callback fires.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.ts",
+      "start_line": 231,
+      "end_line": 233,
+      "message": "The remount snapshot includes any previously mounted basemap because it only filters out the newly selected layer. Base layers are mutually exclusive (`src/core/logical_layers/constants.ts:14-17`), but during a switch the old basemap can still be in `mountedLayersAtom`; the later `disable`/`enable` remount sequence will re-enable that old basemap and can switch the style back. Filter remounts to non-basemap overlay layers or use the current enabled set after mutual exclusion has settled.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The finding is factually correct: `layersToRemount` only filters out `this.id`, so other mounted basemaps (base category is mutuallyExclusive per constants.ts) remain in the snapshot. If the `disable`/`enable` dispatch calls were fixed, re-enabling the old basemap would trigger mutual exclusion again and could cause a style-switching loop. The underlying design flaw is real even though the broken Reatom API calls (`layer('disable')` instead of `store.dispatch(layer.disable())`) currently mask the symptom.",
+      "severity_justification": "If the Reatom dispatch bug is ever fixed, re-enabling the old basemap would trigger mutual exclusion and potentially create a style-switching loop — a significant UX defect. The filter gap is a genuine design flaw in the snapshot logic.",
+      "category_justification": "The snapshot incorrectly includes mutually-exclusive basemap layers that should be excluded from the remount set, potentially causing conflicting state if the dispatch API were correct.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.test.ts",
+      "start_line": 48,
+      "end_line": 51,
+      "message": "The test name and assertion message say layers are remounted, but this only verifies the `disable` call. If the production code failed to call `enable` afterward, the test would still pass while overlays remain unmounted after a basemap switch. Assert both calls, preferably in order, so the remount behavior is actually covered.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The test only asserts that `otherLayer` was called with `'disable'` and has no assertion for the subsequent `'enable'` call. Removing the `enable` call from production code would leave overlays unmounted after a basemap switch, but the test would still pass. The finding is factually correct and identifies a meaningful gap in test coverage.",
+      "severity_justification": "This is a test quality issue — the production behavior works (or doesn't, due to the separate broken Reatom API bug), but the test fails to verify the critical `enable` part of the remount cycle. Low severity because it doesn't affect runtime behavior, but it does undermine the value of this specific test.",
+      "category_justification": "The finding is about an incomplete assertion in a unit test that fails to verify the full behavior described by the test name.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "src/core/logical_layers/renderers/GenericRenderer.test.ts",
+      "start_line": 18,
+      "end_line": 20,
+      "message": "This setup only includes a generic mounted layer, so it misses the failure mode where another `maplibre-style-url` basemap is still mounted during the switch. Because the `base` category is mutually exclusive (`src/core/logical_layers/constants.ts:14-17`), coverage should include an existing basemap in `mountedLayersAtom` to ensure the remount logic does not re-enable the old style layer.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "broader-project-context",
+      "tp_fp_justification": "The test only sets up a generic overlay layer and never tests the basemap-to-basemap switching scenario where an old maplibre-style-url layer is still in mountedLayersAtom. The base category is mutuallyExclusive per constants.ts, making this the primary failure mode the feature should guard against. The test gap is real and the finding is factually correct.",
+      "severity_justification": "It's a test coverage gap — no production behavior is broken by the missing test case itself. The severity is bounded by the fact that the existing test approach (using vi.fn()) also tests the broken layer('disable')/layer('enable') API pattern, so the new test case would have limited value without also fixing the underlying correctness issues.",
+      "category_justification": "The finding identifies a missing test case for a specific failure scenario (old basemap still mounted during style switch), which is a test coverage/design concern.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}

@@ -1,0 +1,531 @@
+{
+  "pr_key": "brianc_node-postgres_3650-b922f0dd",
+  "pr": {
+    "repo": "https://github.com/brianc/node-postgres",
+    "pr_number": 3650,
+    "base": "c6028a875f953eff9e8e403622b0aac127d1b4a6",
+    "head": "b922f0ddfa3914cc7b05387cd12fc606bc658dc4"
+  },
+  "findings": [
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 653,
+      "end_line": 664,
+      "message": "The read-timeout path sets `query.callback = () => {}` (line 664), which overwrites the `tracedCb` that was installed by `traceCallback` at line 728. When a read timeout fires, `queryCallback` (the original user callback, captured at line 651 before tracing wraps it) is invoked directly, then `query.callback` is replaced with a no-op. `tracedCb` is never called, so `asyncEnd`/`error` tracing events for `pg:query` are never emitted. Every query that times out leaves the TracingChannel lifecycle permanently incomplete (start fires, neither asyncEnd nor error ever fires).",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified by reading the code: the read-timeout setup at ~line 651 captures `queryCallback = query.callback` before the tracing layer (introduced by this PR) wraps it with `tracedCb`. When a timeout fires, `queryCallback(error)` is called directly, bypassing `tracedCb`, and then `query.callback = () => {}` permanently discards `tracedCb`. The `start` event fires but `asyncEnd`/`error` never fire for timed-out queries.",
+      "severity_justification": "Timed-out queries leave TracingChannel lifecycles permanently incomplete (start fires, end/asyncEnd/error never fires), which will corrupt traces and potentially cause memory leaks or stalled spans in APM tools that rely on proper lifecycle completion.",
+      "category_justification": "The tracing lifecycle is not correctly completed for the read-timeout code path — a logic error caused by ordering of the two wrapping layers.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/diagnostics.js",
+      "start_line": 26,
+      "end_line": 29,
+      "message": "`shouldTrace` returns `channel.hasSubscribers !== false`. On Node 18, `TracingChannel.hasSubscribers` was not backported and evaluates to `undefined`, making `shouldTrace` always return `true`. As a result, on Node 18 every single `client.query()` and `client.connect()` call allocates a context object, creates multiple closures, and invokes `traceCallback` — regardless of whether any subscribers exist. The comment acknowledges this but frames it as intentional; for a potentially high-throughput pg client on Node 18 this is a constant, non-trivial allocation overhead that cannot be opted out of.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Factually correct: the code comment confirms `TracingChannel.hasSubscribers` is `undefined` on Node 18, making `shouldTrace` always return `true` and causing context object/closure allocation on every query regardless of subscribers. The behavior is intentional and documented, but the performance concern is real.",
+      "severity_justification": "Node 18 reached EOL in April 2025 (current date May 2026), so the affected population is small. The per-call overhead (a few allocations and closures) is modest in modern JS engines. The behavior is explicitly documented in the code comment, meaning it's a known trade-off rather than an oversight.",
+      "category_justification": "The finding identifies unnecessary allocation and closure creation on every query/connect call in a specific Node version, with no way to opt out.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/diagnostics.js",
+      "start_line": 31,
+      "end_line": 34,
+      "message": "Same `shouldTrace` issue as in `pg/lib/diagnostics.js`: on Node 18 `TracingChannel.hasSubscribers` is `undefined`, so `shouldTrace` always returns `true`. Every `pool.connect()` call incurs tracing overhead (context snapshot, enrichedCb closure, `traceCallback` invocation) even with no subscribers.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "performance",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Identical issue to the pg/lib/diagnostics.js case: the pg-pool diagnostics.js has the same `shouldTrace` function with the same `!== false` check, and the same comment confirming Node 18 TracingChannel.hasSubscribers is undefined, causing shouldTrace to always return true and every pool.connect() to allocate context objects and closures even with no subscribers.",
+      "severity_justification": "Same reasoning as the pg package instance: Node 18 is past EOL (April 2025), the overhead is modest, and the behavior is explicitly documented as intentional. Duplicate of a pre-existing finding on the same PR.",
+      "category_justification": "Unnecessary per-call allocation and closure creation when no subscribers are present, on Node 18.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 218,
+      "end_line": 226,
+      "message": "The `fn` passed to `traceCallback` for `pg:pool:connect` does nothing except assign `response.callback = tracedCb`. The `TracingChannel` API contract requires `fn` to actually initiate the async operation so the `start`→`end` synchronous span covers that work. Here the `end` event fires immediately after the assignment — before `newClient()`, before any queue push, before any pool logic runs. The real async initiation happens after `traceCallback` returns (lines 230-265). APM tools measuring the synchronous span will see a near-zero duration and no meaningful work. Compare with the `pg:query` and `pg:connection` channels where `fn` correctly calls `enqueue()` and `_connect()` respectively.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified by reading the code: the `fn` passed to traceCallback for pg:pool:connect only does `response.callback = tracedCb`, causing `end` to fire before any pool logic runs. All meaningful work (queue checks, newClient, pending item creation) happens after traceCallback returns. This is inconsistent with pg:query and pg:connection where fn correctly initiates the async operation (enqueue() and _connect() respectively).",
+      "severity_justification": "APM tools relying on the synchronous start/end span for pool connection timing will get near-zero duration spans that are meaningless. The async span still works correctly for end-to-end timing, but the misuse of the traceCallback contract produces incorrect/misleading telemetry data.",
+      "category_justification": "The traceCallback API is being misused — the fn argument should initiate the async operation but here it only does a callback assignment, making the synchronous span capture no meaningful work.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 709,
+      "end_line": 709,
+      "message": "The condition `shouldTrace(queryChannel) && query.callback` silently excludes event-driven queries (raw Query objects submitted without a callback, where consumers listen for 'row'/'end' events) from `pg:query` tracing with no fallback. These queries are valid uses of the pg API and may represent a significant fraction of queries in some codebases. There is no way for consumers or operators to know these queries are invisible to the tracing channel.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: when a raw Query object with no callback is passed to client.query(), query.callback is null and the condition at line 709 skips tracing entirely with no fallback. String/object queries always have a callback (promise path assigns one at line 640), but event-driven raw Query usage is genuinely excluded. The finding is factually correct.",
+      "severity_justification": "Any consumer relying on pg:query tracing for complete query observability will silently get incomplete data — event-driven queries are invisible to the channel. This is a coverage gap in the tracing API contract that operators cannot detect or work around.",
+      "category_justification": "The tracing implementation silently omits a valid subset of queries, producing incomplete/misleading telemetry data.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 209,
+      "end_line": 235,
+      "message": "The callback-with-tracing and promise-with-tracing paths in `connect()` are identical blocks of code, duplicated verbatim at lines 211-216 and 227-232. Both construct the same `context` object and call `connectionChannel.traceCallback` with the same arguments. The promise path is wrapped in a new `this._Promise` constructor so a single shared helper could not be straightforwardly extracted, but as-is these two copies will silently diverge if one is updated without the other (e.g., adding a new field to the connection context object).",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Verified: lines 211-216 and 227-232 are verbatim duplicates — identical context object construction and identical connectionChannel.traceCallback() call. The finding is factually correct about the duplication and the drift risk.",
+      "severity_justification": "The duplicated block is small (2 logical lines) and the drift risk, while real, is low given that connection context fields are unlikely to change frequently. This is a maintainability concern rather than a functional bug.",
+      "category_justification": "DRY violation — identical logic in two paths that will silently diverge if one is updated without the other.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 214,
+      "end_line": 216,
+      "message": "`enrichedCb` receives `done` (the `client.release` function) as its third argument and passes it through to `origCb`. When the pool is used in promise mode, `origCb` is `function(err, client) { ... }` (two-parameter, from `promisify`), so `done` is silently discarded. This is harmless because `client.release` is already attached directly to the client object. However, when `origCb` is the user-supplied callback in the callback path and the callback was wrapped by a `connectionTimeoutMillis` `queueCallback`, the `done` value flows through `queueCallback → tracedCb → enrichedCb → origCb`. If an intermediate wrapper does not forward all three arguments the `release` function is lost. The current `queueCallback` at line 241-244 does pass `done`, so this works today, but the three-argument contract is implicit and fragile.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "pre-existing",
+      "difficulty": "hard",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding is factually accurate about the call chain structure, but there is no actual bug. All intermediate wrappers (queueCallback, tracedCb, enrichedCb) correctly forward the done argument. The fragility concern is theoretical — the 3-argument contract existed before this PR, and the PR's additions (enrichedCb) correctly respect it.",
+      "severity_justification": "Even if done were lost in some future change, client.release is attached directly to the client object, so the user callback can still release the client. The functional impact would be minimal.",
+      "category_justification": "The concern is about implicit callback argument contracts and potential future fragility, not a current bug.",
+      "producer": "llm_review:claude-sonnet-4.6",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 204,
+      "end_line": 223,
+      "message": "When `pool.connect()` is called with a callback but there are no subscribers to the `pg:pool:connect` channel, the connection logic is never executed, causing the application to hang. The `shouldTrace` check wraps the tracing logic, but the original connection logic is inside the `else` branch of a promise-only path in `client.js` and was not replicated here. This means if tracing is skipped, nothing happens.",
+      "tp_fp": "fp",
+      "severity": "high",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding is factually incorrect. The shouldTrace block only replaces response.callback with a traced wrapper — it does not gate the connection logic. Whether shouldTrace returns true or false, execution always falls through to the pool logic (queue checks, newClient call) which uses response.callback. No hang occurs when tracing is skipped.",
+      "severity_justification": "If the claim were true, it would be a critical hang bug. But since the claim is wrong, severity reflects only the incorrectness of the finding itself.",
+      "category_justification": "The finding makes an incorrect claim about control flow and functional behavior.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/diagnostics.js",
+      "start_line": 15,
+      "end_line": 18,
+      "message": "The `poolReleaseChannel` and `poolRemoveChannel` are created using `dc.channel()`, which is a standard channel, not a tracing channel. The PR description indicates a `TracingChannel` should be used for `pg:pool:connect`, but the other pool channels, which also relate to object lifecycles, would benefit from being `TracingChannel`s as well for consistency and to support asynchronous context propagation if needed in the future. The query and connection channels are already `TracingChannel`s.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "api-architecture",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The use of regular Channel for release and remove is an intentional, documented design choice in the PR. These are synchronous, point-in-time events with no async lifecycle to trace, making TracingChannel semantically inappropriate. The finding is a speculative design preference ('if needed in the future') not a concrete issue.",
+      "severity_justification": "Even if the design choice were debatable, there is no functional impact — the channels work correctly as designed.",
+      "category_justification": "The finding concerns API design choices about channel type selection.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 400,
+      "end_line": 400,
+      "message": "The error object `err` is published to the `pg:pool:release` channel as `{ error: err || undefined }`. If `err` is null, this will result in `{ error: undefined }` which is explicit, but if `err` is already `undefined`, it will also be `{ error: undefined }`. A more concise way to omit the key when there's no error is to use `...(err && { error: err })` or similar, which is common in modern JavaScript for conditional properties.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Pure style preference. The current `err || undefined` explicitly sets the key to undefined when no error, producing a consistent object shape. The suggested spread alternative is neither more correct nor more readable — it's just different. No functional difference for any subscriber checking `if (msg.error)`.",
+      "severity_justification": "Zero functional impact; purely cosmetic with no behavior change for consumers.",
+      "category_justification": "Purely a code style suggestion about conditional object property inclusion.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/test/diagnostics.js",
+      "start_line": 13,
+      "end_line": 13,
+      "message": "The test for TracingChannel stability checks `typeof dc.tracingChannel('pg:pool:test:probe').hasSubscribers === 'boolean'`. This leaks a channel `pg:pool:test:probe` that is never unsubscribed from. While `diagnostics_channel` does not currently require explicit cleanup for channels themselves, creating channels with side effects in a check can be problematic and is not a clean pattern.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "The finding mischaracterizes channel creation as a subscription leak. No handler is ever subscribed, so there is nothing to unsubscribe from. The only effect is an empty channel object entering Node's internal registry — a negligible footprint with no callbacks held. The idiom of creating a probe channel to check API availability is standard and harmless.",
+      "severity_justification": "No functional impact, no actual memory leak from callbacks, no cleanup needed.",
+      "category_justification": "The finding concerns test code patterns and resource handling in test setup.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/diagnostics.js",
+      "start_line": 10,
+      "end_line": 13,
+      "message": "The code uses `process.getBuiltInModule('diagnostics_channel')` for Node.js versions that support it. This is a non-standard, internal API. While it might be used for performance reasons, relying on `require('diagnostics_channel')` is sufficient and more portable across Node.js versions and environments, as `diagnostics_channel` has been a stable, built-in module for a long time.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The finding incorrectly characterizes `process.getBuiltinModule` as 'non-standard, internal API' — it is a documented public Node.js API since v22.3.0. The actual issue is a typo: the code uses `getBuiltInModule` (capital I) but the real API is `getBuiltinModule` (lowercase), making the check always false and the feature dead code. The finding misdiagnoses the problem.",
+      "severity_justification": "The typo makes the getBuiltinModule path dead code, but the fallback to require() works correctly in all environments. The only lost value is the bundler-bypass benefit of getBuiltinModule.",
+      "category_justification": "The finding is about API usage correctness, though it gets the diagnosis wrong.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/test/diagnostics.js",
+      "start_line": 11,
+      "end_line": 11,
+      "message": "The variable `hasStableTracingChannel` is defined at the module level but is only used within the `'diagnostics channels'` describe block. It should be moved inside the describe block to narrow its scope.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Even if factually correct that the variable is only used within the describe block, this is a trivial cosmetic suggestion about variable scope in test code. Moving it inside the describe block has no functional impact, no performance benefit, and no clarity improvement — the module-level placement is a common and perfectly acceptable pattern for test skip guards. This is a sub-threshold style preference.",
+      "severity_justification": "Zero functional impact; purely cosmetic placement suggestion in test code.",
+      "category_justification": "Variable scope narrowing suggestion with no behavioral impact.",
+      "producer": "llm_review:gemini-2.5-pro",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 179,
+      "end_line": 183,
+      "message": "In the `_remove` method, the client.end call lacks proper error handling. If the end callback encounters an error (e.g., network or I/O issue), this could silently fail, and the error won't be propagated or logged.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Pre-existing code not touched by this PR (beyond adding publish() above it). More critically, client.end(cb) registers cb via `connection.once('end', cb)` — the socket end event never passes an error to the callback, so there is no error to handle. The finding's premise that errors could silently fail is unsupported by the actual implementation.",
+      "severity_justification": "Even if the concern were valid, this is pre-existing behavior that hasn't caused issues.",
+      "category_justification": "Concerns error handling in pool client lifecycle management.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 201,
+      "end_line": 223,
+      "message": "In the `connect` method, while tracing diagnostics is implemented, the enriched callback modifies the tracing logic but doesn't account for potential exceptions or failures in the callback itself, leading to silent failures if any part of the tracing channel logic or callback fails.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic boilerplate concern with no specific failure path identified. The enrichedCb only does a property read and calls origCb — neither introduces a new exception surface. If origCb throws, that was equally true before tracing was added. This claim could be copy-pasted onto any callback in any codebase without modification.",
+      "severity_justification": "No concrete failure mode identified; the operations in enrichedCb are safe and any exception from origCb is pre-existing behavior.",
+      "category_justification": "The finding concerns exception handling in callback logic.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 418,
+      "end_line": 423,
+      "message": "In the `_release` method, the error propagation for the release could lead to confusion because errors are not logged or propagated in a way that ensures visibility, especially during asynchronous execution.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "pre-existing",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic boilerplate claim about error visibility with no specific failure path. The _release method emits a 'release' event with the error (pre-existing) and the new code publishes to poolReleaseChannel with the error included. Error handling/propagation in _release is pre-existing behavior unchanged by this PR. The finding could be copy-pasted onto any async error-passing code without modification.",
+      "severity_justification": "No concrete issue identified; the PR correctly includes the error in the channel publish payload.",
+      "category_justification": "Concerns error propagation in async pool release logic.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 208,
+      "end_line": 223,
+      "message": "In the `connect` method of `Client`, there is inconsistent error handling between the callback style and Promise-based invocations. Errors during tracing or event bubbling could lead to swallowed exceptions in some scenarios.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic boilerplate claim about error handling inconsistency with no specific failure path demonstrated. The callback and promise paths both delegate to this._connect() with tracing wrappers — the error handling is symmetric, not inconsistent. No concrete scenario where exceptions are swallowed is identified. This could be copy-pasted onto any dual callback/promise API without modification.",
+      "severity_justification": "No concrete swallowed-exception scenario identified. Both paths correctly propagate errors through their respective mechanisms.",
+      "category_justification": "Concerns error handling consistency between callback and promise code paths.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 700,
+      "end_line": 742,
+      "message": "In the `query` method of `Client`, the tracing channel handling introduces additional complexity to the callback manipulation. If there are multiple query callbacks chained or external errors introduced, it can lead to hard-to-debug issues due to unclear error propagation.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Vague, generic claim about complexity and 'hard-to-debug issues' with no specific failure scenario demonstrated. No concrete code path showing unclear error propagation is identified. The finding could be copy-pasted onto any callback-wrapping code without modification. It does not meet the non-trivial threshold.",
+      "severity_justification": "No concrete bug or failure mode identified.",
+      "category_justification": "Concerns code complexity and debuggability of callback manipulation.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/diagnostics.js",
+      "start_line": 10,
+      "end_line": 25,
+      "message": "The creation of diagnostic channels does not account for potential memory leaks if many pools are instantiated dynamically. Prior subscription cleanup is not enforced.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Factually incorrect. Channels are module-level singletons initialized once at require() time, not per-pool-instance. Instantiating many pools creates no additional channel objects. The memory leak concern is based on a false premise about how the code is structured.",
+      "severity_justification": "The concern is based on a misreading of the code; there is no actual memory leak.",
+      "category_justification": "Concerns memory management and resource lifecycle.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/test/diagnostics.js",
+      "start_line": 80,
+      "end_line": 87,
+      "message": "The tracing test for `pg:pool:connect` does not check for concurrent connections or errors during tracing lifecycle, potentially missing edge cases in production environments.",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic test coverage suggestion that could be copy-pasted onto any test suite without modification. It does not identify a specific missing test case tied to a concrete bug or failure mode in the actual code — just notes that concurrent connections and error scenarios are not tested. This is a boilerplate 'tests should cover more cases' comment.",
+      "severity_justification": "No concrete untested edge case linked to a specific bug is identified.",
+      "category_justification": "Concerns test coverage gaps.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/test/unit/client/diagnostics-tests.js",
+      "start_line": 302,
+      "end_line": 307,
+      "message": "The `publishes start and asyncEnd on successful query` test lacks assertions or mocks for cases where the tracing context itself fails (e.g., invalid or incomplete subscriber logic).",
+      "tp_fp": "fp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-only",
+      "tp_fp_justification": "Generic test coverage suggestion with no specific failure mode identified. 'Invalid or incomplete subscriber logic' is vague and doesn't point to a concrete gap in the actual test. The referenced lines don't even exist in the file (which is only 205 lines). This could be copy-pasted onto any test without modification.",
+      "severity_justification": "No concrete missing test case tied to a real bug is identified.",
+      "category_justification": "Concerns test coverage for edge cases.",
+      "producer": "llm_review:gpt-4o",
+      "source": {
+        "type": "llm_review",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/test/unit/client/diagnostics-tests.js",
+      "start_line": 17,
+      "end_line": 17,
+      "message": "The outer `testTracing('query diagnostics channel', function () { ... })` is being used like a `describe` block, but `helper.Suite` does not support nested test grouping. The outer call enqueues a `Test` whose `action` synchronously registers more `Test` entries on the same queue (since the function has `length === 0`, `Suite` treats it as completed immediately after running). The result is a flat sequence in which the \"group\" entry shows up as a passing test with no assertions, and the nested tests are inserted into the queue afterwards. This is confusing and differs from `describe`/`it` semantics. Either drop the wrapper and call `testTracing` directly for each test, or introduce real grouping support. The same applies to the outer `testTracing('connection diagnostics channel', ...)` block.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "testing",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified against Suite implementation in packages/pg/test/suite.js: when action.length === 0, _run calls action() synchronously then immediately calls cb() without awaiting any nested test registrations. The outer testTracing('query diagnostics channel', ...) creates a Test whose zero-arity body synchronously enqueues nested tests then returns, causing the outer call to complete as a passing no-op with no assertions. The nested tests are inserted into the queue after the fact. This is not true describe-style grouping — it is a structural misuse of the Suite API.",
+      "severity_justification": "The nested tests still run and assertions execute; the consequence is a spurious passing test entry with no assertions in the output, not a functional test failure or missed coverage.",
+      "category_justification": "The finding concerns incorrect use of the Suite test framework API — specifically using a test slot as a describe-like grouping block, which the framework does not support.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/diagnostics.js",
+      "start_line": 1,
+      "end_line": 35,
+      "message": "Both `packages/pg/lib/diagnostics.js` and `packages/pg-pool/diagnostics.js` duplicate the `noopChannel`, the safe `require('diagnostics_channel')` loading (including the `process.getBuiltInModule` branch), and the `shouldTrace` helper. Since both packages live in the same monorepo and follow the same TracingChannel pattern, consider extracting the shared loader/helper into a tiny shared module or, at minimum, keep the comment text identical so future drift is obvious. The current copies are already drifting slightly (e.g. comment wording is the same but the channels listed differ), which will be fragile as the channels evolve.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "maintainability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "The duplication is real and verified: noopChannel, the process.getBuiltInModule loading block, and shouldTrace are identical in both files. The finding correctly identifies the DRY violation. However, extracting a shared module is complicated by the circular dependency risk (pg depends on pg-pool), so the actionability is limited — but the observation is factually correct and a competent engineer would want to acknowledge the duplication.",
+      "severity_justification": "The duplicated code is small (three constructs), stable, and already fully copy-consistent. Future drift risk is real but the boilerplate is unlikely to change frequently, and the packages are intentionally separate published artifacts.",
+      "category_justification": "The finding is about code duplication and DRY violation across two files in the same monorepo.",
+      "producer": "ccr:claude-opus-4.7[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg-pool/index.js",
+      "start_line": 3,
+      "end_line": 3,
+      "message": "This new runtime dependency is not included in the pg-pool published package: packages/pg-pool/package.json still restricts `files` to `index.js` and `esm`, so `diagnostics.js` would be omitted from npm tarballs and `require('./diagnostics')` would fail for consumers. The package files list needs to include this module (or the code needs to live in an already included file).",
+      "tp_fp": "tp",
+      "severity": "high",
+      "category": "reliability",
+      "scope": "introduced-by-pr",
+      "difficulty": "easy",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: packages/pg-pool/package.json has `\"files\": [\"index.js\", \"esm\"]`. The new diagnostics.js is not listed, so it would be excluded from the npm tarball. index.js does `require('./diagnostics')` at the top level, which would fail with MODULE_NOT_FOUND for all npm consumers.",
+      "severity_justification": "This is a publish-time regression that would break all pg-pool consumers the moment a new version is released — require('./diagnostics') throws at module load time, making the entire package unusable.",
+      "category_justification": "The issue is a missing file in the published package that causes a hard runtime failure for all consumers.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 722,
+      "end_line": 724,
+      "message": "This result enrichment assumes the query result is a single Result object. pg also returns an array of Result objects for multi-statement simple queries (covered by existing multiple-results tests), so those successful queries will publish `result.rowCount` and `result.command` as undefined instead of representing the actual results.",
+      "tp_fp": "tp",
+      "severity": "low",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified in query.js: _results starts as a single Result object but _checkForMultirow() converts it to Array<Result> for multi-statement queries. handleReadyForQuery calls callback(null, this._results), so res can be an array. The enrichedCb does `if (res) context.result = { rowCount: res.rowCount, command: res.command }` — when res is an array, both properties are undefined. The claim is factually correct.",
+      "severity_justification": "This only affects the diagnostics/tracing context metadata for multi-statement queries; it does not affect query execution or results delivered to application code. The impact is limited to incomplete observability data in an edge case.",
+      "category_justification": "The enrichment logic produces incorrect (undefined) values in the published diagnostics context for a valid code path (multi-statement queries).",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    },
+    {
+      "file": "packages/pg/lib/client.js",
+      "start_line": 12,
+      "end_line": 12,
+      "message": "The diagnostics hooks are only wired into the pure-JS Client. The package also exposes a native Client (`pg.native` / `NODE_PG_FORCE_NATIVE`), whose `connect` and `query` implementations remain uninstrumented, so `pg:query` and `pg:connection` subscribers get inconsistent behavior depending on which supported client implementation is selected.",
+      "tp_fp": "tp",
+      "severity": "medium",
+      "category": "correctness",
+      "scope": "introduced-by-pr",
+      "difficulty": "medium",
+      "context_required": "diff-plus-related-files",
+      "tp_fp_justification": "Verified: packages/pg/lib/native/client.js has no references to diagnostics, shouldTrace, queryChannel, or connectionChannel. The native client is exposed via pg.native (lazy getter) and NODE_PG_FORCE_NATIVE env var. Both code paths would silently produce no channel events despite subscribers being registered, giving inconsistent behavior between the JS and native clients.",
+      "severity_justification": "Users who have configured NODE_PG_FORCE_NATIVE or use pg.native — a supported and documented feature — will get zero diagnostics events despite setting up subscribers, with no warning. This is a silent inconsistency in a new API being introduced by this PR.",
+      "category_justification": "The new pg:query and pg:connection channels behave differently (no events) for a valid, supported client variant, which is incorrect behavior relative to the documented/expected API.",
+      "producer": "ccr:gpt-5.5[ReasoningEffort=medium]",
+      "source": {
+        "type": "ccr",
+        "alignment": "generated"
+      }
+    }
+  ]
+}
