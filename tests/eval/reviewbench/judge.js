@@ -107,7 +107,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   ensurePinnedCheckout(repoDir, sha, { repoUrl: options.repoUrl });
   if (!existsSync(depsMarker(repoDir, sha))) {
     console.error("running one-time npm ci in the judge clone…");
-    spawnSync("npm", ["ci"], { cwd: repoDir, stdio: "inherit" });
+    const install = spawnSync("npm", ["ci"], { cwd: repoDir, stdio: "inherit" });
+    if (install.error || install.status !== 0) {
+      throw new Error(`npm ci failed in the judge clone (exit ${install.status ?? install.error?.message ?? "?"}) — deps marker NOT written, fix the cause and re-run`);
+    }
     mkdirSync(path.dirname(depsMarker(repoDir, sha)), { recursive: true });
     writeFileSync(depsMarker(repoDir, sha), new Date().toISOString());
   }

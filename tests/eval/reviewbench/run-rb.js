@@ -244,6 +244,17 @@ function loadGolden(manifestPath, key) {
   return JSON.parse(readFileSync(goldenPath, "utf8"));
 }
 
+/**
+ * Golden recall targets for the prefilter: tp-labeled findings only, the
+ * same population the judge scores recall against (fp-labeled golden rows
+ * are deliberate reviewer over-reports, not targets).
+ */
+export function goldenRecallTargets(golden) {
+  return golden.findings
+    .filter((f) => f.tp_fp === "tp")
+    .map((f) => ({ file: f.file, start_line: f.start_line, end_line: f.end_line, message: f.message }));
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
@@ -335,7 +346,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           writeFileSync(path.join(reportedDir, `${key}.json`), `${JSON.stringify(reported, null, 2)}\n`);
           writeFileSync(path.join(confirmedDir, `${key}.json`), `${JSON.stringify(confirmedOnly, null, 2)}\n`);
           const golden = loadGolden(options.manifest, key);
-          const goldenFindings = golden.findings.map((f) => ({ file: f.file, start_line: f.start_line, end_line: f.end_line, message: f.message }));
+          const goldenFindings = goldenRecallTargets(golden);
           const pirFindings = result.data.findings
             .filter((f) => f.status === "confirmed" || f.status === "uncertain")
             .map((f) => ({ message: `${f.title} — ${f.claim} Trigger: ${f.trigger}`, paths: (f.anchors ?? []).map((a) => a.path),

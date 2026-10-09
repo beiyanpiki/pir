@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseOptions, prKey, mirrorUrl, loadManifest } from "../eval/reviewbench/run-rb.js";
+import { parseOptions, prKey, mirrorUrl, loadManifest, goldenRecallTargets } from "../eval/reviewbench/run-rb.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUN_RB = path.join(HERE, "..", "eval", "reviewbench", "run-rb.js");
@@ -78,6 +78,19 @@ test("loadManifest validates the real vendored fixture and its golden coverage",
   const keys = new Set(tasks.map(prKey));
   assert.equal(keys.size, 25);
   assert.ok(keys.has("PierreJanineh_TechDebtMCP_135-16a54f0f"));
+});
+
+test("goldenRecallTargets keeps tp-labeled golden findings only (judge recall population)", () => {
+  const golden = JSON.parse(
+    readFileSync(path.join(HERE, "..", "eval", "reviewbench", "fixtures", "golden", "AA-Factory_aafactory-prototype_17-a1978cb7.json"), "utf8"),
+  );
+  const tpCount = golden.findings.filter((f) => f.tp_fp === "tp").length;
+  assert.ok(tpCount > 0 && tpCount < golden.findings.length, "fixture should mix tp and fp labels");
+  const targets = goldenRecallTargets(golden);
+  assert.equal(targets.length, tpCount);
+  for (const t of targets) {
+    assert.deepEqual(Object.keys(t).sort(), ["end_line", "file", "message", "start_line"]);
+  }
 });
 
 test("loadManifest rejects malformed or golden-less manifests", () => {
