@@ -42,7 +42,7 @@ export function doNotReportLines(mode: "change" | "audit"): string[] {
     "Code that looks suspicious but is guarded, contracted, or tested elsewhere — verify the guard before reporting.",
     "Issues a linter or type-checker would catch (unused imports, formatting), unless they mask a real defect.",
     "Pedantic style or naming preference with no behavioral impact.",
-    'Speculative downstream breakage: name the concrete affected code path (file + behavior); "might break something elsewhere" without that path is not a finding.',
+    'Speculative downstream breakage requires a downstream path you have read that this change feeds (file + behavior); hypothetical callers or inputs ("a JS caller might pass…") are not findings.',
     "Design choices that tests, contracts, or comments evidence as intentional.",
     "Generic quality complaints without a concrete failure mode.",
   ];

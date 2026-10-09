@@ -63,7 +63,7 @@ test("do-not-report blacklist: change mode carries all seven items incl. the mer
     "guarded, contracted, or tested elsewhere",
     "a linter or type-checker would catch",
     "Pedantic style or naming preference",
-    '"might break something elsewhere"',
+    '"a JS caller might pass',
     "evidence as intentional",
     "Generic quality complaints without a concrete failure mode",
   ]) assert.ok(prompt.includes(phrase), phrase);
