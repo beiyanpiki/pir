@@ -16,8 +16,12 @@ const FIXTURES_DIR = path.join(RB_DIR, "fixtures");
 const CACHE_DIR = path.join(RB_DIR, ".cache");
 export const DEFAULT_REVIEWBENCH_REPO = "https://github.com/review-bench/ReviewBench.git";
 
+// Network-bound clone/fetch/checkout are bounded so a hung transfer
+// cannot stall bench:judge indefinitely.
+const GIT_TIMEOUT_MS = 600_000;
+
 const git = (cwd, args) =>
-  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
+  execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, timeout: GIT_TIMEOUT_MS });
 
 export function parseOptions(argv = [], env = process.env) {
   const values = {
@@ -64,7 +68,7 @@ export function depsMarker(repoDir, sha) {
 export function ensurePinnedCheckout(repoDir, sha, { repoUrl = DEFAULT_REVIEWBENCH_REPO } = {}) {
   if (!existsSync(repoDir)) {
     mkdirSync(path.dirname(repoDir), { recursive: true });
-    execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe" });
+    execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe", timeout: GIT_TIMEOUT_MS });
   }
   try {
     git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);

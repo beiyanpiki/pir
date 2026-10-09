@@ -198,12 +198,14 @@ export function ensureFetched(repoDir, { base, head, pr_number: prNumber }, { ti
 }
 
 /** Detached per-task checkout of head, isolated via git worktree. */
-export function materializeTask(repoDir, head, workDir) {
+export function materializeTask(repoDir, head, workDir, { timeoutMs } = {}) {
   if (existsSync(workDir)) {
     rmSync(workDir, { recursive: true, force: true });
     git(repoDir, ["worktree", "prune"]);
   }
-  git(repoDir, ["worktree", "add", "--detach", workDir, head]);
+  // Checkouts on blob:none partial clones lazily fetch blobs over the
+  // network, so the fetch timeout applies here too.
+  git(repoDir, ["worktree", "add", "--detach", workDir, head], { timeoutMs });
   return workDir;
 }
 
@@ -345,7 +347,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         repoDir = cache.repoDir;
         const fetchInfo = ensureFetched(repoDir, entry, { timeoutMs: options.fetchTimeoutMs });
         if (fetchInfo.fetched) console.error(`fetched ${key} via ${fetchInfo.remote}`);
-        checkout = materializeTask(repoDir, entry.head, path.join(cacheRoot, "work", key));
+        checkout = materializeTask(repoDir, entry.head, path.join(cacheRoot, "work", key), { timeoutMs: options.fetchTimeoutMs });
       } catch (error) {
         materializationError = String(error.message ?? error);
         console.error(`ERROR materialize ${key}: ${materializationError}`);
@@ -380,13 +382,21 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
             const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
             if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
             prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });
-            const usage = result.data.usage;
-            taskRow.runs.push({ variant: variant.name, repeat, status: "ok", exitCode: result.exitCode, wallTimeMs: result.wallTimeMs,
-              totalTokens: usage?.totalTokens ?? null, reportedFindings: reported.findings.length,
-              confirmedFindings: confirmedOnly.findings.length, droppedAnchors: dropped.length,
-              dropped: dropped.length > 0 ? dropped : undefined });
-            console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
-              `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""} in ${result.wallTimeMs}ms`);
+          const usage = result.data.usage;
+          // Truncated reviews (limit hits, pending candidates) still produce
+          // valid judging input, but must not look identical to complete
+          // runs in the summary — recall from a truncated round is a lower
+          // bound, and RESULTS.md rows need to know.
+          const truncated = result.data.incomplete === true || (result.data.pendingCandidates ?? 0) > 0;
+          taskRow.runs.push({ variant: variant.name, repeat, status: "ok", exitCode: result.exitCode, wallTimeMs: result.wallTimeMs,
+            totalTokens: usage?.totalTokens ?? null, reportedFindings: reported.findings.length,
+            confirmedFindings: confirmedOnly.findings.length, droppedAnchors: dropped.length,
+            truncated, stoppedBecause: result.data.stoppedBecause ?? null,
+            pendingCandidates: result.data.pendingCandidates ?? 0,
+            dropped: dropped.length > 0 ? dropped : undefined });
+          console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
+            `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""}` +
+            `${truncated ? ` [WARN truncated: ${result.data.stoppedBecause ?? "pending candidates"}]` : ""} in ${result.wallTimeMs}ms`);
           } catch (error) {
             taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: String(error.message ?? error) });
             anyError = true;
