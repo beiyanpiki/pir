@@ -123,9 +123,11 @@ test("idle sweep frees ended runs without waiting for another event", async () =
 // #70 regression: the replay copy must not spread-apply the buffer. A long
 // audit buffers >125k events (mostly tiny deltas) well under the 32 MB char
 // budget; push(...events) passed each one as a call argument and V8's stack
-// overflowed, killing every SSE connection with a synchronous throw.
+// overflowed, killing every SSE connection with a synchronous throw. The
+// event-count cap is disabled here so the copy is still exercised at a size
+// real registries no longer reach.
 test("subscribe: replays a 200k-event buffer without stack overflow", () => {
-  const registry = new LiveRegistry({ endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  const registry = new LiveRegistry({ endedRunGraceMs: 60_000, pruneIntervalMs: 60_000, maxBufferedEventsPerRun: Infinity });
   try {
     const now = Date.now();
     emitRunEventForTest(runStart("A", now));
@@ -144,6 +146,45 @@ test("subscribe: replays a 200k-event buffer without stack overflow", () => {
     const all = registry.subscribe(null, () => {});
     assert.equal(all.replay.length, DELTAS + 2, "all-runs replay returns the full buffer, seq-sorted");
     all.unsubscribe();
+  } finally {
+    registry.dispose();
+  }
+});
+
+// #70 follow-up: bound the buffered event count per run — the char budget
+// alone let hundreds of thousands of tiny deltas pile up, making every SSE
+// replay an unbounded burst for the serve loop and the joining client.
+test("event cap: oldest deltas are dropped first when a run exceeds the count cap", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 5, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
+    for (let i = 0; i < 8; i += 1) emitRunEventForTest(delta("A", "s1", `d${i}`, now));
+    emitRunEventForTest(block("A", "s1", "settled", now));
+
+    const events = registry.snapshot("A").events;
+    assert.equal(events.length, 5, "buffer is capped");
+    const kinds = events.map((event) => event.kind);
+    assert.ok(kinds.includes("run-start") && kinds.includes("session-start") && kinds.includes("session-block"),
+      "run structure and the authoritative block survive");
+    const deltaTexts = events.filter((event) => event.kind === "session-delta").map((event) => event.text);
+    assert.deepEqual(deltaTexts, ["d6", "d7"], "oldest deltas dropped first, newest kept");
+  } finally {
+    registry.dispose();
+  }
+});
+
+test("event cap: without deltas the oldest events are trimmed from the front", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 3, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    for (let i = 0; i < 4; i += 1) emitRunEventForTest(block("A", "s1", `b${i}`, now));
+
+    const events = registry.snapshot("A").events;
+    assert.equal(events.length, 3, "buffer is capped");
+    assert.deepEqual(events.map((event) => event.block.text), ["b1", "b2", "b3"], "oldest trimmed from the front");
   } finally {
     registry.dispose();
   }

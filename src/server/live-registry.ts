@@ -64,6 +64,15 @@ type RunEventListener = (event: RunEvent) => void;
 
 /** Bounded buffering: deltas are the bulk, so they are evicted first. */
 const MAX_BUFFERED_CHARS = 32 * 1024 * 1024;
+/**
+ * Per-run event-count cap. The char budget alone lets hundreds of
+ * thousands of tiny deltas pile up (#70); a replay that large is a poor
+ * trade for both sides — a synchronous serve-loop burst and tens of MB
+ * per joining client. The client's live fold is built for "tens of
+ * thousands" of replayed events, so 50k keeps replay bounded while a
+ * mid-run joiner still sees the full recent timeline.
+ */
+const MAX_BUFFERED_EVENTS_PER_RUN = 50_000;
 const ENDED_RUN_GRACE_MS = 5 * 60 * 1000;
 const MAX_TRACKED_RUNS = 8;
 const PRUNE_INTERVAL_MS = 60 * 1000;
@@ -75,6 +84,8 @@ export interface LiveRegistryOptions {
   pruneIntervalMs?: number;
   /** Total buffered-char budget across all runs (default 32 MB). */
   maxBufferedChars?: number;
+  /** Per-run buffered-event cap (default 50k). */
+  maxBufferedEventsPerRun?: number;
 }
 
 function eventChars(event: RunEvent): number {
@@ -95,11 +106,13 @@ export class LiveRegistry {
   private readonly sweep: ReturnType<typeof setInterval> | undefined;
   private readonly endedRunGraceMs: number;
   private readonly maxBufferedChars: number;
+  private readonly maxBufferedEventsPerRun: number;
   private bufferedChars = 0;
 
   constructor(options: LiveRegistryOptions = {}) {
     this.endedRunGraceMs = options.endedRunGraceMs ?? ENDED_RUN_GRACE_MS;
     this.maxBufferedChars = options.maxBufferedChars ?? MAX_BUFFERED_CHARS;
+    this.maxBufferedEventsPerRun = options.maxBufferedEventsPerRun ?? MAX_BUFFERED_EVENTS_PER_RUN;
     this.unsubscribeBus = onRunEvent((event) => this.handle(event));
     // Ended-run grace is enforced without waiting for the next event: an
     // idle serve process must release buffers on its own.
@@ -174,6 +187,7 @@ export class LiveRegistry {
     state.events.push(event);
     this.bufferedChars += eventChars(event);
     this.enforceBudget();
+    this.enforceEventCap();
     this.pruneEnded();
   }
 
@@ -198,6 +212,35 @@ export class LiveRegistry {
     for (const state of byOldest) {
       if (this.bufferedChars <= this.maxBufferedChars) return;
       this.trimFront(state);
+    }
+  }
+
+  /**
+   * Bound each run's buffered event count (#70): the char budget alone
+   * allows hundreds of thousands of tiny deltas, and replaying that many
+   * events in one shot costs the serve loop and every joining client.
+   * Oldest deltas go first — they are streaming duplicates of the
+   * authoritative blocks; once deltas run out, the oldest events go
+   * regardless of kind, the same front-degradation the char budget's last
+   * resort applies.
+   */
+  private enforceEventCap(): void {
+    for (const state of this.runs.values()) {
+      let excess = state.events.length - this.maxBufferedEventsPerRun;
+      if (excess <= 0) continue;
+      const retained: RunEvent[] = [];
+      for (const event of state.events) {
+        if (excess > 0 && event.kind === "session-delta") {
+          excess -= 1;
+          this.bufferedChars -= eventChars(event);
+          continue;
+        }
+        retained.push(event);
+      }
+      if (excess > 0) {
+        for (const event of retained.splice(0, excess)) this.bufferedChars -= eventChars(event);
+      }
+      state.events = retained;
     }
   }
 
