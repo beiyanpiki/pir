@@ -8,7 +8,13 @@ import type {
 } from "./types.js";
 
 const QUERY_TIMEOUT_MS = 30_000;
-const SYNC_TIMEOUT_MS = 120_000;
+/** Exported for the seed lock's staleness math in app/repos.ts. */
+export const CODEGRAPH_SYNC_TIMEOUT_MS = 120_000;
+// A first-time init is a full index build — far heavier than a sync.
+const INIT_TIMEOUT_MS = 300_000;
+/** Same as CODEGRAPH_SYNC_TIMEOUT_MS: bounds how long an activation can hold
+ *  the per-project seed lock when it has to build the initial index. */
+export const CODEGRAPH_INIT_TIMEOUT_MS = INIT_TIMEOUT_MS;
 
 export class CodeMapError extends Error {
   constructor(
@@ -142,6 +148,29 @@ function pendingCount(pending: number | Record<string, number> | undefined): num
 }
 
 /**
+ * Opt-in index bootstrap for pir's own server-side state (#64): create an
+ * index where none exists. This is the one place pir runs `codegraph init`,
+ * and only ever on directories pir owns (registered clones, bundle cache
+ * dirs, throwaway review worktrees) — never on a user's checkout, which
+ * `createCodeMap` deliberately leaves alone.
+ */
+export async function codegraphInit(repoRoot: string): Promise<void> {
+  const result = await execCodegraph(["init", "-y", repoRoot], { timeoutMs: INIT_TIMEOUT_MS });
+  classifyExit(["init"], result);
+}
+
+/**
+ * Unconditional sync. `status`'s pendingChanges signal is unreliable in the
+ * worktree/copy setups pir builds (verified against 1.6.0: it reports zero
+ * changes while the index is a commit behind), so index preparation must not
+ * gate on it the way `ensureSynced` does.
+ */
+export async function codegraphSync(repoRoot: string): Promise<void> {
+  const result = await execCodegraph(["sync", "-q", repoRoot], { timeoutMs: CODEGRAPH_SYNC_TIMEOUT_MS });
+  classifyExit(["sync"], result);
+}
+
+/**
  * Adapter over the external `codegraph` CLI. Process-level isolation only:
  * every call spawns the CLI and consumes its `--json` output; nothing is
  * imported from the codegraph package.
@@ -172,7 +201,7 @@ export class CodeGraphCliAdapter implements CodeMapProvider {
     if (!current.initialized) return current;
     if (current.pendingChanges > 0) {
       // `sync` has no -p and never emits JSON: -q + positional path, judge by exit code.
-      const result = await execCodegraph(["sync", "-q", this.repoRoot], { timeoutMs: SYNC_TIMEOUT_MS });
+      const result = await execCodegraph(["sync", "-q", this.repoRoot], { timeoutMs: CODEGRAPH_SYNC_TIMEOUT_MS });
       classifyExit(["sync"], result);
       return this.status();
     }

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createCodeMap } from "../../dist/codemap/provider.js";
-import { CodeGraphCliAdapter } from "../../dist/codemap/codegraph-cli.js";
+import { CodeGraphCliAdapter, CodeMapError, codegraphInit, codegraphSync } from "../../dist/codemap/codegraph-cli.js";
 
 // Option specs mirroring `codegraph --help` for 1.6.0, the version the image
 // installs (Dockerfile pins @colbymchenry/codegraph@1.6.0). The fake CLI below
@@ -20,7 +20,7 @@ import { CodeGraphCliAdapter } from "../../dist/codemap/codegraph-cli.js";
 // optional [path], query/callers/callees/impact take a required <search>/
 // <symbol>, affected takes variadic [files...], files takes none.
 const CLI_SPEC = {
-  init: { value: [], bool: ["--force", "--incremental", "--language", "--exclude", "--no-gitignore"], positional: "path?" },
+  init: { value: [], bool: ["-y", "--yes", "--force", "--incremental", "--language", "--exclude", "--no-gitignore"], positional: "path?" },
   uninit: { value: [], bool: ["--yes"], positional: "path?" },
   sync: { value: [], bool: ["-q", "--quiet"], positional: "path?" },
   status: { value: [], bool: ["-j", "--json"], positional: "path?" },
@@ -150,8 +150,30 @@ test("createCodeMap activates codegraph when the index is initialized", async ()
   });
 });
 
-test("createCodeMap degrades when codegraph is not installed", async () => {
-  const emptyBin = mkdtempSync(path.join(tmpdir(), "pir-emptybin-"));
+test("codegraphInit/codegraphSync speak the 1.6.0 flag surface (regression guard)", async () => {
+  // The fake CLI rejects options commander would reject, so `init -y <path>`
+  // and `sync -q <path>` only pass while they match the real signatures.
+  const { binDir } = makeFakeCodegraph({
+    init: { stdout: "" },
+    sync: { stdout: "" },
+  });
+  await withPath(binDir, async () => {
+    await codegraphInit("/tmp/repo");
+    await codegraphSync("/tmp/repo");
+  });
+});
+
+test("codegraphInit surfaces non-zero exits as failed, not silently", async () => {
+  const { binDir } = makeFakeCodegraph({ init: { exit: 1, stderr: "error: nope" } });
+  await withPath(binDir, async () => {
+    await assert.rejects(
+      codegraphInit("/tmp/repo"),
+      (err) => err instanceof CodeMapError && err.kind === "failed",
+    );
+  });
+});
+
+test("createCodeMap degrades when codegraph is not installed", async () => {  const emptyBin = mkdtempSync(path.join(tmpdir(), "pir-emptybin-"));
   const oldPath = process.env.PATH;
   process.env.PATH = emptyBin; // no codegraph anywhere
   try {

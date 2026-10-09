@@ -143,6 +143,8 @@ PIR_SERVER_TOKEN=<service-token>
 PI_AUTH_JSON={"anthropic":{"type":"api_key","key":"<provider-key>"}}
 PI_DEFAULT_PROVIDER=anthropic
 PI_DEFAULT_MODEL=<model-id>
+# Optional: make serve reviews use the codegraph structural index
+PIR_CODEGRAPH=1
 ```
 
 ```bash
@@ -152,6 +154,13 @@ docker compose up -d
 The container entrypoint translates `PI_AUTH_JSON`, `PI_API_KEY__<provider>`,
 and `PI_DEFAULT_*` into Pi configuration. `sh docker/deploy.sh` offers an
 interactive setup for this deployment.
+
+Server-side reviews run in throwaway worktrees, so a codegraph index cannot be
+shared with them the way it is in local mode. With `PIR_CODEGRAPH=1` each
+review copies the project's seed index into its worktree and syncs it to the
+reviewed head (the first review per project pays a full index build); without
+it, serve reviews run degraded — the structural `find_*` tools stay
+unavailable even though the image installs the codegraph CLI.
 
 ## Common commands
 

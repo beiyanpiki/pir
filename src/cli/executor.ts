@@ -673,7 +673,7 @@ async function cmdRepos(
   if (sub === "remove") {
     const name = args[1];
     if (!name) throw new UsageError("repos remove requires a name");
-    const entry = removeRepo(name, Boolean(flags.get("--purge")));
+    const entry = await removeRepo(name, Boolean(flags.get("--purge")));
     emit(
       json
         ? `${envelope("repos.remove", entry)}\n`

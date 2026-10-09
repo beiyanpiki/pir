@@ -40,6 +40,11 @@ services:
       - PIR_WEB_UI_TOKEN=${PIR_WEB_UI_TOKEN:-}
       - PIR_REPOS_ROOT=/data/repos
       - PIR_STATE_ROOT=/data/state
+      # PIR_CODEGRAPH=1: serve-mode reviews actually use the codegraph index
+      # the image installs — each review copies the per-project seed index
+      # into its throwaway worktree and syncs it to the reviewed head (#64).
+      # Without it (default) serve reviews run in degraded mode.
+      - PIR_CODEGRAPH=${PIR_CODEGRAPH:-}
     volumes:
       - ./docker/pi-config:/pi-config:ro
       - pir-repos:/data/repos

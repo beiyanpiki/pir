@@ -213,6 +213,12 @@ Limits:
 | `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |
 
+`PIR_CODEGRAPH=1` (server/serve deployments) makes throwaway-worktree reviews
+copy the per-project seed codegraph index into the worktree and sync it to the
+reviewed head, so structural queries work server-side; without it serve reviews
+run degraded regardless of installation. It is an operator env, not a per-run
+flag.
+
 Numeric limits require positive integers. Budgets do not hard-cancel an
 in-flight model turn. `--quiet` suppresses progress; stdout still contains the
 result. Audits can be long; use scope and budget appropriate to the task.

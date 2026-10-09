@@ -123,6 +123,8 @@ export interface CreateCodeMapResult {
   reason?: string;
   /** Human-readable degradation explanation when degraded. */
   detail?: string;
+  /** Index status from the activation probe (active branch only). */
+  status?: IndexStatus;
 }
 
 /**
@@ -136,7 +138,7 @@ export async function createCodeMap(repoRoot: string): Promise<CreateCodeMapResu
     if (!status.initialized) {
       return degraded(repoRoot, "not_initialized");
     }
-    return { provider: adapter, degraded: false };
+    return { provider: adapter, degraded: false, status };
   } catch (err) {
     if (err instanceof CodeMapError && (err.kind === "not_installed" || err.kind === "timeout")) {
       return degraded(repoRoot, err.kind, "codegraph CLI not available");

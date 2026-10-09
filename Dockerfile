@@ -27,8 +27,11 @@ RUN apt-get update \
   && git config --system --add safe.directory '*'
 
 # Optional structural index (degrades gracefully when absent at runtime).
+# A failed install must fail the build: an image that silently lacks the
+# binary it was asked to carry is exactly the "installed but never usable"
+# trap #64 was filed against.
 ARG INSTALL_CODEGRAPH=1
-RUN if [ "$INSTALL_CODEGRAPH" = "1" ]; then npm i -g @colbymchenry/codegraph@1.6.0 || true; fi
+RUN if [ "$INSTALL_CODEGRAPH" = "1" ]; then npm i -g @colbymchenry/codegraph@1.6.0; fi
 
 # Writable home for pi (seeded from /pi-config + PI_* env vars by the
 # entrypoint) plus server-side data roots (registered clones, centralized
