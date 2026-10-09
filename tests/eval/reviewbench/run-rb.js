@@ -34,6 +34,7 @@ const git = (cwd, args, { env = process.env, timeoutMs } = {}) =>
     encoding: "utf8",
     env: gitEnv(env),
     maxBuffer: 32 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
     ...(timeoutMs ? { timeout: timeoutMs } : {}),
   });
 
@@ -228,9 +229,10 @@ function runPir(cli, checkout, entry, options, runDir, env) {
       PIR_MODE: "local", PIR_MODEL: options.model,
     }) });
   const wallTimeMs = Math.round(performance.now() - start);
-  if (result.error) throw result.error;
+  const stderrTail = (text) => String(text ?? "").trim().split("\n").slice(-12).join("\n");
+  if (result.error) throw new Error(`${result.error.message}\nstderr tail:\n${stderrTail(result.stderr)}`);
   if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`CLI exited ${result.status}, signal ${result.signal ?? "none"}${result.signal === "SIGTERM" ? ` (task timeout ${options.taskTimeoutMs}ms)` : ""}`);
+    throw new Error(`CLI exited ${result.status}, signal ${result.signal ?? "none"}${result.signal === "SIGTERM" ? ` (task timeout ${options.taskTimeoutMs}ms)` : ""}\nstdout tail:\n${stderrTail(result.stdout)}\nstderr tail:\n${stderrTail(result.stderr)}`);
   }
   const envelope = JSON.parse(result.stdout);
   if (!envelope?.data || !Array.isArray(envelope.data.findings)) throw new Error("CLI returned no data.findings array");
@@ -320,6 +322,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         const runDir = path.join(cacheRoot, "runs", roundName, runLabel, key);
         if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true });
         mkdirSync(runDir, { recursive: true });
+        // Same forced-local snapshot the scenario runner gives its runs:
+        // without agent credentials pir cannot authenticate the model.
+        for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
         try {
           const result = runPir(variant.cli, checkout, entry, options, runDir, env);
           const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
