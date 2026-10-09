@@ -78,6 +78,7 @@ test("do-not-report blacklist: change mode carries all seven items incl. the mer
 test("P0 severity calibration is appended to the change-mode severity line", () => {
   const prompt = reviewerPrompt(changeMinimalInput);
   assert.ok(prompt.includes("P0 is reserved for unconditional, input-independent breakage"));
+  assert.ok(prompt.includes("an unconditional defect is not automatically P0"));
   assert.ok(prompt.includes("put the uncertainty in finish_round"));
   const severityLine = prompt.split("\n\n").find((line) => line.startsWith("Severity measures"));
   assert.ok(severityLine.includes("P0 is reserved for"));

@@ -26,7 +26,7 @@ const structuralEnumerationLine =
 
 /** P0 calibration appended to both severity lines (#73 Q1). */
 const severityCalibrationLine =
-  "P0 is reserved for unconditional, input-independent breakage; when impact cannot be determined, keep severity by mechanism and put the uncertainty in finish_round — do not convert weak evidence into a low-severity finding.";
+  "P0 is reserved for unconditional, input-independent breakage with critical impact; an unconditional defect is not automatically P0 — scale severity to the blast radius. When impact cannot be determined, keep severity by mechanism and put the uncertainty in finish_round — do not convert weak evidence into a low-severity finding.";
 
 /**
  * Do-not-report blacklist (#73 Q1): the negative space the positive rules
@@ -39,7 +39,7 @@ export function doNotReportLines(mode: "change" | "audit"): string[] {
     mode === "change"
       ? "A defect that already exists at the merge-base: the defect must not reproduce on the old side unless this change unmasked it."
       : null,
-    "Code that looks suspicious but is guarded, contracted, or tested elsewhere — verify the guard before reporting.",
+    "Code that looks suspicious but is guarded, contracted, or tested elsewhere — confirm the guard once, then move on; it is not a finding.",
     "Issues a linter or type-checker would catch (unused imports, formatting), unless they mask a real defect.",
     "Pedantic style or naming preference with no behavioral impact.",
     'Speculative downstream breakage requires a downstream path you have read that this change feeds (file + behavior); hypothetical callers or inputs ("a JS caller might pass…") are not findings.',
