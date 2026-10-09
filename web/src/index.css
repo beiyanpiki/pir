@@ -1563,7 +1563,13 @@ button.tool-row:focus-visible,
   flex-direction: column;
   gap: 6px;
 }
-.tool-code-result {
+.diff-file-note {
+  padding: 6px 9px;
+  color: var(--muted-foreground);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  border-bottom: 1px solid var(--border);
+}.tool-code-result {
   min-width: 0;
   overflow: hidden;
   border-radius: 5px;
