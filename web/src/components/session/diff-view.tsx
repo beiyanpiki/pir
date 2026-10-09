@@ -4,28 +4,10 @@ import type { CSSProperties } from "react";
 import type { BundledLanguage } from "shiki";
 import { highlightCode } from "../ai-elements/code-block";
 import { codeLanguage } from "../code-lang";
+import { parseDiff, type DiffHunk, type DiffLine } from "./diff-parse";
 
-type DiffLineKind = "context" | "add" | "delete";
-
-interface DiffLine {
-  kind: DiffLineKind;
-  text: string;
-  oldLine?: number;
-  newLine?: number;
-}
-
-interface DiffHunk {
-  header: string;
-  lines: DiffLine[];
-}
-
-interface DiffFile {
-  path: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  hunks: DiffHunk[];
-}
+export { parseDiff } from "./diff-parse";
+export type { DiffFile, DiffHunk, DiffLine } from "./diff-parse";
 
 type DiffToken = {
   content: string;
@@ -33,87 +15,6 @@ type DiffToken = {
   fontStyle?: number;
   htmlStyle?: CSSProperties;
 };
-
-const FILE_HEADER = /^##\s+"([^"]+)"(?:\s+\[([^\]]+)\])?\s+\(\+(\d+)\/-(\d+)\)/;
-const HUNK_HEADER = /^hunkIndex:\s*\d+;\s*(@@.*@@.*)$/;
-const DIFF_BOUNDARY = /^(?:get_change:|##\s+"|entries:|continuation:|nextHunk:|truncated:)/;
-
-export function parseDiff(text: string): DiffFile[] {
-  const files: DiffFile[] = [];
-  const lines = text.split("\n");
-  let file: DiffFile | null = null;
-  let hunk: DiffHunk | null = null;
-  let oldLine = 0;
-  let newLine = 0;
-  let inBody = false;
-
-  const closeHunk = (): void => {
-    if (hunk && file && hunk.lines.length > 0) file.hunks.push(hunk);
-    hunk = null;
-    inBody = false;
-  };
-
-  for (const line of lines) {
-    const fileMatch = line.match(FILE_HEADER);
-    if (fileMatch) {
-      closeHunk();
-      file = {
-        path: fileMatch[1],
-        status: fileMatch[2] ?? "modified",
-        additions: Number(fileMatch[3]),
-        deletions: Number(fileMatch[4]),
-        hunks: [],
-      };
-      files.push(file);
-      continue;
-    }
-
-    const hunkMatch = line.match(HUNK_HEADER);
-    if (hunkMatch) {
-      closeHunk();
-      const header = hunkMatch[1];
-      const range = header.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      oldLine = Number(range?.[1] ?? 1);
-      newLine = Number(range?.[2] ?? 1);
-      hunk = { header, lines: [] };
-      inBody = true;
-      continue;
-    }
-
-    if (inBody && hunk) {
-      if (DIFF_BOUNDARY.test(line)) {
-        closeHunk();
-        continue;
-      }
-      if (/^(?:raw diff lines:|snapshot:|requested base:|hunk bodies omitted)/i.test(line)) continue;
-
-      const marker = line.slice(0, 1);
-      const value = line.slice(1);
-      if (marker === "+") {
-        hunk.lines.push({ kind: "add", text: value, newLine: newLine++ });
-      } else if (marker === "-") {
-        hunk.lines.push({ kind: "delete", text: value, oldLine: oldLine++ });
-      } else if (marker === " " || line === "") {
-        hunk.lines.push({ kind: "context", text: value, oldLine: oldLine++, newLine: newLine++ });
-      }
-      continue;
-    }
-
-    // Standalone tool output can contain a hunk without the parsed header.
-    if (/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/.test(line)) {
-      closeHunk();
-      const range = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      oldLine = Number(range?.[1] ?? 1);
-      newLine = Number(range?.[2] ?? 1);
-      hunk = { header: line, lines: [] };
-      file ??= { path: "change", status: "modified", additions: 0, deletions: 0, hunks: [] };
-      if (!files.includes(file)) files.push(file);
-      inBody = true;
-    }
-  }
-  closeHunk();
-  return files.filter((candidate) => candidate.hunks.length > 0);
-}
 
 function rawTokens(code: string): DiffToken[][] {
   return code.split("\n").map((line) => (line ? [{ content: line }] : []));
@@ -258,6 +159,9 @@ export function DiffView({ text }: { text: string }) {
               <span className="diff-count is-add">+{file.additions}</span>
               <span className="diff-count is-delete">−{file.deletions}</span>
             </header>
+            {file.hunks.length === 0 && (
+              <div className="diff-file-note">Overview entry — no hunk bodies in this response.</div>
+            )}
             {file.hunks.map((hunk, index) => (
               <DiffHunkView key={`${hunk.header}-${index}`} hunk={hunk} language={codeLanguage(file.path)} mode={mode} />
             ))}

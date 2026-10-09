@@ -266,6 +266,47 @@ function ResultView({ name, args, text, truncated, isError }: { name: string; ar
 
 export type ToolState = "input-streaming" | "input-available" | "output-available" | "output-error";
 
+const MAX_ARG_CHARS = 80;
+
+function formatArgValue(value: unknown): string {
+  if (typeof value === "string") {
+    const clipped = value.length > MAX_ARG_CHARS ? `${value.slice(0, MAX_ARG_CHARS)}…` : value;
+    return `"${clipped.replace(/\s+/g, " ")}"`;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined) {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value)?.slice(0, MAX_ARG_CHARS + 20) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** The actual invocation — name(key: value, …) — above the result, so the
+ * expanded panel answers "what was called" without opening a JSON dump. */
+export function ToolArgsLine({ name, args }: { name: string; args: unknown }) {
+  const entries = Object.entries((args ?? {}) as Record<string, unknown>);
+  return (
+    <div className="tool-args-line">
+      <span className="tool-args-name">{name}</span>
+      <span className="tool-args-paren">(</span>
+      {entries.length === 0 ? (
+        <span className="tool-args-paren">)</span>
+      ) : (
+        entries.map(([key, value], index) => (
+          <span className="tool-arg" key={key}>
+            <span className="tool-arg-key">{key}=</span>
+            <span className="tool-arg-value">{formatArgValue(value)}</span>
+            {index < entries.length - 1 && <span className="tool-args-sep">, </span>}
+          </span>
+        ))
+      )}
+      {entries.length > 0 && <span className="tool-args-paren">)</span>}
+    </div>
+  );
+}
+
 /** One activity row; expands to parameters + result. Memo'd so a live flush
  * re-renders only the sessions whose items actually changed. */
 export const ToolRow = memo(function ToolRow({
@@ -311,6 +352,7 @@ export const ToolRow = memo(function ToolRow({
       {hasDetail && (
         <CollapsibleContent>
           <div className="tool-detail">
+            <ToolArgsLine name={name} args={args} />
             {result && (
               <ResultView
                 name={name}

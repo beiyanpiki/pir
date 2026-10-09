@@ -1563,7 +1563,34 @@ button.tool-row:focus-visible,
   flex-direction: column;
   gap: 6px;
 }
-.tool-code-result {
+.tool-args-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  color: var(--muted-foreground);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9.5px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.tool-args-name {
+  color: var(--chart-2);
+}
+.tool-arg-key {
+  color: var(--foreground);
+  opacity: 0.75;
+}
+.tool-arg-value {
+  color: var(--muted-foreground);
+}
+.diff-file-note {
+  padding: 6px 9px;
+  color: var(--muted-foreground);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  border-bottom: 1px solid var(--border);
+}.tool-code-result {
   min-width: 0;
   overflow: hidden;
   border-radius: 5px;
