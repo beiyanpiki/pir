@@ -9,7 +9,8 @@
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { snapshotConfig } from "../run-eval.js";
@@ -280,99 +281,104 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (unknown.length > 0) throw new Error(`--only keys not in manifest: ${unknown.join(", ")}`);
   }
   if (options.limit !== undefined) selected = selected.slice(0, options.limit);
-  const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`;
-  const roundDir = path.join(RB_OUT_ROOT, roundName);
-  if (existsSync(roundDir)) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name or remove it)`);
-  mkdirSync(roundDir, { recursive: true });
 
   const cacheRoot = path.join(RB_DIR, ".cache");
-  const configRoot = path.join(cacheRoot, "configuration");
-  const config = snapshotConfig(configRoot, env);
-  options.model ??= config.model;
-  if (!options.model) throw new Error("set --model or PIR_MODEL, or configure a default pi model");
-  const { claimSimilarity } = await import(pathToFileURL(path.join(ROOT, "dist/findings/identity.js")).href);
+  // Ephemeral config snapshot (credentials included): one per invocation in
+  // the OS temp dir, discarded in finally — no durable credential copy under
+  // .cache/ (the scenario runner's snapshots are equally throwaway).
+  const configRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-config-"));
+  try {
+    const config = snapshotConfig(configRoot, env);
+    options.model ??= config.model;
+    if (!options.model) throw new Error("set --model or PIR_MODEL, or configure a default pi model");
+    const { claimSimilarity } = await import(pathToFileURL(path.join(ROOT, "dist/findings/identity.js")).href);
 
-  const summary = { schemaVersion: 1, round: roundName, startedAt: new Date().toISOString(), node: process.version,
-    model: options.model, config, limits: { maxRounds: options.maxRounds, maxTokens: options.maxTokens,
-      maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs },
-    repeats: options.repeats, variants, tasks: [] };
-  const prefilterAcc = new Map(); // `${variant}-run${repeat}` -> { taskResults }
-  const runDirs = [];
-  for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
-    for (const variant of variants) runDirs.push(`${variant.name}-run${repeat}`);
-  }
-  let anyError = false;
+    const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`;
+    const roundDir = path.join(RB_OUT_ROOT, roundName);
+    if (existsSync(roundDir)) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name or remove it)`);
+    mkdirSync(roundDir, { recursive: true });
 
-  for (const [index, entry] of selected.entries()) {
-    const key = prKey(entry);
-    const taskRow = { prKey: key, repo: entry.repo, prNumber: entry.pr_number, language: entry.language ?? null,
-      repoSizeKb: entry.repo_size_kb ?? null, linesAdded: entry.lines_added ?? null, linesRemoved: entry.lines_removed ?? null,
-      runs: [] };
-    let repoDir = null;
-    let checkout = null;
-    let materializationError = null;
-    try {
-      const cache = ensureRepoCache(entry, cacheRoot);
-      repoDir = cache.repoDir;
-      const fetchInfo = ensureFetched(repoDir, entry, { timeoutMs: options.fetchTimeoutMs });
-      if (fetchInfo.fetched) console.error(`fetched ${key} via ${fetchInfo.remote}`);
-      checkout = materializeTask(repoDir, entry.head, path.join(cacheRoot, "work", key));
-    } catch (error) {
-      materializationError = String(error.message ?? error);
-      console.error(`ERROR materialize ${key}: ${materializationError}`);
-    }
+    const summary = { schemaVersion: 1, round: roundName, startedAt: new Date().toISOString(), node: process.version,
+      model: options.model, config, limits: { maxRounds: options.maxRounds, maxTokens: options.maxTokens,
+        maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs },
+      repeats: options.repeats, variants, tasks: [] };
+    const prefilterAcc = new Map(); // `${variant}-run${repeat}` -> { taskResults }
+    const runDirs = [];
     for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
-      const order = (repeat + index) % 2 === 0 ? [...variants].reverse() : variants;
-      for (const variant of order) {
-        const runLabel = `${variant.name}-run${repeat}`;
-        if (materializationError) {
-          taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: `materialization: ${materializationError}` });
-          anyError = true;
-          continue;
-        }
-        const runDir = path.join(cacheRoot, "runs", roundName, runLabel, key);
-        if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true });
-        mkdirSync(runDir, { recursive: true });
-        // Same forced-local snapshot the scenario runner gives its runs:
-        // without agent credentials pir cannot authenticate the model.
-        for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
-        try {
-          const result = runPir(variant.cli, checkout, entry, options, runDir, env);
-          const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
-          const reportedDir = path.join(roundDir, runLabel);
-          const confirmedDir = path.join(roundDir, `${runLabel}-confirmed-only`);
-          mkdirSync(reportedDir, { recursive: true });
-          mkdirSync(confirmedDir, { recursive: true });
-          writeFileSync(path.join(reportedDir, `${key}.json`), `${JSON.stringify(reported, null, 2)}\n`);
-          writeFileSync(path.join(confirmedDir, `${key}.json`), `${JSON.stringify(confirmedOnly, null, 2)}\n`);
-          const golden = loadGolden(options.manifest, key);
-          const goldenFindings = goldenRecallTargets(golden);
-          const pirFindings = result.data.findings
-            .filter((f) => f.status === "confirmed" || f.status === "uncertain")
-            .map((f) => ({ message: `${f.title} — ${f.claim} Trigger: ${f.trigger}`, paths: (f.anchors ?? []).map((a) => a.path),
-              start_line: f.anchors?.[0]?.startLine, end_line: f.anchors?.[0]?.endLine ?? f.anchors?.[0]?.startLine }));
-          const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
-          if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
-          prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });
-          const usage = result.data.usage;
-          taskRow.runs.push({ variant: variant.name, repeat, status: "ok", exitCode: result.exitCode, wallTimeMs: result.wallTimeMs,
-            totalTokens: usage?.totalTokens ?? null, reportedFindings: reported.findings.length,
-            confirmedFindings: confirmedOnly.findings.length, droppedAnchors: dropped.length,
-            dropped: dropped.length > 0 ? dropped : undefined });
-          console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
-            `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""} in ${result.wallTimeMs}ms`);
-        } catch (error) {
-          taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: String(error.message ?? error) });
-          anyError = true;
-          console.error(`ERROR ${runLabel} ${key}: ${String(error.message ?? error)}`);
-        } finally {
-          rmSync(runDir, { recursive: true, force: true });
+      for (const variant of variants) runDirs.push(`${variant.name}-run${repeat}`);
+    }
+    let anyError = false;
+
+    for (const [index, entry] of selected.entries()) {
+      const key = prKey(entry);
+      const taskRow = { prKey: key, repo: entry.repo, prNumber: entry.pr_number, language: entry.language ?? null,
+        repoSizeKb: entry.repo_size_kb ?? null, linesAdded: entry.lines_added ?? null, linesRemoved: entry.lines_removed ?? null,
+        runs: [] };
+      let repoDir = null;
+      let checkout = null;
+      let materializationError = null;
+      try {
+        const cache = ensureRepoCache(entry, cacheRoot);
+        repoDir = cache.repoDir;
+        const fetchInfo = ensureFetched(repoDir, entry, { timeoutMs: options.fetchTimeoutMs });
+        if (fetchInfo.fetched) console.error(`fetched ${key} via ${fetchInfo.remote}`);
+        checkout = materializeTask(repoDir, entry.head, path.join(cacheRoot, "work", key));
+      } catch (error) {
+        materializationError = String(error.message ?? error);
+        console.error(`ERROR materialize ${key}: ${materializationError}`);
+      }
+      for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
+        const order = (repeat + index) % 2 === 0 ? [...variants].reverse() : variants;
+        for (const variant of order) {
+          const runLabel = `${variant.name}-run${repeat}`;
+          if (materializationError) {
+            taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: `materialization: ${materializationError}` });
+            anyError = true;
+            continue;
+          }
+          const runDir = path.join(cacheRoot, "runs", roundName, runLabel, key);
+          if (existsSync(runDir)) rmSync(runDir, { recursive: true, force: true });
+          mkdirSync(runDir, { recursive: true });
+          // Same forced-local snapshot the scenario runner gives its runs:
+          // without agent credentials pir cannot authenticate the model.
+          for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
+          try {
+            const result = runPir(variant.cli, checkout, entry, options, runDir, env);
+            const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
+            const reportedDir = path.join(roundDir, runLabel);
+            const confirmedDir = path.join(roundDir, `${runLabel}-confirmed-only`);
+            mkdirSync(reportedDir, { recursive: true });
+            mkdirSync(confirmedDir, { recursive: true });
+            writeFileSync(path.join(reportedDir, `${key}.json`), `${JSON.stringify(reported, null, 2)}\n`);
+            writeFileSync(path.join(confirmedDir, `${key}.json`), `${JSON.stringify(confirmedOnly, null, 2)}\n`);
+            const golden = loadGolden(options.manifest, key);
+            const goldenFindings = goldenRecallTargets(golden);
+            const pirFindings = result.data.findings
+              .filter((f) => f.status === "confirmed" || f.status === "uncertain")
+              .map((f) => ({ message: `${f.title} — ${f.claim} Trigger: ${f.trigger}`, paths: (f.anchors ?? []).map((a) => a.path),
+                start_line: f.anchors?.[0]?.startLine, end_line: f.anchors?.[0]?.endLine ?? f.anchors?.[0]?.startLine }));
+            const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
+            if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
+            prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });
+            const usage = result.data.usage;
+            taskRow.runs.push({ variant: variant.name, repeat, status: "ok", exitCode: result.exitCode, wallTimeMs: result.wallTimeMs,
+              totalTokens: usage?.totalTokens ?? null, reportedFindings: reported.findings.length,
+              confirmedFindings: confirmedOnly.findings.length, droppedAnchors: dropped.length,
+              dropped: dropped.length > 0 ? dropped : undefined });
+            console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
+              `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""} in ${result.wallTimeMs}ms`);
+          } catch (error) {
+            taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: String(error.message ?? error) });
+            anyError = true;
+            console.error(`ERROR ${runLabel} ${key}: ${String(error.message ?? error)}`);
+          } finally {
+            rmSync(runDir, { recursive: true, force: true });
+          }
         }
       }
+      if (checkout) releaseTask(repoDir, checkout);
+      summary.tasks.push(taskRow);
     }
-    if (checkout) releaseTask(repoDir, checkout);
-    summary.tasks.push(taskRow);
-  }
 
   summary.finishedAt = new Date().toISOString();
   summary.roundSummary = Object.fromEntries([...prefilterAcc.entries()].map(([runLabel, taskResults]) => {
@@ -384,7 +390,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const errors = summary.tasks.flatMap((t) => t.runs.filter((r) => r.status === "error").map((r) => `${t.prKey} ${r.variant}-run${r.repeat}: ${r.error}`));
   console.log(options.json ? JSON.stringify(summary) : JSON.stringify({ round: roundName, roundDir, tasks: summary.tasks.length,
     errorRuns: errors.length, roundSummary: summary.roundSummary, errors: errors.length > 0 ? errors : undefined }, null, 2));
-  return anyError ? 1 : 0;
+    return anyError ? 1 : 0;
+  } finally {
+    rmSync(configRoot, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
