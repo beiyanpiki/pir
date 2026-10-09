@@ -48,7 +48,14 @@ export function mergeEvents(previous: RunEvent[], pending: RunEvent[]): RunEvent
       last.sessionId === event.sessionId &&
       last.deltaType === event.deltaType
     ) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts };
+      // A replayed delta can itself carry cumulative text from the streak's
+      // start — the server coalesces buffered streaks past its event cap
+      // (F-74). Such text already contains what we hold, so replace instead
+      // of re-appending; genuinely incremental chunks never start with the
+      // whole held text and keep appending. Same bet the fold's buffer
+      // makes below.
+      const text = event.text.startsWith(last.text) ? event.text : last.text + event.text;
+      merged[merged.length - 1] = { ...last, text, seq: event.seq, ts: event.ts };
     } else {
       merged.push(event);
     }
