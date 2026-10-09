@@ -17,7 +17,7 @@ M1, F1) then append delta rows here.
 
 | Round | Date | Subset | Variants | Repeats | pir model | Judge (provider / model / RB SHA) | Result | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| harness-smoke | 2026-10-09 (pending live QA) | 3 tasks (`--only`) | candidate | 1 | (pending) | (pending) | pending | B1 harness smoke — proves the pipeline; **not a baseline** |
+| harness-smoke | 2026-10-09 | 3 tasks (`--only`: k1LoW_gh-copilot-review_9, ardevd_jadx-collaboration_3, PierreJanineh_TechDebtMCP_135) | candidate-run1 | 1 | opencode-go/deepseek-v4.1-flash:max | opencode-go / deepseek-v4.1-flash / aec7b37 | grounded P=— R=0%, augmented P=— R=0% (0 reported findings vs 25 golden TPs) | B1 harness smoke — proves the pipeline (materialize → review → normalize → prefilter → judge), **not a baseline**. Per task: 484s/1.73M tok, 328s/0.41M tok, 446s/1.34M tok (`summary.json`). All three tasks came back clean under this model/limits — a data point about the model, not the harness. |
 
 Row conventions:
 
