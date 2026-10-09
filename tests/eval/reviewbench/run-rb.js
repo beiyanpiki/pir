@@ -339,6 +339,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs },
       repeats: options.repeats, variants, tasks: [] };
     const prefilterAcc = new Map(); // `${variant}-run${repeat}` -> { taskResults }
+    const flushRoundArtifacts = () => {
+      summary.roundSummary = Object.fromEntries([...prefilterAcc.entries()].map(([runLabel, taskResults]) => {
+        writeFileSync(path.join(roundDir, `${runLabel}.PREFILTER.md`), renderPrefilterMd({ round: roundName, variant: runLabel, taskResults }));
+        return [runLabel, summarizeRound(taskResults)];
+      }));
+      // finishedAt stays absent while the round is running — a summary.json
+      // without it came from an interrupted (partial) round.
+      writeFileSync(path.join(roundDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+    };
     const runDirs = [];
     for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
       for (const variant of variants) runDirs.push(`${variant.name}-run${repeat}`);
@@ -358,7 +367,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         repoDir = cache.repoDir;
         const fetchInfo = ensureFetched(repoDir, entry, { timeoutMs: options.fetchTimeoutMs });
         if (fetchInfo.fetched) console.error(`fetched ${key} via ${fetchInfo.remote}`);
-        checkout = materializeTask(repoDir, entry.head, path.join(cacheRoot, "work", key), { timeoutMs: options.fetchTimeoutMs });
+        // Worktrees live under this invocation's run root, never a shared
+      // cache path: concurrent rounds touching the same task would
+      // otherwise delete each other's checkouts (materializeTask reclaims
+      // an existing path).
+      checkout = materializeTask(repoDir, entry.head, path.join(runRoot, "work", key), { timeoutMs: options.fetchTimeoutMs });
       } catch (error) {
         materializationError = String(error.message ?? error);
         console.error(`ERROR materialize ${key}: ${materializationError}`);
@@ -419,15 +432,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       }
       if (checkout) releaseTask(repoDir, checkout);
       summary.tasks.push(taskRow);
+      // Flush after every task: a multi-hour round that gets interrupted
+      // keeps its aggregates (judging inputs are already on disk per task).
+      flushRoundArtifacts();
     }
 
   summary.finishedAt = new Date().toISOString();
-  summary.roundSummary = Object.fromEntries([...prefilterAcc.entries()].map(([runLabel, taskResults]) => {
-    const round = summarizeRound(taskResults);
-    writeFileSync(path.join(roundDir, `${runLabel}.PREFILTER.md`), renderPrefilterMd({ round: roundName, variant: runLabel, taskResults }));
-    return [runLabel, round];
-  }));
-  writeFileSync(path.join(roundDir, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  flushRoundArtifacts();
   const errors = summary.tasks.flatMap((t) => t.runs.filter((r) => r.status === "error").map((r) => `${t.prKey} ${r.variant}-run${r.repeat}: ${r.error}`));
   console.log(options.json ? JSON.stringify(summary) : JSON.stringify({ round: roundName, roundDir, tasks: summary.tasks.length,
     errorRuns: errors.length, roundSummary: summary.roundSummary, errors: errors.length > 0 ? errors : undefined }, null, 2));
