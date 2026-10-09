@@ -24,7 +24,8 @@ Phase 0: Setup         → Split into atomic PRs, then branch + sibling worktree
                          (parallel when independent, one subagent per PR)
 Phase 1: Implement     → One slice per PR: model-free tests + real-surface QA
                          (drive the built CLI), atomic conventional commits
-Phase 2: PR Creation   → Push, create PR to dev filling the repo's PR template
+Phase 2: PR Creation   → Push, create PR to the base branch (dev, or the
+                         parent branch of a stack) filling the repo's PR template
 Phase 3: Verify Loop   → Unbounded iteration; a failing gate routes back to Phase 1:
   ├─ Gate B: dogfood   → this worktree's build reviews its own diff (local,
   │                     runs BEFORE every push, never skipped for findings)
@@ -54,7 +55,10 @@ Decompose the task into the smallest atomic PRs that each compile, pass,
 and deliver one reviewable slice. Prefer more small PRs over one large one
 — a 200-line PR gets a real review; a 2000-line PR gets a rubber stamp.
 Sequence by dependency: independent slices branch off `origin/dev` and run
-in parallel; dependent slices stack, each branched off the previous.
+in parallel; dependent slices stack, each branched off the previous. A PR's
+base is therefore `dev` for an independent slice and its parent branch for
+a stacked one — carry that as `$BASE_REF` (git side) and `$BASE_BRANCH`
+(PR side) through every phase below instead of assuming `dev`.
 
 Building more than one independent PR concurrently is the recommended
 default, not an exotic option: run one subagent (or separate agent
@@ -77,7 +81,8 @@ they provide one.
 cd <main repo dir>          # read-only context; never implement here
 git fetch origin dev
 BRANCH="feat/short-slug"
-git branch "$BRANCH" origin/dev
+BASE_REF="origin/dev"; BASE_BRANCH="dev"   # stacked PR: both = parent branch
+git branch "$BRANCH" "$BASE_REF"
 
 WORKTREE="../pir-wt/$BRANCH"   # siblings of the repo, never inside it
 mkdir -p "$(dirname "$WORKTREE")"
@@ -168,7 +173,7 @@ Cite sanitized artifacts only; never paste raw secret-bearing logs, env
 dumps, tokens, or auth headers into the PR.
 
 ```bash
-gh pr create --base dev --title "$TITLE" --body "$(cat <<'EOF'
+gh pr create --base "$BASE_BRANCH" --title "$TITLE" --body "$(cat <<'EOF'
 ## What & why
 …
 
@@ -224,10 +229,12 @@ before the first run. Canonical form from inside the worktree:
 npm run build    # review with the code you just wrote, never a stale dist/
 PIR_CONFIG_DIR=/tmp/pir-dogfood-config PIR_NO_WIZARD=1 \
   node dist/cli/cli.js find --local --json --fail-on P1 \
-  --model 'zai-coding-cn/glm-5.3:max' --base origin/dev
+  --model 'zai-coding-cn/glm-5.3:max' --base "$BASE_REF"
 ```
 
-`--base origin/dev` reviews the committed branch diff; add `--uncommitted`
+`--base "$BASE_REF"` reviews the committed branch diff against the PR's
+base — `origin/dev` for an independent PR, the parent branch for a stacked
+one, so a stacked review sees only its own slice; add `--uncommitted`
 while mid-work. Exit 1 means a P0/P1 finding is present; with `--json`,
 stdout is pure JSON (`data.findings[]` with `displayId` F-N, `severity`,
 `status`, `claim`, `verifierRationale`, `memoryMatches[]`).
@@ -358,7 +365,7 @@ For base-branch drift or push rejections:
 ```bash
 cd "$WORKTREE"
 git fetch origin dev
-git rebase origin/dev
+git rebase "$BASE_REF"     # origin/dev, or the parent branch of a stack
 # resolve conflicts, re-run Phase 3 from local checks (code changed),
 # then push --force-with-lease to the PR branch
 ```
