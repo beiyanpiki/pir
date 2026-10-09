@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reviewerPrompt, verifierPrompt } from "../../dist/agents/prompts.js";
+import { reviewerPrompt, verifierPrompt, doNotReportLines } from "../../dist/agents/prompts.js";
 import { runReviewerRound, ReviewerRoundError } from "../../dist/agents/reviewer.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { runVerifier } from "../../dist/agents/verifier.js";
@@ -46,6 +46,55 @@ test("reviewer prompt preserves ceiling contract and minimal causal investigatio
   assert.ok(!prompt.includes("PRIOR DECISIONS"));
   assert.ok(!prompt.includes("get_relevant_issue_memory"));
   assert.ok(prompt.length < 7000);
+});
+
+// Pre-Q1 dev baseline lengths (captured at eaf454d) so the do-not-report
+// blacklist's dilution risk stays mechanically bounded (#73 Q1).
+const CHANGE_LENGTH_BASELINES = { minimal: 2911, full: 3335 };
+const changeMinimalInput = { base: "b", head: "h", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack: "", structuralQueries: false };
+const changeFullInput = { ...changeMinimalInput, mergeBase: "m", verificationCapacity: 3, priorSummary: JSON.stringify({ coverage: ["a"], unresolvedQuestions: ["q"] }), investigationFeedback: ["LEAD-1", "LEAD-2"], languageGuidance: "LANGUAGE PACK GUIDANCE", memoryPack: "project invariants", focus: ["caller.ts", "service.ts"] };
+
+test("do-not-report blacklist: change mode carries all seven items incl. the merge-base falsification test", () => {
+  assert.equal(doNotReportLines("change").length, 7);
+  const prompt = reviewerPrompt(changeFullInput);
+  assert.ok(prompt.includes("DO NOT REPORT"));
+  for (const phrase of [
+    "must not reproduce on the old side unless this change unmasked it",
+    "guarded, contracted, or tested elsewhere",
+    "a linter or type-checker would catch",
+    "Pedantic style or naming preference",
+    '"might break something elsewhere"',
+    "evidence as intentional",
+    "Generic quality complaints without a concrete failure mode",
+  ]) assert.ok(prompt.includes(phrase), phrase);
+  // Every blacklist item renders as one line (joined with the double-newline
+  // section separator, never wrapped mid-item).
+  const orderInput = { ...changeFullInput, verificationCapacity: undefined, structuralQueries: true };
+  const orderPrompt = reviewerPrompt(orderInput);
+  const section = orderPrompt.slice(orderPrompt.indexOf("DO NOT REPORT"), orderPrompt.indexOf("PREVIOUS ROUND SUMMARY"));
+  assert.equal(section.split("\n\n").filter((line) => line.trim()).length, 8); // header + 7 items
+});
+
+test("P0 severity calibration is appended to the change-mode severity line", () => {
+  const prompt = reviewerPrompt(changeMinimalInput);
+  assert.ok(prompt.includes("P0 is reserved for unconditional, input-independent breakage"));
+  assert.ok(prompt.includes("put the uncertainty in finish_round"));
+  const severityLine = prompt.split("\n\n").find((line) => line.startsWith("Severity measures"));
+  assert.ok(severityLine.includes("P0 is reserved for"));
+});
+
+test("do-not-report blacklist sits after FINDINGS BUDGET and before PREVIOUS ROUND SUMMARY", () => {
+  const prompt = reviewerPrompt(changeFullInput);
+  const budget = prompt.indexOf("FINDINGS BUDGET");
+  const blacklist = prompt.indexOf("DO NOT REPORT");
+  const previous = prompt.indexOf("PREVIOUS ROUND SUMMARY");
+  assert.ok(budget !== -1 && blacklist !== -1 && previous !== -1);
+  assert.ok(budget < blacklist && blacklist < previous);
+});
+
+test("change prompt length budget: ≤ baseline + 2000 chars for minimal and full inputs", () => {
+  assert.ok(reviewerPrompt(changeMinimalInput).length <= CHANGE_LENGTH_BASELINES.minimal + 2000);
+  assert.ok(reviewerPrompt(changeFullInput).length <= CHANGE_LENGTH_BASELINES.full + 2000);
 });
 
 test("verifier prompt includes candidate evidence and real per-ID historical context", () => {
