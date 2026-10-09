@@ -190,3 +190,126 @@ test("pir find rejects non-positive --max-rounds/--max-tokens like --max-finding
     repo.cleanup();
   }
 });
+
+// --- #47: findings list pagination and completeness metadata ---
+
+/** Seed `count` findings with heavily-shared timestamps (bulk-insert reality). */
+async function seedFindings(repo, dbPath, count) {
+  const { Memory } = await import("../../dist/memory/index.js");
+  const { buildIdentity } = await import("../../dist/findings/identity.js");
+  const memory = await Memory.open(repo.dir, { dbPath });
+  for (let i = 0; i < count; i++) {
+    memory.findings.insert(
+      {
+        title: `t${i}`,
+        claim: `claim ${i}`,
+        trigger: `trigger ${i}`,
+        category: "correctness",
+        severity: "P3",
+        featureKey: "f",
+        entityKey: "E.fn",
+        anchors: [],
+        evidence: [],
+        round: 1,
+        identity: buildIdentity({
+          featureKey: "f",
+          entityKey: "E.fn",
+          category: "correctness",
+          claim: `claim ${i}`,
+          trigger: `trigger ${i}`,
+        }),
+        status: i % 13 === 0 ? "rejected" : "confirmed",
+        memoryMatches: [],
+      },
+      "run-seed",
+    );
+  }
+  memory.close();
+}
+
+test("#47: findings list defaults to a 100-row page but reports total/hasMore/nextOffset", async () => {
+  const repo = createTempGitRepo("pir-cli-page-");
+  const env = { PIR_MEMORY_DB: path.join(repo.dir, "m.sqlite") };
+  try {
+    await seedFindings(repo, env.PIR_MEMORY_DB, 130);
+    const res = await pir(["findings", "list", "--json", "--cwd", repo.dir], { env });
+    const page = JSON.parse(res.stdout).data;
+    assert.equal(page.findings.length, 100);
+    assert.equal(page.total, 130);
+    assert.equal(page.returned, 100);
+    assert.equal(page.hasMore, true);
+    assert.equal(page.nextOffset, 100);
+    // Text mode flags the partial page instead of staying silent.
+    const text = await pir(["findings", "list", "--cwd", repo.dir], { env });
+    assert.match(text.stderr, /showing 100 of 130/);
+    assert.match(text.stderr, /--all/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("#47: --all returns every row; --status filters rows and total alike", async () => {
+  const repo = createTempGitRepo("pir-cli-all-");
+  const env = { PIR_MEMORY_DB: path.join(repo.dir, "m.sqlite") };
+  try {
+    await seedFindings(repo, env.PIR_MEMORY_DB, 130);
+    const all = await pir(["findings", "list", "--all", "--json", "--cwd", repo.dir], { env });
+    const page = JSON.parse(all.stdout).data;
+    assert.equal(page.findings.length, 130);
+    assert.equal(page.total, 130);
+    assert.equal(page.hasMore, false);
+    assert.equal(page.nextOffset, null);
+    assert.equal(new Set(page.findings.map((f) => f.displayId)).size, 130, "no duplicates");
+
+    const rejected = await pir(["findings", "list", "--status", "rejected", "--all", "--json", "--cwd", repo.dir], { env });
+    const rejectedPage = JSON.parse(rejected.stdout).data;
+    assert.equal(rejectedPage.total, 10); // 130 / 13
+    assert.ok(rejectedPage.findings.every((f) => f.status === "rejected"));
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("#47: offset paging walks the whole set with no drops or duplicates across a shared timestamp", async () => {
+  const repo = createTempGitRepo("pir-cli-off-");
+  const env = { PIR_MEMORY_DB: path.join(repo.dir, "m.sqlite") };
+  try {
+    await seedFindings(repo, env.PIR_MEMORY_DB, 130);
+    const seen = [];
+    for (const [limit, offset] of [[60, 0], [60, 60], [60, 120]]) {
+      const res = await pir(
+        ["findings", "list", "--limit", String(limit), "--offset", String(offset), "--json", "--cwd", repo.dir],
+        { env },
+      );
+      const page = JSON.parse(res.stdout).data;
+      assert.equal(page.findings.length, Math.min(limit, Math.max(130 - offset, 0)));
+      seen.push(...page.findings.map((f) => f.displayId));
+    }
+    assert.equal(seen.length, 130);
+    assert.equal(new Set(seen).size, 130, "offset pages must not drop or duplicate rows");
+    // Deterministic ordering: the same query twice yields the same sequence.
+    const a = await pir(["findings", "list", "--limit", "5", "--json", "--cwd", repo.dir], { env });
+    const b = await pir(["findings", "list", "--limit", "5", "--json", "--cwd", repo.dir], { env });
+    assert.deepEqual(
+      JSON.parse(a.stdout).data.findings.map((f) => f.displayId),
+      JSON.parse(b.stdout).data.findings.map((f) => f.displayId),
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("#47: --all refuses --limit/--offset; --offset 0 is valid", async () => {
+  const repo = createTempGitRepo("pir-cli-mix-");
+  try {
+    const res = await pirExpectFail(["findings", "list", "--all", "--limit", "5", "--cwd", repo.dir]);
+    assert.equal(res.code, 2);
+    assert.match(res.stderr, /--all cannot be combined/);
+    const zero = await pir(["findings", "list", "--offset", "0", "--json", "--cwd", repo.dir], {
+      env: { PIR_MEMORY_DB: path.join(repo.dir, "m.sqlite") },
+    });
+    assert.equal(JSON.parse(zero.stdout).data.total, 0);
+  } finally {
+    repo.cleanup();
+  }
+});

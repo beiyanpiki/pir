@@ -24,12 +24,52 @@ export const DEFAULT_REMOTE_TIMEOUT_MS = 30 * 60_000;
 export function remoteTimeoutMs(): number {
   const raw = process.env.PIR_REMOTE_TIMEOUT;
   if (raw === undefined || raw === "") return DEFAULT_REMOTE_TIMEOUT_MS;
+  return parseTimeoutSeconds(raw, "PIR_REMOTE_TIMEOUT") * 1000;
+}
+
+/** Strict decimal seconds: shared by the env read and the #54 resolution. */
+function parseTimeoutSeconds(raw: string, name: string): number {
   // Strict decimal form: Number("") coerces to 0 and Number(" ") too, and a
   // blank value silently disabling every timeout is worse than a usage error.
   if (!/^\d+$/.test(raw)) {
-    throw new UsageError(`PIR_REMOTE_TIMEOUT must be a non-negative integer number of seconds, got: ${raw}`);
+    throw new UsageError(`${name} must be a non-negative integer number of seconds, got: ${raw}`);
   }
-  return Number(raw) * 1000;
+  return Number(raw);
+}
+
+/**
+ * Effective remote-response timeout in seconds with its source (#54):
+ * --remote-timeout flag > PIR_REMOTE_TIMEOUT env > config
+ * server.timeoutSeconds > default 1800. Pure — resolved once at CLI startup
+ * and pushed into PIR_REMOTE_TIMEOUT, so every consumer (review submission,
+ * job polling, web-tier queries) sizes the same dispatcher.
+ */
+export function resolveRemoteTimeoutSeconds(input: {
+  argv: string[];
+  env: Record<string, string | undefined>;
+  config: { server?: { timeoutSeconds?: number } } | null;
+}): { seconds: number; source: "flag" | "env" | "config" | "default" } {
+  const flag = flagSecondsValue(input.argv, "--remote-timeout");
+  if (flag !== undefined) return { seconds: parseTimeoutSeconds(flag, "--remote-timeout"), source: "flag" };
+  const envRaw = input.env.PIR_REMOTE_TIMEOUT;
+  if (envRaw !== undefined && envRaw !== "") {
+    return { seconds: parseTimeoutSeconds(envRaw, "PIR_REMOTE_TIMEOUT"), source: "env" };
+  }
+  const configured = input.config?.server?.timeoutSeconds;
+  if (configured !== undefined) {
+    if (!Number.isSafeInteger(configured) || configured < 0) {
+      throw new UsageError(`server.timeoutSeconds must be a non-negative integer number of seconds, got: ${configured}`);
+    }
+    return { seconds: configured, source: "config" };
+  }
+  return { seconds: DEFAULT_REMOTE_TIMEOUT_MS / 1000, source: "default" };
+}
+
+function flagSecondsValue(argv: string[], name: string): string | undefined {
+  const i = argv.indexOf(name);
+  if (i >= 0) return argv[i + 1];
+  const prefixed = argv.find((a) => a.startsWith(`${name}=`));
+  return prefixed ? prefixed.slice(name.length + 1) : undefined;
 }
 
 let cached: { agent: Agent; timeoutMs: number } | undefined;

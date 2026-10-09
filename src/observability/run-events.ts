@@ -394,7 +394,10 @@ export interface RunManifest {
   finishedAt: number;
   stoppedBecause: string;
   incomplete: boolean;
-  maxFindings: number;
+  /** Null = the run reported without a findings cap (#57). */
+  maxFindings: number | null;
+  /** Explicit cap policy alongside maxFindings (#57). */
+  maxFindingsMode?: "capped" | "unlimited";
   rounds: RoundInfo[];
   plugins: ActivePack[];
   sessions: RunSessionRef[];

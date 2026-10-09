@@ -55,8 +55,12 @@ export interface RepoSnapshot {
   scopeVersion: 1;
 }
 
-/** Versioned default exclusion policy; shown to users and recorded per entry. */
-const DEFAULT_SKIP_PATTERNS: Array<{ glob: string; reason: string }> = [
+/**
+ * Versioned default exclusion policy; shown to users and recorded per entry.
+ * Exported for `pir audit --dry-run` (#56), which reports the rules a real
+ * audit would apply — from the same module that applies them.
+ */
+export const DEFAULT_SKIP_PATTERNS: Array<{ glob: string; reason: string }> = [
   { glob: "node_modules/**", reason: "vendored dependencies" },
   { glob: "vendor/**", reason: "vendored dependencies" },
   { glob: "third_party/**", reason: "vendored dependencies" },

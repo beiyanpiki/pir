@@ -1,12 +1,20 @@
 import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
-import { remoteDispatcher, reportUnreachable } from "./remote-fetch.js";
+import { remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "./remote-fetch.js";
 import type { JobView } from "./jobs.js";
+
+/**
+ * createBundle failed before any bytes left the machine (#44): a local git
+ * problem (read-only .git, missing objects), never a connectivity one.
+ */
+export class BundlePrepError extends Error {}
 
 export interface RemoteOptions {
   token?: string;
   insecure?: boolean;
+  /** #53: submit asynchronously and return right after acceptance. */
+  detach?: boolean;
 }
 
 /**
@@ -33,16 +41,40 @@ export async function remoteExec(serverUrl: string, argv: string[], options: Rem
     // short-lived so the blast radius is this invocation only.
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   }
-  // Build the dispatcher up front: an invalid PIR_REMOTE_TIMEOUT must surface
+  // Build the dispatcher up front: an invalid timeout value must surface
   // as a UsageError here (exit 2 + usage text in cli.ts), not be swallowed by
   // the transport-error catches below and misreported as an unreachable
   // server (dogfood F-20).
   remoteDispatcher();
   const url = new URL(serverUrl);
+  // #54: one stderr line stating the effective transport policy, so a
+  // multi-hour wait never looks like a hang and nobody has to guess which
+  // timeout knob won (flag > env > config > 1800).
+  if (!argv.includes("--quiet")) {
+    const seconds = Math.round(remoteTimeoutMs() / 1000);
+    process.stderr.write(
+      `pir: transport — response wait ${seconds === 0 ? "disabled (0s)" : `${seconds}s`}; async jobs poll every 5s with no overall deadline, giving up after 5 consecutive failures\n`,
+    );
+  }
+  // #53: --detach is a client-side flag (stripClientFlags removes it below),
+  // but it only means something for async review submissions.
+  const detachRequested = argv.includes("--detach");
   const cleaned = stripClientFlags(argv);
+  if (detachRequested) {
+    const { positional } = parseArgs(cleaned);
+    if (!["find", "audit"].includes(positional[0] ?? "")) {
+      throw new UsageError("--detach applies to `pir find` / `pir audit` submissions");
+    }
+    // The registered-repo lane forwards through /v1/exec, which has no job
+    // registry to detach from — honoring the flag would silently wait
+    // synchronously instead (dogfood F-49).
+    if (cleaned.some((a) => a === "--repo" || a.startsWith("--repo="))) {
+      throw new UsageError("--detach cannot be combined with --repo: the registered-repo lane runs synchronously via /v1/exec with no job registry");
+    }
+  }
 
   if (wantsBundle(cleaned)) {
-    return await reviewViaBundle(url, cleaned, options);
+    return await reviewViaBundle(url, cleaned, { ...options, ...(detachRequested ? { detach: true } : {}) });
   }
   return await forwardExec(url, cleaned, options);
 }
@@ -157,9 +189,20 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   const { createBundle } = await import("../app/repos.js");
 
   const send = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<Response> => {
-    const bundle = opts.noBundle
-      ? Buffer.alloc(0)
-      : await createBundle(cwd, { base: opts.withBase ? base : null, head });
+    let bundle: Buffer;
+    if (opts.noBundle) {
+      bundle = Buffer.alloc(0);
+    } else {
+      try {
+        bundle = await createBundle(cwd, { base: opts.withBase ? base : null, head });
+      } catch (err) {
+        // #44: bundle preparation is local git work that happens before any
+        // network IO — reporting it as an unreachable server sent users
+        // hunting for connectivity problems while the real cause was e.g. a
+        // read-only .git.
+        throw new BundlePrepError(err instanceof Error ? err.message : String(err));
+      }
+    }
     return fetch(new URL("/v1/review", url), {
       method: "POST",
       // undici's default 300 s headersTimeout would kill any review queued
@@ -183,21 +226,68 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
     });
   };
 
-  const submit = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }): Promise<number> => {
+  /**
+   * Transient bundle-free read failures retry the SAME request (#45): a busy
+   * or broken server cannot be fixed by uploading full history, so the
+   * bundle-free lane never "upgrades" to a bundle for 429/5xx.
+   */
+  const NO_BUNDLE_RETRIES = 2;
+
+  const submit = async (opts: { withBase: boolean; noBundle?: boolean; async?: boolean }, attempt = 0): Promise<number> => {
     let response: Response;
     try {
       response = await send(opts);
     } catch (err) {
+      if (err instanceof BundlePrepError) {
+        process.stderr.write(reportBundlePrepFailure(err));
+        return 3;
+      }
       process.stderr.write(reportUnreachable(url.origin, err));
       return 3;
     }
-    let payload = (await response.json().catch(() => ({}))) as { needFull?: boolean; jobId?: string } & RelayResult;
-    // A refused bundle-free read (first contact: db not created yet; or an
-    // old server that tried to materialize the empty bundle and 400'd)
-    // retries with the real bundle instead of surfacing the refusal.
-    const refusedNoBundle = opts.noBundle === true && (!response.ok || payload.needFull === true);
+    // Response-decoding stage (#44): an ok response that is not JSON is a
+    // broken contract, not an empty success to relay.
+    const raw = await response.text().catch(() => "");
+    let payload = {} as { needFull?: boolean; jobId?: string } & RelayResult;
+    try {
+      payload = JSON.parse(raw) as { needFull?: boolean; jobId?: string } & RelayResult;
+    } catch {
+      if (response.ok) {
+        process.stderr.write(
+          `pir: server response was not valid JSON (response-decoding stage): ${raw.slice(0, 200) || "(empty body)"}\n`,
+        );
+        return 3;
+      }
+      // Non-ok bodies are reported by status below; keep the empty payload.
+    }
+    if (response.status === 401 || response.status === 403) {
+      // Auth failures can never be fixed by a bundle resend or a retry (#45).
+      process.stderr.write(`pir: server rejected the request (${response.status}); check --token\n`);
+      return 3;
+    }
+    if (
+      opts.noBundle === true &&
+      !response.ok &&
+      (response.status === 429 || response.status >= 500) &&
+      attempt < NO_BUNDLE_RETRIES
+    ) {
+      const waitMs = retryDelayMs(response, attempt);
+      process.stderr.write(
+        `pir: server answered ${response.status}; retrying the bundle-free request in ${Math.round(waitMs / 1000)}s ` +
+          `(attempt ${attempt + 2} of ${NO_BUNDLE_RETRIES + 1})\n`,
+      );
+      await sleep(waitMs);
+      return await submit(opts, attempt + 1);
+    }
+    // A refused bundle-free read retries with the real bundle: an explicit
+    // needFull from a current server, or the empty-bundle materialization
+    // failure (HTTP 400) of a server predating the bundle-free lane (#45).
+    // Usage errors never reach this branch on either server generation —
+    // both answer them 200 with code 2 — so a 400 here is a recognized
+    // compatibility response, not a usage problem.
+    const refusedNoBundle = opts.noBundle === true && (payload.needFull === true || response.status === 400);
     if (!response.ok && !refusedNoBundle) {
-      const text = JSON.stringify(payload).slice(0, 300);
+      const text = raw.slice(0, 300) || JSON.stringify(payload);
       process.stderr.write(`pir: server error ${response.status}: ${text}\n`);
       return 3;
     }
@@ -214,6 +304,76 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       return await submit({ withBase: false, async: opts.async });
     }
     if (payload.jobId) {
+      // Same formula the server's materializeFromBundle uses, so the id in
+      // the receipt and the detach envelope is the id the run lands under.
+      const { projectIdFor } = await import("../app/repos.js");
+      const projectId = projectIdFor(remoteUrl, rootCommit);
+      // #52: an accepted ASYNC submission (HTTP 202) gets a local receipt
+      // before any waiting starts — after a disconnect or a serve restart
+      // this is the only record naming origin, job, project and (once known)
+      // run id. Sync responses carry a jobId too, but the result is already
+      // in hand; a receipt there is pure noise.
+      let receiptFile: string | null = null;
+      if (response.status === 202) {
+        const { writeSubmissionReceipt } = await import("./receipts.js");
+        receiptFile = writeSubmissionReceipt({
+          kind: command ?? "review",
+          origin: url.origin,
+          jobId: payload.jobId,
+          projectId,
+          base,
+          head,
+          argv,
+        });
+        if (receiptFile !== null && !argv.includes("--quiet")) {
+          process.stderr.write(
+            `pir: receipt saved (${path.basename(receiptFile)}) — \`pir receipts list\` recovers this submission after a disconnect\n`,
+          );
+        }
+      }
+      // #53: --detach returns right after acceptance. No polling, no relay:
+      // stdout carries the submission envelope (full jobId + recovery
+      // commands), exit 0 — which says the submission was accepted, never
+      // that the review succeeded.
+      if (options.detach) {
+        const followUp = [
+          `pir jobs wait ${payload.jobId}`,
+          `pir jobs fetch ${payload.jobId}`,
+          `pir receipts show ${payload.jobId.slice(0, 8)}`,
+        ];
+        const receipt = receiptFile !== null ? path.basename(receiptFile) : null;
+        if (argv.includes("--json")) {
+          process.stdout.write(
+            `${JSON.stringify({
+              schemaVersion: 1,
+              command: `${command}.detach`,
+              project: { id: projectId },
+              data: {
+                jobId: payload.jobId,
+                origin: url.origin,
+                projectId,
+                base,
+                head,
+                mode: "async",
+                runId: null,
+                receipt: receiptFile,
+                followUp,
+              },
+            })}\n`,
+          );
+        } else {
+          const lines = [
+            `submitted ${command} as job ${payload.jobId} to ${url.origin}`,
+            `project ${projectId.slice(0, 12)}… head ${head.slice(0, 10)}${base ? ` (base ${base.slice(0, 10)})` : ""}`,
+            ...(receipt ? [`receipt: ${receipt}`] : []),
+            "follow up:",
+            ...followUp.map((line) => `  ${line}`),
+            "run id lands in the receipt once the job finishes (pir receipts show)",
+          ];
+          process.stdout.write(`${lines.join("\n")}\n`);
+        }
+        return 0;
+      }
       let settled: JobView;
       try {
         settled = await followJob(url, payload.jobId, options, argv);
@@ -236,6 +396,13 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
       if (settled.result?.truncated) {
         process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
       }
+      // Authoritative run id (#52): read it out of the result envelope the
+      // server produced — never guess by head. Non-JSON or run-less output
+      // (memory status, usage errors) keeps the receipt's null.
+      if (receiptFile !== null) {
+        const { updateReceiptFromResult } = await import("./receipts.js");
+        updateReceiptFromResult(payload.jobId, settled.result?.output ?? "");
+      }
       // relay() prints the result's log channel — everything the polling
       // already streamed is excluded, so only the tail (usage text on a
       // code-2 finish, dogfood F-32) lands here.
@@ -249,7 +416,8 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   };
 
   const readonly = isBundleFreeRead(argv);
-  const asyncSubmit = wantsAsyncSubmit(argv);
+  // #53: --detach implies async — there is nothing to wait for by design.
+  const asyncSubmit = wantsAsyncSubmit(argv) || options.detach === true;
   if (readonly) {
     // Bundle-free first (first contact falls back to a bundled resend above).
     process.stderr.write(`pir: asking ${url.origin} for findings (bundle-free)\n`);
@@ -257,7 +425,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
   }
   process.stderr.write(
     asyncSubmit
-      ? `pir: submitting ${command} of ${head.slice(0, 8)} to ${url.origin} (async job)\n`
+      ? `pir: submitting ${command} of ${head.slice(0, 8)} to ${url.origin} (async job${options.detach === true ? ", --detach" : ""})\n`
       : `pir: shipping local state ${isFind && base ? `${base.slice(0, 8)}..` : ""}${head.slice(0, 8)} to ${url.origin}\n`,
   );
   // Audit and the memory family ship a full-history bundle from the start
@@ -273,7 +441,7 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
  * `pir jobs fetch`.
  */
 async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: string[]): Promise<JobView> {
-  const { pollJobToEnd } = await import("./jobs.js");
+  const { pollJobToEnd, jobStatusReporter } = await import("./jobs.js");
   process.stderr.write(
     `pir: accepted as job ${jobId.slice(0, 8)} — polling ${url.origin} until it finishes (Ctrl-C detaches; fetch later with \`pir jobs fetch ${jobId.slice(0, 8)}\`)\n`,
   );
@@ -281,6 +449,8 @@ async function followJob(url: URL, jobId: string, options: RemoteOptions, argv: 
     url: url.origin,
     ...(options.token ? { token: options.token } : {}),
     ...(options.insecure ? { insecure: true } : {}),
+    // #55: poll-liveness heartbeats while the audit runs for hours.
+    onStatus: argv.includes("--quiet") ? undefined : jobStatusReporter(jobId),
     onLog: (lines) => {
       if (!argv.includes("--quiet")) {
         for (const line of lines) process.stderr.write(`${line}\n`);
@@ -334,18 +504,51 @@ function relay(result: RelayResult, argv: string[]): number {
   return result.code ?? 0;
 }
 
-/** Remove transport-only flags (--server URL, --token VALUE, --insecure, --local, --no-wizard) before forwarding. */
+/** Remove transport-only flags (--server URL, --token VALUE, --viewer-token VALUE, --remote-timeout VALUE, --insecure, --local, --no-wizard, --detach) before forwarding. */
 export function stripClientFlags(argv: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!;
-    if (token === "--server" || token === "--token") {
+    if (token === "--server" || token === "--token" || token === "--viewer-token" || token === "--remote-timeout") {
       i += 1; // skip the flag and its value
       continue;
     }
-    if (token.startsWith("--server=") || token.startsWith("--token=")) continue;
-    if (token === "--insecure" || token === "--local" || token === "--no-wizard") continue;
+    if (
+      token.startsWith("--server=") ||
+      token.startsWith("--token=") ||
+      token.startsWith("--viewer-token=") ||
+      token.startsWith("--remote-timeout=")
+    ) {
+      continue;
+    }
+    if (token === "--insecure" || token === "--local" || token === "--no-wizard" || token === "--detach") continue;
     out.push(token);
   }
   return out;
+}
+
+/**
+ * #44: a bundle-preparation failure names the local stage and keeps the git
+ * cause. It must never say "cannot reach" or suggest raising PIR_REMOTE_TIMEOUT.
+ */
+export function reportBundlePrepFailure(err: BundlePrepError): string {
+  return `pir: failed to prepare the review bundle locally — a local git error, not a server connectivity problem: ${err.message}\n`;
+}
+
+/**
+ * Backoff for the bounded bundle-free retry (#45): 1s then 5s, honoring
+ * Retry-After capped at 30s. An absent header is NOT a zero delay —
+ * Headers.get returns null and Number(null) === 0 would slip through a
+ * naive isFinite guard, collapsing the backoff to back-to-back retries
+ * (dogfood F-38).
+ */
+function retryDelayMs(response: Response, attempt: number): number {
+  const header = response.headers.get("retry-after");
+  const seconds = header === null ? Number.NaN : Number(header);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30_000);
+  return attempt === 0 ? 1_000 : 5_000;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

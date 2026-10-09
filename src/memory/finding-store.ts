@@ -59,6 +59,27 @@ interface RawFinding extends Omit<FindingRow, "memoryMatches"> {
   verifier_rationale__: never;
 }
 
+/** review_runs row (snake_case) → ReviewRunRow (#56 coverage queries). */
+function mapRunRow(raw: Record<string, unknown>): ReviewRunRow {
+  return {
+    id: String(raw.id),
+    projectId: String(raw.project_id),
+    mode: String(raw.mode),
+    base: (raw.base as string | null) ?? null,
+    head: String(raw.head),
+    target: (raw.target as string | null) ?? null,
+    startedAt: Number(raw.started_at),
+    finishedAt: raw.finished_at === null || raw.finished_at === undefined ? null : Number(raw.finished_at),
+    status: String(raw.status),
+    rounds: Number(raw.rounds),
+    candidates: Number(raw.candidates),
+    confirmed: Number(raw.confirmed),
+    rejected: Number(raw.rejected),
+    uncertain: Number(raw.uncertain),
+    notes: (raw.notes as string | null) ?? null,
+  };
+}
+
 function rawToRow(raw: Record<string, unknown>): FindingRow {
   return {
     id: String(raw.id),
@@ -195,21 +216,73 @@ export class FindingStore {
     );
   }
 
-  list(opts: { status?: string; limit?: number } = {}): FindingRow[] {
+  /**
+   * Newest-first page of stored findings. Ordering ties break on id so pages
+   * are stable (#47): bulk inserts share created_at, and a non-deterministic
+   * ORDER BY would drop or duplicate those rows across offsets.
+   */
+  list(opts: { status?: string; limit?: number; offset?: number } = {}): FindingRow[] {
     const limit = opts.limit ?? 100;
+    const offset = opts.offset ?? 0;
     const rows = opts.status
       ? this.store.all<Record<string, unknown>>(
-          "SELECT * FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC LIMIT ?",
+          "SELECT * FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
           this.projectId,
           opts.status,
           limit,
+          offset,
         )
       : this.store.all<Record<string, unknown>>(
-          "SELECT * FROM findings WHERE project_id = ? ORDER BY created_at DESC LIMIT ?",
+          "SELECT * FROM findings WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
           this.projectId,
           limit,
+          offset,
         );
     return rows.map(rawToRow);
+  }
+
+  /** Total stored findings under the same filter `list` pages over (#47). */
+  count(opts: { status?: string } = {}): number {
+    const row = opts.status
+      ? this.store.get<{ total: number }>(
+          "SELECT COUNT(*) AS total FROM findings WHERE project_id = ? AND status = ?",
+          this.projectId,
+          opts.status,
+        )
+      : this.store.get<{ total: number }>("SELECT COUNT(*) AS total FROM findings WHERE project_id = ?", this.projectId);
+    return row?.total ?? 0;
+  }
+
+  /**
+   * One-statement page: the filtered total rides along as a window function,
+   * so rows and total describe the SAME snapshot. Two separate autocommitted
+   * reads could disagree while a WAL writer — the bundle-free read lane
+   * serving queries mid-audit — commits between them, making an --all page
+   * silently omit rows while claiming hasMore:false (dogfood F-39).
+   */
+  listPage(opts: { status?: string; limit?: number; offset?: number } = {}): { rows: FindingRow[]; total: number } {
+    const limit = opts.limit ?? 100;
+    const offset = opts.offset ?? 0;
+    const rows = opts.status
+      ? this.store.all<Record<string, unknown>>(
+          "SELECT *, COUNT(*) OVER () AS full_count FROM findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+          this.projectId,
+          opts.status,
+          limit,
+          offset,
+        )
+      : this.store.all<Record<string, unknown>>(
+          "SELECT *, COUNT(*) OVER () AS full_count FROM findings WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
+          this.projectId,
+          limit,
+          offset,
+        );
+    if (rows.length === 0 && offset > 0) {
+      // The window total is unobservable with no rows on the page; a bare
+      // count is safe here — this snapshot has no rows to contradict.
+      return { rows: [], total: this.count({ status: opts.status }) };
+    }
+    return { rows: rows.map(rawToRow), total: Number(rows[0]?.full_count ?? 0) };
   }
 
   evidence(findingId: string): FindingEvidence[] {
@@ -269,6 +342,34 @@ export class FindingStore {
       uncertain: 0,
       notes: null,
     };
+  }
+
+  /**
+   * One run row by id (#56: `pir audit coverage --run <id>`). Exact ids only
+   * — display ids belong to findings, not runs.
+   */
+  runById(id: string): ReviewRunRow | null {
+    const rows = this.store.all<Record<string, unknown>>(
+      "SELECT * FROM review_runs WHERE id = ? AND project_id = ? LIMIT 1",
+      id,
+      this.projectId,
+    );
+    return rows.length > 0 ? mapRunRow(rows[0]!) : null;
+  }
+
+  /** Most recent run of a mode (#56: `pir audit coverage --latest`). */
+  latestRun(mode?: "change" | "audit"): ReviewRunRow | null {
+    const rows = mode
+      ? this.store.all<Record<string, unknown>>(
+          "SELECT * FROM review_runs WHERE project_id = ? AND mode = ? ORDER BY started_at DESC LIMIT 1",
+          this.projectId,
+          mode,
+        )
+      : this.store.all<Record<string, unknown>>(
+          "SELECT * FROM review_runs WHERE project_id = ? ORDER BY started_at DESC LIMIT 1",
+          this.projectId,
+        );
+    return rows.length > 0 ? mapRunRow(rows[0]!) : null;
   }
 
   /**

@@ -9,8 +9,19 @@ export class UsageError extends Error {}
 
 export interface ServerSettings {
   url: string;
+  /** Execution credential for the server's /v1 API. */
   token?: string;
+  /**
+   * Viewer credential for the same server's web tier (/api, PIR_WEB_UI_TOKEN
+   * server-side) — a separate token that never substitutes for `token` (#50).
+   */
+  viewerToken?: string;
   insecure?: boolean;
+  /**
+   * Remote response-header/body wait in seconds (#54): the config-level
+   * default under --remote-timeout > PIR_REMOTE_TIMEOUT > this > 1800.
+   */
+  timeoutSeconds?: number;
 }
 
 export interface UserConfig {
@@ -77,7 +88,14 @@ function validateUserConfig(value: unknown, file: string): UserConfig {
     if (url) {
       config.server = { url };
       if (typeof server.token === "string" && server.token) config.server.token = server.token;
+      if (typeof server.viewerToken === "string" && server.viewerToken) config.server.viewerToken = server.viewerToken;
       if (server.insecure === true) config.server.insecure = true;
+      if (server.timeoutSeconds !== undefined) {
+        if (typeof server.timeoutSeconds !== "number" || !Number.isSafeInteger(server.timeoutSeconds) || server.timeoutSeconds < 0) {
+          throw new UsageError(`${file}: server.timeoutSeconds must be a non-negative integer number of seconds`);
+        }
+        config.server.timeoutSeconds = server.timeoutSeconds;
+      }
     }
   }
   if (mode === "remote" && !config.server?.url) {
@@ -133,6 +151,43 @@ export function maskSecret(secret: string | undefined): string {
   if (!secret) return "(none)";
   if (secret.length <= 8) return "••••";
   return `${secret.slice(0, 4)}…${secret.slice(-4)}`;
+}
+
+/** Keys whose values are credentials anywhere they appear in the config tree. */
+const SECRET_KEY_RE = /token|secret|credential/i;
+
+/** True when a (dotted or plain) config key names a credential (#51). */
+export function isSecretKey(key: string): boolean {
+  return SECRET_KEY_RE.test(key);
+}
+
+/**
+ * A config safe to print (#51): credential values are masked wherever they
+ * sit in the tree, with presence kept as explicit metadata. Raw values stay
+ * in the private file and in Authorization headers — never in show/set/
+ * wizard output, JSON included; agents capture JSON for diagnostics just
+ * like humans read text, and both get the same masking.
+ */
+export function redactConfig(config: UserConfig): Record<string, unknown> {
+  const redacted = redactValues(config) as Record<string, unknown>;
+  const server = redacted.server as Record<string, unknown> | undefined;
+  if (server) {
+    server.tokenConfigured = Boolean(config.server?.token);
+    server.viewerTokenConfigured = Boolean(config.server?.viewerToken);
+  }
+  return redacted;
+}
+
+function redactValues(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactValues);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = isSecretKey(key) && typeof val === "string" ? maskSecret(val) : redactValues(val);
+    }
+    return out;
+  }
+  return value;
 }
 
 /**
@@ -267,7 +322,9 @@ export async function runWizard(): Promise<UserConfig> {
 
 /**
  * `pir config set <key> <value>` — dotted keys: mode, model, server.url,
- * server.token, server.insecure. Empty string clears model/server.token.
+ * server.token, server.viewerToken, server.insecure, server.timeoutSeconds.
+ * Empty string clears model/server.token/server.viewerToken/
+ * server.timeoutSeconds.
  */
 export function setConfigValue(config: UserConfig, key: string, value: string): UserConfig {
   const next: UserConfig = { schemaVersion: 1, mode: config.mode, ...(config.model ? { model: config.model } : {}) };
@@ -295,7 +352,9 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       if (!url) throw new UsageError("server.url cannot be empty");
       const server: ServerSettings = { url };
       if (next.server?.token) server.token = next.server.token;
+      if (next.server?.viewerToken) server.viewerToken = next.server.viewerToken;
       if (next.server?.insecure) server.insecure = true;
+      if (next.server?.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
       next.server = server;
       return next;
     }
@@ -306,7 +365,22 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       const server: ServerSettings = { url: next.server.url };
       const trimmed = value.trim();
       if (trimmed) server.token = trimmed;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
       if (next.server.insecure) server.insecure = true;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
+      next.server = server;
+      return next;
+    }
+    case "server.viewerToken": {
+      if (!next.server?.url) {
+        throw new UsageError("set server.url before server.viewerToken");
+      }
+      const server: ServerSettings = { url: next.server.url };
+      const trimmed = value.trim();
+      if (trimmed) server.viewerToken = trimmed;
+      if (next.server.token) server.token = next.server.token;
+      if (next.server.insecure) server.insecure = true;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
       next.server = server;
       return next;
     }
@@ -320,12 +394,33 @@ export function setConfigValue(config: UserConfig, key: string, value: string): 
       }
       const server: ServerSettings = { url: next.server.url, insecure: ["true", "1", "yes"].includes(normalized) };
       if (next.server.token) server.token = next.server.token;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
+      if (next.server.timeoutSeconds !== undefined) server.timeoutSeconds = next.server.timeoutSeconds;
+      next.server = server;
+      return next;
+    }
+    case "server.timeoutSeconds": {
+      if (!next.server?.url) {
+        throw new UsageError("set server.url before server.timeoutSeconds");
+      }
+      const server: ServerSettings = { url: next.server.url };
+      // Empty clears back to the default; strict decimal form otherwise.
+      const trimmed = value.trim();
+      if (trimmed !== "") {
+        if (!/^\d+$/.test(trimmed)) {
+          throw new UsageError('server.timeoutSeconds must be a non-negative integer number of seconds (or "" to clear)');
+        }
+        server.timeoutSeconds = Number(trimmed);
+      }
+      if (next.server.token) server.token = next.server.token;
+      if (next.server.viewerToken) server.viewerToken = next.server.viewerToken;
+      if (next.server.insecure) server.insecure = true;
       next.server = server;
       return next;
     }
     default:
       throw new UsageError(
-        `unknown config key: ${key} (expected mode, model, server.url, server.token or server.insecure)`,
+        `unknown config key: ${key} (expected mode, model, server.url, server.token, server.viewerToken, server.insecure or server.timeoutSeconds)`,
       );
   }
 }

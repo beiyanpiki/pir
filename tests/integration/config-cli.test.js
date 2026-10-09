@@ -80,9 +80,16 @@ test("pir config show/set/reset lifecycle", async () => {
   assert.match(shown.stdout, /token:\s+secr…cdef/); // never the full token
   assert.ok(!shown.stdout.includes("secret-token-abcdef"));
 
-  // --json keeps the real token (machine mode, user's own machine).
+  // #51: JSON output is masked too — users and coding agents capture JSON for
+  // diagnostics and bug reports just like humans read text; the raw value
+  // stays in the chmod-600 file only.
   const json = await pir(["config", "show", "--json"]);
-  assert.equal(JSON.parse(json.stdout).data.config.server.token, "secret-token-abcdef");
+  const jsonConfig = JSON.parse(json.stdout).data.config;
+  assert.equal(jsonConfig.server.token, "secr…cdef");
+  assert.equal(jsonConfig.server.tokenConfigured, true);
+  assert.ok(!json.stdout.includes("secret-token-abcdef"));
+  const stored = JSON.parse(readFileSync(configPath(), "utf8"));
+  assert.equal(stored.server.token, "secret-token-abcdef");
 
   const badMode = await pirExpectFail(["config", "set", "mode", "bogus"]);
   assert.equal(badMode.code, 2);
@@ -97,6 +104,26 @@ test("pir config set mode remote without a server URL exits 2", async () => {
   const fail = await pirExpectFail(["config", "set", "mode", "remote"]);
   assert.equal(fail.code, 2);
   assert.match(fail.stderr, /server\.url/);
+});
+
+test("#51: config set --json never echoes a secret value nor an unrelated stored token", async () => {
+  rmSync(configPath(), { force: true });
+  await pir(["config", "set", "server.url", "https://pir.example.com:8790"]);
+
+  const setToken = await pir(["config", "set", "server.token", "super-secret-dummy-42", "--json"]);
+  assert.ok(!setToken.stdout.includes("super-secret-dummy-42"), "the raw new value must not appear");
+  const parsed = JSON.parse(setToken.stdout);
+  assert.equal(parsed.command, "config.set");
+  assert.equal(parsed.data.value, "supe…y-42"); // masked the same way as text mode
+  assert.equal(parsed.data.config.server.tokenConfigured, true);
+  assert.match(parsed.data.config.server.token, /^supe…y-42$/);
+
+  // A later non-secret change must not leak the stored token either.
+  const setModel = await pir(["config", "set", "model", "example/model", "--json"]);
+  assert.ok(!setModel.stdout.includes("super-secret-dummy-42"));
+  const modelConfig = JSON.parse(setModel.stdout).data.config;
+  assert.equal(modelConfig.server.tokenConfigured, true);
+  assert.match(modelConfig.server.token, /^supe…y-42$/);
 });
 
 test("remote config forwards commands; version/config/skill stay client-side", async (t) => {

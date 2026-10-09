@@ -40,8 +40,12 @@ export interface FindOptions {
   maxWallClockMs?: number;
   model?: string;
   maxVerificationsPerRound?: number;
-  /** Confirmed and uncertain reports count; rejected and pending candidates do not. */
-  maxFindings?: number;
+  /**
+   * Confirmed and uncertain reports count; rejected and pending candidates do
+   * not. `null` (#57) removes the ceiling entirely — every candidate the
+   * evidence supports is reported; rounds/token budgets still bound the run.
+   */
+  maxFindings?: number | null;
   /** Language-pack activation: auto-detect at head (default), manual list, or off. */
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
@@ -81,7 +85,7 @@ export interface FindOutcome {
   durationMs: number;
   memoryPackTokens: number;
   runId: string;
-  maxFindings: number;
+  maxFindings: number | null;
   /** Language packs whose guidance was injected into reviewer/verifier prompts. */
   plugins: ActivePack[];
   transcriptDir?: string;
@@ -161,11 +165,12 @@ async function drainVerifications(
   deps: DrainDeps,
   state: ReturnType<typeof createReviewState>,
   budget: Budget,
-  limits: { maxVerifications: number; maxFindings: number },
+  limits: { maxVerifications: number; maxFindings: number | null },
   errors: { verificationErrors: number; uncertaintyReasons: Partial<Record<UncertaintyReason, number>> },
 ): Promise<VerificationCounters> {
   const counters: VerificationCounters = { confirmed: 0, rejected: 0, uncertain: 0, suppressed: 0, verified: 0, feedbackVerdicts: [] };
-  while (state.pending.length > 0 && counters.verified < limits.maxVerifications && reportedCount(state) < limits.maxFindings && !budget.exhausted()) {
+  const findingsAllowed = (): boolean => limits.maxFindings === null || reportedCount(state) < limits.maxFindings;
+  while (state.pending.length > 0 && counters.verified < limits.maxVerifications && findingsAllowed() && !budget.exhausted()) {
     const candidate = state.pending[0]!;
     deps.onProgress?.({ type: "verify", round: deps.round, message: `verifying ${candidate.displayId}: ${candidate.title}` });
     const matches = matchIssueHistory(deps.memory, {
@@ -222,7 +227,7 @@ async function drainVerifications(
 export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const options = deps.options ?? {};
   const maxRounds = positiveInteger(options.maxRounds ?? DEFAULT_MAX_ROUNDS, "maxRounds");
-  const maxFindings = positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
+  const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const budget = new Budget({
     maxRounds,
@@ -278,7 +283,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
   try {
     while (true) {
-      if (reportedCount(state) >= maxFindings) {
+      if (maxFindings !== null && reportedCount(state) >= maxFindings) {
         state.stoppedBecause = `max findings reached (${maxFindings})`;
         break;
       }
@@ -299,7 +304,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round });
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
-          maxRounds, maxFindings, findingsRemaining: maxFindings - reportedCount(state),
+          maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
           investigationFeedback: state.investigationFeedback, model: options.model,
           languageGuidance: languagePacks.reviewerGuidance,
@@ -368,7 +373,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change", status: "failed",
       base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-      stoppedBecause: failureMessage, incomplete: true, maxFindings, rounds: state.rounds,
+      stoppedBecause: failureMessage, incomplete: true, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -401,7 +406,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change",
     status: incomplete ? "incomplete" : "completed",
     base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, maxFindings, rounds: state.rounds,
+    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -440,7 +445,8 @@ export interface AuditOptions {
   maxTokens?: number;
   maxWallClockMs?: number;
   model?: string;
-  maxFindings?: number;
+  /** `null` (#57): no whole-run cap on reported findings. */
+  maxFindings?: number | null;
   maxVerificationsPerRound?: number;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];
@@ -505,14 +511,15 @@ export interface AuditOutcome {
   usageComplete: boolean;
   durationMs: number;
   runId: string;
-  maxFindings: number;
+  /** Null when the run reported without a findings cap (#57). */
+  maxFindings: number | null;
   plugins: ActivePack[];
   transcriptDir?: string;
 }
 
 export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const options = deps.options ?? {};
-  const maxFindings = positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
+  const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
   const budget = new Budget({
@@ -634,7 +641,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
 
   try {
     while (true) {
-      if (reportedCount(state) >= maxFindings) {
+      if (maxFindings !== null && reportedCount(state) >= maxFindings) {
         stoppedBecause = `max findings reached (${maxFindings})`;
         break;
       }
@@ -685,7 +692,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       try {
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
-          maxRounds: Number.MAX_SAFE_INTEGER, maxFindings, findingsRemaining: maxFindings - reportedCount(state),
+          maxRounds: Number.MAX_SAFE_INTEGER, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus,
           priorSummary: unitSummaries.get(unit.id),
           investigationFeedback: state.investigationFeedback, model: options.model,
@@ -725,7 +732,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       // file; otherwise the claim is rejected and the unit retried or blocked.
       const readPaths = new Set(result.readPaths ?? []);
       const unread = ownedPaths.filter((owned) => !readPaths.has(owned));
-      const canRetry = attempt < maxUnitAttempts && !budget.exhausted() && reportedCount(state) < maxFindings;
+      const canRetry = attempt < maxUnitAttempts && !budget.exhausted() && (maxFindings === null || reportedCount(state) < maxFindings);
       if (unread.length > 0 && canRetry) {
         unitSummaries.set(unit.id, [
           unitSummaries.get(unit.id),
@@ -784,7 +791,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit", status: "failed",
       base: null, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-      stoppedBecause: failureMessage, incomplete: true, maxFindings, rounds: state.rounds,
+      stoppedBecause: failureMessage, incomplete: true, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -845,7 +852,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     status: incomplete ? "incomplete" : "completed",
     base: null, head: snapshot.commit, model: options.model ?? null,
     startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause, incomplete, maxFindings, rounds: state.rounds,
+    stoppedBecause, incomplete, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,

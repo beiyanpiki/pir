@@ -142,24 +142,38 @@ Transport resolution:
 | --- | --- |
 | Mode/URL | `--server` > `--local` > `PIR_SERVER_URL` > `PIR_MODE` > config > local |
 | Bearer token | `--token` > `PIR_SERVER_TOKEN` > config `server.token` |
+| Viewer token (web tier) | `--viewer-token` > `PIR_VIEWER_TOKEN` > config `server.viewerToken`; bound to the configured origin |
 | Unverified TLS | enabled by any of `--insecure`, `PIR_INSECURE=1`, config `server.insecure: true` |
+| Response wait (#54) | `--remote-timeout <s>` > `PIR_REMOTE_TIMEOUT` > config `server.timeoutSeconds` > default `1800`; `0` disables |
 
 `--server` and `--local` are mutually exclusive. `PIR_MODE=remote` still needs
 a URL from config or a higher-precedence URL setting.
 
+`--help` anywhere on the command line is answered locally and exits 0 —
+before config, transport, git or network, with the section for that
+subcommand — so `pir <cmd> --help` works offline, outside a repository and
+with a read-only `.git`. A `--help` directly after a value flag is that
+flag's value (`--status --help`), not a help request.
+
 These commands always execute on the client: `serve`, `config`, `skill`,
-`plugins`, `help`, `version`, and `memory sync`. `jobs` contacts the remote job
-registry directly. Other commands are routed as follows:
+`plugins`, `help`, `version`, `receipts`, and `memory sync`. `jobs` contacts
+the remote job registry directly. `runs` and `findings --run` query a server's
+read-only web tier by URL (see the recovery subsection below). Other commands
+are routed as follows:
 
 | Request | Route |
 | --- | --- |
 | `find`, `audit`, `memory status/bootstrap/refresh`, `feedback`, `remember`, `verify-fix` from a checkout | git bundle to `/v1/review` |
 | `findings list/show` | identity-only `/v1/review`; full bundle fallback on first contact |
+| `findings list/show --run <url>`, `findings export --run <url>`, `runs status` | `GET /api/runs/…` (web tier, viewer token) |
 | `models`, `repos`, or commands using `--repo` | `/v1/exec` |
 | `memory sync` | local database plus `/v1/memory/sync` |
 
-The client pins refs to SHAs and ships unpushed code. `--uncommitted` ships a
-synthetic working-tree commit without changing the user's index or branches.
+The client pins refs to SHAs and ships unpushed code. Bundles are packed in a
+temporary bare repository that reads the checkout's objects (#46) — the source
+repo is never written, so a read-only `.git` works. `--uncommitted` ships a
+synthetic working-tree commit; it is the one path that writes objects into the
+source repo.
 The server creates a temporary worktree and stores memory under the same
 project identity. Origin credentials are unnecessary for bundle-based work.
 
@@ -258,6 +272,16 @@ persisted in SQLite. JSON file state, where exposed, uses `notSelected`; it is
 not spelled `not-selected`. `reviewed` means allotted sessions completed,
 not guaranteed absence of defects.
 
+Before a long audit, `pir audit --dry-run [--list-files] [--json]` (#56)
+returns the exact snapshot identity (`head`, `treeId`, scope/planner
+versions), selection and classification counts, and the planned unit count —
+no run, no model. `pir audit coverage [--run <id>|--latest] [--json]` reads
+the per-file ledger of a recorded audit run from the local project database.
+
+`--max-findings unlimited` (#57) removes the report cap: the result envelope
+carries `run.maxFindings: null` and `run.maxFindingsMode: "unlimited"`
+(`"capped"` otherwise). Remote use needs a same-version server.
+
 Exit interpretation:
 
 | Code | Meaning |
@@ -276,7 +300,16 @@ finding list with `incomplete: true` is not a clean review.
 Bundled remote audits are asynchronous by default. The CLI submits the job and
 polls until completion. `PIR_REMOTE_ASYNC=1` requests the same behavior for
 other bundled review commands. There is no overall polling deadline; each
-request has a transport timeout.
+request has a transport timeout. While polling (`jobs wait` or the
+submit-time wait), a stderr status line prints on state changes and about
+once a minute (#55) — it reports connection liveness and log growth, never
+review progress.
+
+`find`/`audit --detach` (#53) submits and returns immediately: stdout carries
+a `<command>.detach` envelope with the full job id, origin, project, head and
+follow-up commands; the run id is `null` until pickup. Exit `0` means the
+submission was accepted — never that the review ran or passed. Pick up later
+with `pir jobs wait/fetch`; the local receipt keeps the record.
 
 ```bash
 pir jobs list --json
@@ -284,12 +317,19 @@ pir jobs status <job-id-or-unique-prefix> --json
 pir jobs wait <job-id>
 pir jobs fetch <job-id>
 pir findings list --json
+pir findings list --all --json
 ```
 
 `jobs list/status --json` return `jobs.list`/`jobs.status` envelopes.
 `jobs wait/fetch` relay the **original command output and exit code**; adding
 `--json` at pickup does not convert originally non-JSON output. Submit with
 `--json` when the result will be parsed later.
+
+Stored-findings queries are paginated: the default page is 100 rows, the JSON
+envelope reports `total`/`returned`/`hasMore`/`nextOffset` so a partial page
+is never mistaken for the complete set, and `--all` fetches every page up
+front. `--limit`/`--offset` select pages explicitly. This paging is unrelated
+to a review's `--max-findings` cap.
 
 Job statuses are `queued`, `running`, `completed`, and `failed`. `completed`
 means execution returned a result, whose `result.code` can still be `1`, `2`,
@@ -305,6 +345,38 @@ resumption is implemented.
 `findings list/show` can read the existing server database while an audit is
 running, without a bundle or queue wait. This first requires the project's
 database to exist and have the current schema.
+
+### Recovery after disconnect or restart
+
+Every accepted async submission also writes a local receipt to
+`~/.pir/receipts/` (origin, job id, project id, run id once known, the
+credential-free argv). `pir receipts list` and `pir receipts show <job-prefix>`
+print receipts with the exact follow-up commands — use them when a job id no
+longer resolves (restart) or the submitting client is gone.
+
+When the server runs the web tier (`--web`), a run URL alone recovers state
+from any machine — no checkout, no git access, no configured project:
+
+```bash
+pir runs status <origin>/runs/<projectId>/<runId> --json   # runs.status envelope
+pir findings list --run <run-url> --all --json
+pir findings show F-12 --run <run-url> --json
+pir findings export --run <run-url> --output findings.json # full-fidelity export
+```
+
+`findings export` fetches every page and every finding detail, retries
+transient failures, writes `<output>.tmp` then renames, and keeps a
+`<output>.checkpoint.json` for resume; a rerun skips already-fetched findings.
+A running run exports the current snapshot with `complete: false` plus
+`snapshotAt`; a finished run verifies the exported count equals the server's
+total and fails (exit 3, no output file) otherwise.
+
+Web-tier auth is a separate credential: `--viewer-token` > `PIR_VIEWER_TOKEN` >
+`server.viewerToken` — it is the server's `PIR_WEB_UI_TOKEN`, never the
+`--token` execution credential, and it is only sent to the origin it was
+configured for (a foreign run URL needs the explicit flag). Distinct errors:
+unknown run, server without the web tier, and missing viewer credentials are
+reported as different exit-3 messages.
 
 ## 5. Record feedback and knowledge
 
@@ -478,7 +550,7 @@ serve workspace is not a checkout; use bundles or a registered `--repo`.
 | --- | --- |
 | `PIR_CONFIG_DIR` | client config directory; default `~/.pir` |
 | `PIR_NO_WIZARD=1` / `--no-wizard` | disable first-run wizard and config hint |
-| `PIR_REMOTE_TIMEOUT` | per-request wait, seconds; default `1800`, `0` unlimited; nonnegative integer |
+| `PIR_REMOTE_TIMEOUT` | per-request wait, seconds; default `1800`, `0` unlimited; under `--remote-timeout` and over config `server.timeoutSeconds` (#54) |
 | `PIR_REMOTE_ASYNC=1` | asynchronous submission for bundled review commands |
 | `PIR_MEMORY_DB` | explicit local database path |
 | `PIR_STATE_IN_PROJECT=1` | local state in `<repo>/.pir/` |
@@ -507,7 +579,14 @@ own 120-second request timeout.
 | Provider error / missing verdict | retain uncertainty and incomplete diagnostics; inspect execution-machine credentials and logs |
 | Codegraph degraded | file/diff review remains available; optional index initialization is separate |
 | Sync request timeout | inspect jobs before retrying; increase `PIR_REMOTE_TIMEOUT` or use asynchronous submission |
-| Job ID missing after restart | inspect persisted findings; the process-local registry cannot recover the job |
+| `failed to prepare the review bundle locally …` | a LOCAL git error, not server connectivity; bundling itself is read-only since #46, so this now means missing objects or temp-dir problems (the bundle-free `findings list/show` lane needs no bundle unless the server demands full history) |
+| Long audit cost unknown | `pir audit --dry-run --list-files` previews the exact scope and unit count first (#56) |
+| Findings capped too early | rerun with `--max-findings unlimited` (#57); JSON reports `run.maxFindingsMode` |
+| Submit-and-continue | `pir find/audit --detach` returns after acceptance; pick up with `pir jobs wait` (#53) |
+| Job ID missing after restart | `pir receipts list` — the local receipt names the job, project and run; `pir jobs fetch` still works while the registry lives |
+| Run URL from the web UI | `pir runs status <run-url>` / `pir findings list --run <run-url>` / `pir findings export --run <run-url>` — no checkout needed |
+| Viewer auth required (401 on /api) | pass `--viewer-token` (the server's `PIR_WEB_UI_TOKEN`); it is independent of `--token` |
+| Interrupted export | rerun the same `findings export` command — `<output>.checkpoint.json` resumes it |
 | `verify-fix` rejects finding | mark it fixed first; the verification target is committed HEAD |
 
 ## Agent integration

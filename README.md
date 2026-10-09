@@ -87,10 +87,11 @@ priority, followed by `PIR_MODEL`, this config value, and Pi settings.
 With an existing `pir serve` instance, the client needs just a connection:
 
 ```bash
-pir config set server.url https://pir.example:8790
+pir config set server.url https://pir.example.com:8790
 pir config set server.token '<service-token>'
 pir config set server.insecure true   # self-signed certificate only
 pir config set mode remote
+pir config show                        # effective settings; token masked in text and JSON alike
 pir find --uncommitted --base HEAD --json
 ```
 
@@ -117,7 +118,10 @@ Transport precedence is `--server`, `--local`, `PIR_SERVER_URL`, `PIR_MODE`,
 then `~/.pir/config.json`. `serve`, `config`, `skill`, `plugins`, `version`,
 and `memory sync` always run on the client. `--server` and `--local` cannot
 be combined. A client-side model default is not forwarded; use `--model` to
-override the server's choice for a particular review.
+override the server's choice for a particular review. `--help` anywhere on
+the command line is answered locally and exits 0 — before config, transport,
+git or network — so it works offline, outside a repository, and with a
+read-only `.git`.
 
 To host the service yourself, run it on the machine with model access:
 
@@ -161,6 +165,7 @@ pir audit --path src/auth --path src/payments --json
 pir audit --skip '**/generated/**' --json
 
 pir findings list --status candidate
+pir findings list --all --json        # every stored finding (--limit/--offset page otherwise)
 pir findings show F-12
 pir feedback F-12 expected --note "retry_count counts attempts by design"
 pir feedback F-12 priority P1
@@ -174,11 +179,15 @@ pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 ```
 
-`--max-findings` is a ceiling, not a target. `--max-rounds` applies to change
-reviews; audits are bounded by work units and the optional `--max-tokens`
-budget. Reviews have no token ceiling unless one is set. `--plugins auto` is
-the default; use `--plugins none` or a comma separated list of built-in packs
-to override detection. The shipped Go and TypeScript packs support both modes.
+`--max-findings` is a ceiling, not a target; `--max-findings unlimited`
+removes the cap entirely (#57, needs a same-version server remotely). JSON
+results carry `run.maxFindings` (`null` when unlimited) plus an explicit
+`run.maxFindingsMode` of `capped` or `unlimited`. `--max-rounds` applies to
+change reviews; audits are bounded by work units and the optional
+`--max-tokens` budget. Reviews have no token ceiling unless one is set.
+`--plugins auto` is the default; use `--plugins none` or a comma separated
+list of built-in packs to override detection. The shipped Go and TypeScript
+packs support both modes.
 
 Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
@@ -205,6 +214,18 @@ Audits also return a coverage ledger. Each selected file is accounted for as
 not-selected files are reported separately. `reviewed` records process
 completion and is not a claim that every defect was found.
 
+Preview the scope before committing to a long audit (#56):
+
+```bash
+pir audit --dry-run --list-files   # head/tree ids, selection counts, planned units
+pir audit coverage --latest        # per-file ledger of the most recent audit run
+pir audit coverage --run <run-id>  # ... or of a specific run
+```
+
+`--dry-run` runs the exact snapshot and unit planner a real audit would use,
+without creating a run or invoking any model; `coverage` reads the ledger the
+run persisted as it went, from the local project database.
+
 ## Service API and jobs
 
 `pir serve` exposes:
@@ -221,7 +242,22 @@ Remote audits sent from a checkout are asynchronous jobs by default.
 `pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
 memory and retains the latest 100 settled jobs; runs and findings remain in
 SQLite. `PIR_REMOTE_ASYNC=1` applies
-job submission to other review commands.
+job submission to other review commands. `find`/`audit --detach` submits the
+job and returns immediately (#53): stdout carries the submission envelope
+with the full job id and follow-up commands, and the local receipt is the
+durable record — exit 0 means *accepted*, not *reviewed*. While waiting
+(`jobs wait` or the submit-time poll), a status line prints on state changes
+and about once a minute (#55): connection liveness, never review progress.
+
+Bundles are packed in a throwaway temporary bare repository that reads the
+checkout's objects (#46): the source repo's refs, index, config and objects
+are never written, so a read-only `.git` works. The exception is
+`find --uncommitted`, which records working-tree objects in the source repo
+before packing.
+
+The remote response wait is `--remote-timeout <seconds>` (0 disables), then
+`PIR_REMOTE_TIMEOUT`, then config `server.timeoutSeconds`, then the 1800s
+default (#54). Async job polling (5s interval) has no overall deadline.
 
 The optional read-only explorer is enabled with `--web` or `PIR_WEB_UI=1`.
 `PIR_WEB_UI_TOKEN` protects it independently of `PIR_SERVER_TOKEN`. With the
@@ -230,6 +266,39 @@ recording. Compose supplies this variable, so set `PIR_TRANSCRIPTS=1` in `.env`
 to record timelines there. Live timelines cover runs in the serve process; historical
 transcripts also show prompts, tool traffic, and available thinking. See the
 [web guide](web/README.md) for development of the explorer.
+
+### Recovering runs by URL
+
+When a server accepts an async review, the client writes a receipt to
+`~/.pir/receipts/` naming the server, job, project and — once the job settles —
+the run id. `pir receipts list` / `pir receipts show <job-prefix>` print them
+with the follow-up commands; they survive disconnects and server restarts,
+unlike the in-memory job registry.
+
+With the web tier enabled, a run URL (`<origin>/runs/<projectId>/<runId>`) is
+enough to inspect and export from any machine, no repository or git access
+required:
+
+```bash
+pir runs status https://pir.example:8790/runs/<projectId>/<runId> --json
+pir findings list --run https://pir.example:8790/runs/<projectId>/<runId> --all
+pir findings show F-12 --run https://pir.example:8790/runs/<projectId>/<runId>
+pir findings export --run https://pir.example:8790/runs/<projectId>/<runId> \
+  --status confirmed --output findings.json
+```
+
+`findings export` walks every page and every finding's detail, retries
+transient failures, writes atomically (`.tmp` + rename), and keeps a
+`<output>.checkpoint.json` so an interrupted export resumes instead of
+restarting. A still-running run exports the current snapshot with
+`complete: false` and a `snapshotAt` timestamp; a finished run validates that
+the export count matches the server's total.
+
+Web-tier credentials are separate from the execution token (#50):
+`--viewer-token` > `PIR_VIEWER_TOKEN` > `server.viewerToken` in the config,
+and neither kind ever substitutes for the other. Env/config viewer tokens are
+only sent to the server they were configured for; a run URL pointing
+elsewhere needs the explicit flag.
 
 ## State and memory
 

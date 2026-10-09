@@ -6,8 +6,10 @@ import {
   UsageError,
   configPath,
   deleteUserConfig,
+  isSecretKey,
   loadUserConfig,
   maskSecret,
+  redactConfig,
   resolveTransport,
   runWizard,
   saveUserConfig,
@@ -21,6 +23,7 @@ import {
   feedback,
   feedbackPriority,
   listFindings,
+  listFindingsPage,
   memoryBootstrap,
   memoryRefresh,
   memoryStatus,
@@ -36,7 +39,12 @@ import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
 export { UsageError } from "./config.js";
 
-export const USAGE = `pir — pi-based code review with repository memory
+/**
+ * The reference text, split into sections so `--help` can show one command's
+ * slice (#43). USAGE re-joins them; the full text stays the single source.
+ */
+const USAGE_SECTIONS = {
+  header: `pir — pi-based code review with repository memory
 
 Usage:
   pir find [options]                     run the finding loop over a change range
@@ -46,20 +54,22 @@ Usage:
   pir feedback <id> <decision> [--note]  record user feedback on a finding
   pir feedback <id> priority <P0-P3>     set finding priority
   pir remember <scope> <target> <kind> --text "..."   store code knowledge
-  pir findings [list [--status <s>]]     list stored findings
+  pir findings [list [options]]        list stored findings
   pir findings show <id>                 show one finding
   pir models [search] [--all] [--ids] [--provider <p>]   list pi models
   pir verify-fix <id>                    verify a reported fix
   pir jobs list|status|wait|fetch <id>   inspect async review jobs on a server
+  pir runs status <run-url>            inspect a remote run via its web URL
+  pir receipts [list|show <id>]        local receipts of submitted async reviews
   pir serve [--host H --port P] [--cert C --key K] [--token T] [--web]   HTTPS service
       --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
              viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
   pir skill [path|install|print]         locate / install the LLM skill for pir
   pir plugins list                      list language packs and what this repo activates
-  pir version
+  pir version`,
 
-Find options:
+  find: `Find options:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    discovery/verification loop rounds (default 2)
@@ -67,7 +77,9 @@ Find options:
                       unbounded by default (rounds and findings still cap)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
-                      out — nothing is padded to reach it
+                      out — nothing is padded to reach it. "unlimited"
+                      removes the cap (#57; remote needs a same-version
+                      server)
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -79,8 +91,10 @@ Find options:
                       disable, or "auto" to detect from marker files at
                       head (default)
   --no-sync-index     skip codegraph index sync
+  --detach            remote only: submit as an async job and return
+                      immediately (#53; see Remote mode)`,
 
-Audit options (current-state review; no diff, no change attribution):
+  audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
                       repeatable (union). Default: whole committed tree
   --skip <glob>...    exclude paths from the selection; repeatable. Globs
@@ -89,26 +103,82 @@ Audit options (current-state review; no diff, no change attribution):
                       tree only: uncommitted changes are never audited
   --max-tokens <n>    optional whole-run token budget across all units;
                       unlimited unless set (rounds and findings still cap)
-  --max-findings <n>  whole-run cap on reported findings (default 10)
+  --max-findings <n>  whole-run cap on reported findings (default 10);
+                      "unlimited" removes it (#57)
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
+  --dry-run           preview the scope a real audit of the same tree and
+                      options would take (#56): head/tree ids, selection and
+                      classification counts, planned units — no run, no
+                      model, no writes. --list-files adds per-file
+                      selection/classification/reason
+  --detach            remote only: submit as an async job and return
+                      immediately (#53; see Remote mode)
+  coverage            post-run readout of one recorded audit run (#56):
+                      per-file coverage ledger from the local project db.
+                      Exactly one of --run <run-id> | --latest
   Coverage is process accounting: "reviewed" means the allotted sessions
-  completed. Budget stops leave files unreviewed and exit incomplete.
+  completed. Budget stops leave files unreviewed and exit incomplete.`,
 
-Models options:
+  jobs: `Jobs options:
+  list                jobs on the server, oldest first
+  status <id>         one job's record: state, timing, last log lines
+  wait <id>           poll until it settles, streaming new log lines
+                      (Ctrl-C detaches; re-run later to continue). A status
+                      line prints on state changes and about once a minute
+                      (#55): connection liveness, never review progress
+  fetch <id>          relay a completed job's captured result
+  <id>                an 8-char prefix is enough; the registry is in-memory
+                      and empty after a server restart`,
+
+  findings: `Findings options (stored-findings queries; page size is separate
+  from a review's --max-findings cap):
+  list [--status <s>]  filter by status (confirmed|rejected|uncertain)
+  --limit <n>          page size (default 100)
+  --offset <n>         page position, 0-based
+  --all                fetch every page up front (no truncation)
+  --run <run-url>      query one remote run over the server's read-only web
+                      API instead of the local db — works outside any
+                      repository, needs no git access (viewer auth via
+                      --viewer-token, see Remote mode)
+  export --run <url>   full-fidelity export of one run's findings: every
+                      page plus every finding's detail, provenance envelope,
+                      atomic --output <file>, checkpoint resume on rerun
+                      ([--status <s>] [--format json]); a live run exports
+                      the current snapshot (complete:false)
+  JSON output reports total, returned, hasMore and nextOffset so a
+  partial page is never mistaken for the complete set (#47).`,
+
+  runs: `Runs options (recover a run from its web URL; no local git needed):
+  status <run-url>     <origin>/runs/<projectId>/<runId> — the URL the web
+                      UI shows; or --server <url> --project <id> --run <id>
+  --json               runs.status envelope: run metadata, stopReason,
+                      coverage summary, finding counts, live state (#48)
+  Errors stay distinct: unknown run vs a server without the web tier
+  (\`pir serve --web\`) vs missing viewer credentials.`,
+
+  receipts: `Receipts options (local records of accepted async submissions):
+  list                 receipts in ~/.pir/receipts, newest first
+  show <job-id-prefix> one receipt plus the recovery commands
+  A receipt is written whenever a server accepts an async review; it
+  survives client disconnects and server restarts (the job registry does
+  not) and carries origin/jobId/projectId/runId — enough for
+  \`pir runs status\` and \`pir findings export --run\` (#52).`,
+
+  models: `Models options:
   [search]            case-insensitive substring over provider/id/name
   --all               full pi catalog, not just authenticated providers
   --ids               one provider/model per line (script-friendly)
-  --provider <p>      restrict the listing to one provider
+  --provider <p>      restrict the listing to one provider`,
 
-Memory sync options:
+  memorySync: `Memory sync options:
   pir memory sync merges this project's memory DB with a pir serve instance
   (server from --server/PIR_SERVER_URL/config). It always runs locally, even
   in remote mode — both DBs converge; nothing is ever deleted. Conflicts on
   the same record: the newer write wins, and user knowledge (user_explicit /
   verified_fix) always beats agent summaries.
-  --dry-run           report what would change without writing either side
+  --dry-run           report what would change without writing either side`,
 
-Serve options:
+  serve: `Serve options:
   --host <h>          bind address (default 0.0.0.0)
   --port <p>          port (default 8790)
   --cert <p> --key <p>  TLS cert/key (PEM). Falls back to PIR_TLS_CERT /
@@ -117,43 +187,119 @@ Serve options:
   --token <t>         require "Authorization: Bearer <t>" (default PIR_SERVER_TOKEN)
   --web               also serve the read-only run explorer at / (env
                       PIR_WEB_UI=1; viewer token PIR_WEB_UI_TOKEN, required
-                      off loopback; transcripts default on)
+                      off loopback; transcripts default on)`,
 
-Global options:
+  global: `Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
+  --help              print help locally and exit 0 — answered before any
+                      config, wizard, transport, git or network work, so it
+                      works offline, outside a repository and with a
+                      read-only .git (#43)
   --flag=value        value flags (--base, --repo, ...) also accept the
-                      --flag=value form
+                      --flag=value form`,
 
-Modes:
+  modes: `Modes:
   Local by default. The first interactive run starts a setup wizard and
   writes ~/.pir/config.json (mode local|remote, server url/token, default
   model; re-run with \`pir config\`). In remote mode every command is
   forwarded to a pir serve instance — except serve/config/skill/plugins/
-  version, which always run locally (plugins inspects the local checkout). Precedence: --server flag > --local flag >
-  PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.
+  version/receipts, which always run locally (plugins inspects the local
+  checkout; receipts reads ~/.pir). \`runs\` and \`findings --run\` are
+  client-side queries against a server's web API, whatever the mode.
+  Precedence: --server flag > --local flag >
+  PIR_SERVER_URL > PIR_MODE > ~/.pir/config.json.`,
 
-Remote mode:
+  remote: `Remote mode:
   --server <url>      execute on a remote pir serve instance
-  --token <t>         bearer token for the remote
+  --token <t>         bearer token for the remote (/v1 execution API)
+  --viewer-token <t>  bearer token for the server's web tier (/api, the
+                      PIR_WEB_UI_TOKEN the operator set) — a separate
+                      credential that never falls back to --token or vice
+                      versa; env PIR_VIEWER_TOKEN, config server.viewerToken.
+                      Env/config viewer tokens are only sent to the server
+                      they were configured for — a foreign run URL needs the
+                      explicit flag (#50)
+  --remote-timeout <s> seconds the client waits for remote response headers
+                      and body chunks (0 disables): --remote-timeout >
+                      PIR_REMOTE_TIMEOUT > config server.timeoutSeconds >
+                      default 1800. Async job polling (5s interval) has no
+                      overall deadline by design (#54)
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
+  --detach            submit find/audit as an async job and exit 0 without
+                      waiting (#53): implies async, writes the #52 receipt,
+                      prints the submission envelope (full jobId, origin,
+                      project, head/base, follow-up commands) on stdout.
+                      Exit 0 means accepted, not reviewed. Local mode
+                      rejects the flag
+
+  Review bundles are packed in a throwaway temporary bare repository that
+  reads the checkout's object store (#46): the source repo's refs, index,
+  config and objects are never written — a read-only .git works. The one
+  exception is find --uncommitted, which records working-tree objects in
+  the source repo before packing.
 
   Audits are submitted as async jobs (hours-to-days runs must not be bound
   to one client's wait): the CLI polls, prints progress, and relays the
   result; Ctrl-C detaches and \`pir jobs fetch <id>\` picks it up later.
   PIR_REMOTE_ASYNC=1 forces async submission for any review command.
   Remote \`findings list|show\` is answered bundle-free and never waits
-  behind an in-flight audit.
+  behind an in-flight audit.`,
 
-Config keys (pir config set <key> <value>):
+  config: `Config keys (pir config set <key> <value>):
   mode local|remote   model <provider/model>|""
   server.url <url>    server.token <t>|""      server.insecure true|false
+  server.viewerToken <t>|""  web-tier credential for runs/findings --run
+  server.timeoutSeconds <s>|""  remote response wait (#54)`,
 
-Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
+  footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
-Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime error`;
+Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime error`,
+};
+
+export const USAGE = [
+  USAGE_SECTIONS.header,
+  USAGE_SECTIONS.find,
+  USAGE_SECTIONS.audit,
+  USAGE_SECTIONS.findings,
+  USAGE_SECTIONS.jobs,
+  USAGE_SECTIONS.runs,
+  USAGE_SECTIONS.receipts,
+  USAGE_SECTIONS.models,
+  USAGE_SECTIONS.memorySync,
+  USAGE_SECTIONS.serve,
+  USAGE_SECTIONS.global,
+  USAGE_SECTIONS.modes,
+  USAGE_SECTIONS.remote,
+  USAGE_SECTIONS.config,
+  USAGE_SECTIONS.footer,
+].join("\n\n");
+
+/** Commands that have their own USAGE section for contextual --help. */
+const HELP_SECTIONS: Record<string, string> = {
+  find: USAGE_SECTIONS.find,
+  audit: USAGE_SECTIONS.audit,
+  findings: USAGE_SECTIONS.findings,
+  jobs: USAGE_SECTIONS.jobs,
+  runs: USAGE_SECTIONS.runs,
+  receipts: USAGE_SECTIONS.receipts,
+  models: USAGE_SECTIONS.models,
+  memory: USAGE_SECTIONS.memorySync,
+  serve: USAGE_SECTIONS.serve,
+  config: USAGE_SECTIONS.config,
+};
+
+/**
+ * Contextual --help (#43): the command's own section plus the sections every
+ * command shares. Unknown or absent commands get the full reference.
+ */
+export function helpFor(command: string | undefined): string {
+  const section = command === undefined ? undefined : HELP_SECTIONS[command];
+  if (section === undefined) return `${USAGE}\n`;
+  return [USAGE_SECTIONS.header, section, USAGE_SECTIONS.global, USAGE_SECTIONS.footer].join("\n\n") + "\n";
+}
 
 export interface ExecResult {
   code: number;
@@ -208,6 +354,14 @@ export const VALUE_FLAGS = new Set([
   "--dir",
   "--server",
   "--token",
+  "--viewer-token",
+  "--remote-timeout",
+  "--run",
+  "--project",
+  "--output",
+  "--format",
+  "--limit",
+  "--offset",
   "--plugins",
   "--path",
   "--skip",
@@ -324,6 +478,18 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   const emit = (text: string) => out.push(text);
   const log = (message: string) => opts.onLog?.(message);
 
+  // Help first (#43): no --repo materialization, no --uncommitted snapshot,
+  // no context or db — a forwarded `pir findings list --help` must not make
+  // the server touch git before answering with usage text.
+  if (!command || command === "help") {
+    emit(`${USAGE}\n`);
+    return { code: 0, output: out.join("") };
+  }
+  if (flags.get("--help")) {
+    emit(helpFor(command));
+    return { code: 0, output: out.join("") };
+  }
+
   if (command === "repos") {
     return await cmdRepos(positional.slice(1), flags, json, emit, out);
   }
@@ -339,6 +505,14 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
     return await cmdSkill(positional.slice(1), flags, json, emit, out);
+  }
+  // Receipts live in the caller's ~/.pir and never touch a repo or server
+  // (#52). They stream directly (like the jobs dispatcher); there is no
+  // captured output to relay.
+  if (command === "receipts") {
+    if (opts.cwdGuard) throw new UsageError("receipts is a client-side command; run it on your machine");
+    const { runReceiptsCommand } = await import("./receipts.js");
+    return { code: await runReceiptsCommand(argv), output: "" };
   }
   // memory sync merges the caller's own DB with a server — a pir serve
   // instance executing it would "sync" with itself.
@@ -399,10 +573,6 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, materialized);
   }
 
-  if (!command || command === "help" || flags.get("--help")) {
-    emit(`${USAGE}\n`);
-    return { code: 0, output: out.join("") };
-  }
   if (command === "version") {
     emit(json ? envelope("version", { version: readVersion() }) : `pir ${readVersion()}\n`);
     return { code: 0, output: out.join("") };
@@ -606,7 +776,7 @@ async function cmdModels(
 }
 
 /** Positive-integer flag: same contract for every numeric CLI limit. */
-function positiveIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+export function positiveIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
   const raw = flags.get(name);
   if (raw === undefined) return undefined;
   // A boolean means the flag was parsed without a value; Number(true) === 1
@@ -617,6 +787,40 @@ function positiveIntFlag(flags: Map<string, string | boolean>, name: string): nu
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
     throw new UsageError(`invalid ${name}: ${raw} (positive integer required)`);
+  }
+  return value;
+}
+
+/** Non-negative-integer flag — same as positiveIntFlag but 0 is a valid page offset. */
+export function nonNegativeIntFlag(flags: Map<string, string | boolean>, name: string): number | undefined {
+  const raw = flags.get(name);
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError(`invalid ${name}: a value is required (non-negative integer)`);
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new UsageError(`invalid ${name}: ${raw} (non-negative integer required)`);
+  }
+  return value;
+}
+
+/**
+ * --max-findings (#57): positive integer, or the literal "unlimited"
+ * (case-insensitive) which removes the cap — parsed to null so the supervisor
+ * can distinguish "no cap" from every numeric value. Returns undefined when
+ * the flag is absent (the caller applies the default).
+ */
+export function maxFindingsFlag(flags: Map<string, string | boolean>): number | null | undefined {
+  const raw = flags.get("--max-findings");
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError('invalid --max-findings: a value is required (positive integer or "unlimited")');
+  }
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError(`invalid --max-findings: ${raw} (positive integer or "unlimited" required)`);
   }
   return value;
 }
@@ -686,9 +890,14 @@ async function cmdFind(
   emit: Emit,
   log: Log,
 ): Promise<number> {
+  // --detach is a remote-submission flag (#53): local execution cannot honor
+  // it, and a server receiving it unstripped (old client) must not ignore it.
+  if (flags.has("--detach")) {
+    throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
+  }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  const maxFindings = positiveIntFlag(flags, "--max-findings");
+  const maxFindings = maxFindingsFlag(flags);
   const result = await runFind(ctx, {
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
@@ -712,6 +921,7 @@ async function cmdFind(
             head: result.head,
             rounds: result.rounds,
             maxFindings: result.maxFindings,
+            maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
             files: result.changeSet.files.map((f) => ({
               path: f.path,
@@ -749,6 +959,7 @@ async function cmdFind(
         incomplete: result.incomplete,
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
+        runId: result.runId,
       })}\n`,
     );
   }
@@ -769,15 +980,43 @@ async function cmdAudit(
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
+  // --detach is remote-only (#53): a local run cannot detach, and a server
+  // receiving the flag unstripped (old client) must fail instead of ignoring.
+  if (flags.has("--detach")) {
+    throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
+  }
+  // Post-run coverage readout (#56) answers from the recorded ledger — no
+  // snapshot, no model, no run.
+  if (_args[0] === "coverage") {
+    return await cmdAuditCoverage(ctx, _args.slice(1), flags, json, emit, log);
+  }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
-  const maxFindings = positiveIntFlag(flags, "--max-findings");
+  const maxFindings = maxFindingsFlag(flags);
   const includePaths = multi.get("--path") ?? [];
   const skipGlobs = multi.get("--skip") ?? [];
   for (const value of [...includePaths, ...skipGlobs]) {
     if (value.includes("\0") || value.includes("\\") || value === "") {
       throw new UsageError(`invalid --path/--skip value: ${JSON.stringify(value)}`);
     }
+  }
+  // Scope preview (#56): same snapshot + planner as a real audit, but no run,
+  // no model, no writes. Run-shaping flags cannot affect a preview, so they
+  // are rejected instead of silently ignored.
+  if (flags.get("--dry-run") === true) {
+    for (const shaping of ["--max-tokens", "--max-findings", "--fail-on"]) {
+      if (flags.has(shaping)) {
+        throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
+      }
+    }
+    return await renderAuditDryRun(ctx, {
+      head: flags.get("--head") as string | undefined,
+      includePaths,
+      skipGlobs,
+      listFiles: flags.get("--list-files") === true,
+      json,
+      emit,
+    });
   }
   const { AuditScopeError } = await import("../core/supervisor.js");
   const result = await runAudit(ctx, {
@@ -812,6 +1051,7 @@ async function cmdAudit(
             head: result.head,
             rounds: result.rounds,
             maxFindings: result.maxFindings,
+            maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
           },
           coverage: { ...result.coverage, units: result.units },
@@ -849,11 +1089,207 @@ async function cmdAudit(
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
         suspectedDuplicates: result.suspectedDuplicates,
+        runId: result.runId,
       })}\n`,
     );
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `pir audit --dry-run [--list-files] [--json]` (#56): the exact snapshot and
+ * unit plan a real audit of the same tree and options would build — counts
+ * come from the same buildRepoSnapshot + planAuditUnits calls, so parity is
+ * by construction. No run row, no model, no writes.
+ */
+async function renderAuditDryRun(
+  ctx: Ctx,
+  input: {
+    head: string | undefined;
+    includePaths: string[];
+    skipGlobs: string[];
+    listFiles: boolean;
+    json: boolean;
+    emit: Emit;
+  },
+): Promise<number> {
+  const { buildRepoSnapshot, DEFAULT_SKIP_PATTERNS } = await import("../changes/snapshot.js");
+  const { planAuditUnits } = await import("../core/audit-planner.js");
+  const { isDirty } = await import("../changes/git.js");
+  const emit = input.emit;
+  const snapshot = await buildRepoSnapshot(ctx.repoRoot, input.head ?? "HEAD", {
+    includePaths: input.includePaths,
+    skipGlobs: input.skipGlobs,
+  });
+  const plan = await planAuditUnits(snapshot);
+  // The same scope guards auditIssues applies right after its identical
+  // snapshot+plan calls: a preview that exits 0 where the real audit exits 2
+  // is not a preview (dogfood F-51).
+  const inScopeFiles = snapshot.entries.filter((entry) => entry.selection === "selected").length;
+  if (inScopeFiles === 0) {
+    throw new UsageError("audit scope is empty: no committed files selected (check --path/--skip)");
+  }
+  if (plan.units.length === 0) {
+    throw new UsageError(
+      `audit scope has ${inScopeFiles} selected file(s) but none are reviewable text (binary/oversized/submodule entries cannot be audited); refine --path/--skip`,
+    );
+  }
+  const dirtyWorktree = await isDirty(ctx.repoRoot);
+  const bySelection = { selected: 0, "not-selected": 0, excluded: 0 };
+  const byClassification: Record<string, number> = {};
+  for (const entry of snapshot.entries) {
+    bySelection[entry.selection] += 1;
+    if (entry.selection === "selected") {
+      byClassification[entry.classification] = (byClassification[entry.classification] ?? 0) + 1;
+    }
+  }
+  const reviewable = byClassification.text ?? 0;
+  const files = {
+    total: snapshot.entries.length,
+    selected: bySelection.selected,
+    notSelected: bySelection["not-selected"],
+    excluded: bySelection.excluded,
+    reviewable,
+    byClassification,
+  };
+  const modules = new Set(plan.units.map((unit) => unit.module));
+  const nonText = Object.entries(files.byClassification)
+    .filter(([kind, count]) => kind !== "text" && count > 0)
+    .map(([kind, count]) => `${count} ${kind}`)
+    .join(", ");
+  const note =
+    "no run is created and no model is used; uncommitted working-tree files are outside a committed audit";
+  if (input.json) {
+    emit(
+      envelope(
+        "audit.dry-run",
+        {
+          head: snapshot.commit,
+          treeId: snapshot.treeId,
+          scopeVersion: snapshot.scopeVersion,
+          plannerVersion: plan.plannerVersion,
+          scope: snapshot.scope,
+          policy: { defaultExclusions: DEFAULT_SKIP_PATTERNS },
+          files,
+          units: { total: plan.units.length, modules: modules.size },
+          dirtyWorktree,
+          note,
+          ...(input.listFiles
+            ? {
+                list: snapshot.entries.map((entry) => ({
+                  path: entry.path,
+                  selection: entry.selection,
+                  classification: entry.classification,
+                  ...(entry.exclusionReason ? { reason: entry.exclusionReason } : {}),
+                })),
+              }
+            : {}),
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: snapshot.commit } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const lines = [
+    `audit dry-run: head ${snapshot.commit} (tree ${snapshot.treeId})`,
+    `scope: version ${snapshot.scopeVersion}, planner ${plan.plannerVersion}; --path ${JSON.stringify(snapshot.scope.includePaths)} --skip ${JSON.stringify(snapshot.scope.skipGlobs)}`,
+    `files: ${files.total} total — ${files.selected} selected (${files.reviewable} reviewable text` +
+      `${nonText ? `; ${nonText}` : ""}), ${files.notSelected} not-selected, ${files.excluded} excluded`,
+    `units: ${plan.units.length} planned across ${modules.size} module(s)`,
+    `worktree: ${dirtyWorktree ? "dirty (uncommitted files are outside this audit)" : "clean"}`,
+    note,
+  ];
+  if (input.listFiles) {
+    lines.push("files:");
+    for (const entry of snapshot.entries) {
+      lines.push(`  ${entry.selection.padEnd(13)}${entry.classification.padEnd(17)}${entry.path}${entry.exclusionReason ? `  (${entry.exclusionReason})` : ""}`);
+    }
+  }
+  emit(`${lines.join("\n")}\n`);
+  return 0;
+}
+
+/**
+ * `pir audit coverage [--run <id>|--latest] [--json]` (#56): per-file coverage
+ * of one recorded audit run, read from the audit_file_coverage ledger the run
+ * persisted as it went. Local project db only.
+ */
+async function cmdAuditCoverage(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  const runFlag = flags.get("--run");
+  const latest = flags.get("--latest") === true;
+  if ((typeof runFlag === "string") === latest) {
+    throw new UsageError("audit coverage needs exactly one of --run <run-id> or --latest");
+  }
+  if (_args.length > 0) {
+    throw new UsageError(`unknown audit coverage argument: ${_args[0]}`);
+  }
+  const run =
+    typeof runFlag === "string" ? ctx.memory.findings.runById(runFlag) : ctx.memory.findings.latestRun("audit");
+  if (!run) {
+    if (typeof runFlag === "string") {
+      log(`pir: audit run not found: ${runFlag}`);
+      return 3;
+    }
+    emit("no audit runs recorded in this project\n");
+    return 0;
+  }
+  if (run.mode !== "audit") {
+    throw new UsageError(`run ${run.id} is a ${run.mode}-mode run; audit coverage needs an audit run`);
+  }
+  const files = ctx.memory.audit.fileCoverage(run.id);
+  const summary: Record<string, number> = {};
+  for (const file of files) summary[file.state] = (summary[file.state] ?? 0) + 1;
+  if (json) {
+    emit(
+      envelope(
+        "audit.coverage",
+        {
+          run: {
+            id: run.id,
+            head: run.head,
+            status: run.status,
+            startedAt: run.startedAt,
+            finishedAt: run.finishedAt,
+            ...(run.notes ? { notes: run.notes } : {}),
+          },
+          summary,
+          files: files.map((file) => ({
+            path: file.path,
+            state: file.state,
+            ...(file.reason ? { reason: file.reason } : {}),
+            rangesReviewed: file.rangesReviewed,
+            rangesTotal: file.rangesTotal,
+          })),
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: run.head } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const lines = [
+    `audit run ${run.id}`,
+    `  head ${run.head}; status ${run.status}; started ${new Date(run.startedAt).toISOString()}`,
+    `  coverage: ${files.length} file record(s) — ${Object.entries(summary).map(([state, n]) => `${n} ${state}`).join(", ") || "none"}`,
+  ];
+  if (run.notes) lines.push(`  notes: ${run.notes}`);
+  lines.push("files:");
+  for (const file of files) {
+    lines.push(
+      `  ${file.state.padEnd(10)}${file.path} (ranges ${file.rangesReviewed}/${file.rangesTotal})${file.reason ? ` — ${file.reason}` : ""}`,
+    );
+  }
+  emit(`${lines.join("\n")}\n`);
+  return 0;
 }
 
 async function cmdMemory(
@@ -1035,6 +1471,11 @@ async function cmdFindings(
   log: Log,
 ): Promise<number> {
   const sub = args[0] ?? "list";
+  if (sub === "export") {
+    // The web export is dispatched client-side (cli.ts) before this local
+    // path can ever see it; landing here means --run was missing.
+    throw new UsageError("findings export requires --run <run-url> (a remote web export)");
+  }
   if (sub === "show") {
     const id = args[1];
     if (!id) throw new UsageError("findings show requires an id");
@@ -1048,8 +1489,41 @@ async function cmdFindings(
   }
   if (sub === "list") {
     const status = flags.get("--status") as string | undefined;
-    const findings = listFindings(ctx, { status });
-    emit(json ? `${envelope("findings.list", { findings })}\n` : `${JSON.stringify(findings, null, 2)}\n`);
+    // Pagination (#47): the store caps pages (default 100) — the CLI reports
+    // what it returned against the filtered total instead of silently
+    // truncating. This page size is unrelated to a review's --max-findings
+    // cap (a limit on what a run reports, set when the run starts).
+    const all = flags.get("--all") === true;
+    const limit = positiveIntFlag(flags, "--limit");
+    const offset = nonNegativeIntFlag(flags, "--offset");
+    if (all && (limit !== undefined || offset !== undefined)) {
+      throw new UsageError("--all cannot be combined with --limit/--offset (it fetches every page)");
+    }
+    // Rows and total come from ONE statement (listPage), so an --all page can
+    // never report hasMore:false over a stale count while a WAL writer — the
+    // mid-audit bundle-free lane — commits between two reads (dogfood F-39).
+    const query = all
+      ? { status, limit: Number.MAX_SAFE_INTEGER }
+      : { status, ...(limit !== undefined ? { limit } : {}), ...(offset !== undefined ? { offset } : {}) };
+    const { findings, total } = listFindingsPage(ctx, query);
+    const returned = findings.length;
+    const pageStart = offset ?? 0;
+    const hasMore = all ? false : pageStart + returned < total;
+    const page = {
+      findings,
+      total,
+      returned,
+      hasMore,
+      nextOffset: hasMore ? pageStart + returned : null,
+    };
+    if (json) {
+      emit(`${envelope("findings.list", page)}\n`);
+    } else {
+      emit(`${JSON.stringify(findings, null, 2)}\n`);
+      if (hasMore) {
+        log(`pir: showing ${returned} of ${total} findings — pass --all, or --offset ${page.nextOffset} for the next page`);
+      }
+    }
     return 0;
   }
   throw new UsageError(`unknown findings subcommand: ${sub}`);
@@ -1079,7 +1553,7 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
   if (sub === "show") {
     const config = loadUserConfig();
     if (json) {
-      emit(`${envelope("config.show", { path: configPath(), config })}\n`);
+      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }) })}\n`);
     } else if (!config) {
       emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n`);
     } else {
@@ -1090,7 +1564,7 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
 
   if (sub === "wizard" || sub === "setup") {
     const config = await runWizard();
-    emit(json ? `${envelope("config.wizard", { config })}\n` : renderConfig(config, configPath()));
+    emit(json ? `${envelope("config.wizard", { config: redactConfig(config) })}\n` : renderConfig(config, configPath()));
     return { code: 0, output: out.join("") };
   }
 
@@ -1101,8 +1575,10 @@ async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[
     const config = loadUserConfig() ?? { schemaVersion: 1, mode: "local" };
     const updated = setConfigValue(config, key, value);
     const file = saveUserConfig(updated);
-    const shown = key.endsWith("token") ? maskSecret(value) : value;
-    emit(json ? `${envelope("config.set", { key, value, config: updated })}\n` : `${key} = ${shown}\nsaved ${file}\n`);
+    // #51: JSON output is captured into logs and bug reports just like text
+    // — the new value and the stored config are masked on both channels.
+    const shown = isSecretKey(key) ? maskSecret(value) : value;
+    emit(json ? `${envelope("config.set", { key, value: shown, config: redactConfig(updated) })}\n` : `${key} = ${shown}\nsaved ${file}\n`);
     return { code: 0, output: out.join("") };
   }
 
@@ -1127,6 +1603,9 @@ function renderConfig(config: UserConfig, file: string): string {
     lines.push(`server: ${config.server.url}`);
     lines.push(`token:  ${maskSecret(config.server.token)}`);
     lines.push(`tls:    ${config.server.insecure ? "self-signed accepted (--insecure)" : "verified"}`);
+    if (config.server.timeoutSeconds !== undefined) {
+      lines.push(`wait:   ${config.server.timeoutSeconds}s (remote response timeout)`);
+    }
   }
   if (config.model) lines.push(`model:  ${config.model}`);
   lines.push(`path:   ${file}`);

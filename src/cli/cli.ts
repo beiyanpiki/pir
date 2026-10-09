@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, parseArgs } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs } from "./executor.js";
 import { drainAndExit } from "./exit.js";
+import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version", "runs", "receipts"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in
@@ -18,21 +19,43 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // --help is answered locally before anything else (#43): no config load,
+  // no wizard, no transport resolution, no git, no network — so help works
+  // offline, outside a repository, with a read-only .git and with a missing
+  // or corrupt config.json. A parse error falls through to the normal path,
+  // which reports it with full context.
+  const localHelp = helpOnly(argv);
+  if (localHelp !== null) {
+    process.stdout.write(localHelp);
+    return 0;
+  }
+
   const command = firstPositional(argv);
   let config: UserConfig | null = null;
+  const webRoute = webFindingsRoute(argv);
   try {
     config = loadUserConfig();
   } catch (err) {
     // A corrupt config.json must not brick the whole CLI — least of all
-    // `pir config`, the documented way out. Other commands fail loudly.
-    if (command === "config" || command === "help" || command === undefined || command === "version") {
+    // `pir config`, the documented way out. The URL-keyed recovery commands
+    // (#48/#49/#52) tolerate it too: they carry their own server address
+    // and must keep working when the config is the broken part.
+    if (
+      command === "config" ||
+      command === "help" ||
+      command === undefined ||
+      command === "version" ||
+      command === "runs" ||
+      command === "receipts" ||
+      webRoute !== null
+    ) {
       process.stderr.write(`pir: ${err instanceof Error ? err.message : String(err)} (continuing; 'pir config reset' removes the file)\n`);
     } else {
       throw err;
     }
   }
 
-  if (!config && shouldRunWizard(argv, command)) {
+  if (!config && shouldRunWizard(argv, command, webRoute)) {
     config = await runWizard();
     if (command === undefined) {
       process.stdout.write(
@@ -44,6 +67,9 @@ async function main(argv: string[]): Promise<number> {
     !config &&
     command !== undefined &&
     !LOCAL_ONLY.has(command) &&
+    // The URL-keyed findings lane talks to the URL's server, not local
+    // defaults — the hint (and its `pir config` advice) would be wrong.
+    webRoute === null &&
     !argv.includes("--quiet") &&
     process.env.PIR_NO_WIZARD !== "1" &&
     !argv.includes("--no-wizard")
@@ -54,6 +80,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const transport = resolveTransport({ argv, env: process.env, config });
+  // #54: resolve the remote-response timeout once (flag > env > config >
+  // default) and normalize it into the environment variable every consumer
+  // already reads (review submission, job polling, web-tier queries) — one
+  // dispatcher, one precedence, invalid values fail fast with exit 2.
+  const remoteTimeout = resolveRemoteTimeoutSeconds({ argv, env: process.env, config });
+  if (remoteTimeout.source === "flag" || remoteTimeout.source === "config") {
+    process.env.PIR_REMOTE_TIMEOUT = String(remoteTimeout.seconds);
+  }
   // serve/config/skill/plugins/version/help (and a bare `pir`) stay
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
@@ -71,6 +105,22 @@ async function main(argv: string[]): Promise<number> {
       ...(transport.token ? { token: transport.token } : {}),
       ...(transport.insecure ? { insecure: true } : {}),
     });
+  }
+  if (command === "runs") {
+    // The run URL (or --server/--project/--run) names the server itself, so
+    // this works regardless of the configured mode — including on a fresh
+    // machine that only has a pasted URL (#48).
+    const { runRunsCommand } = await import("./runs.js");
+    return runRunsCommand(argv, { env: process.env, config });
+  }
+  if (webRoute !== null) {
+    // findings routed at one remote run: intercepted before local execution
+    // AND before remote forwarding, so it never needs a repository, a
+    // readable .git, or a registered project (#48/#49).
+    const runs = await import("./runs.js");
+    return webRoute === "export"
+      ? runs.runFindingsExportCommand(argv, { env: process.env, config })
+      : runs.runWebFindingsCommand(argv, { env: process.env, config });
   }
   if (transport.mode === "remote" && forwardToServer) {
     const { remoteExec } = await import("./remote.js");
@@ -103,12 +153,59 @@ async function main(argv: string[]): Promise<number> {
   return result.code;
 }
 
-function shouldRunWizard(argv: string[], command: string | undefined): boolean {
+/**
+ * The help text to print when argv asks for --help, or null when it does not.
+ * parseArgs is the authority: a --help directly after a value flag
+ * (`pir findings list --status --help`) is that flag's value, not a request.
+ */
+function helpOnly(argv: string[]): string | null {
+  let positional: string[];
+  let wantsHelp: boolean;
+  try {
+    const parsed = parseArgs(argv);
+    positional = parsed.positional;
+    wantsHelp = parsed.flags.get("--help") === true;
+  } catch {
+    return null;
+  }
+  return wantsHelp ? helpFor(positional[0]) : null;
+}
+
+/**
+ * findings commands that route at one remote run (#48/#49): `--run` anywhere,
+ * or the export subcommand (which requires --run and fails fast without it).
+ * Null for every other argv.
+ */
+function webFindingsRoute(argv: string[]): "list" | "export" | null {
+  let positional: string[];
+  let flags: Map<string, string | boolean>;
+  try {
+    ({ positional, flags } = parseArgs(argv));
+  } catch {
+    return null;
+  }
+  if (positional[0] !== "findings") return null;
+  if (positional[1] === "export") return "export";
+  return flags.has("--run") ? "list" : null;
+}
+
+/**
+ * The URL-keyed findings recovery lane carries its own server address, so it
+ * must work on an unconfigured machine (#48/#49) — like `runs`/`receipts`
+ * (LOCAL_ONLY), it never triggers first-run setup. The wizard otherwise runs
+ * before the webRoute dispatch and contradicts that contract (dogfood F-55).
+ */
+function shouldRunWizard(
+  argv: string[],
+  command: string | undefined,
+  webRoute: "list" | "export" | null,
+): boolean {
   return (
     isInteractive() &&
     !argv.includes("--json") &&
     !argv.includes("--no-wizard") &&
     process.env.PIR_NO_WIZARD !== "1" &&
+    webRoute === null &&
     (command === undefined || !LOCAL_ONLY.has(command))
   );
 }

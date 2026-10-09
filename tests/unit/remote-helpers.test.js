@@ -2,8 +2,23 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import process from "node:process";
 import { pinRefsToShas, UsageError } from "../../dist/cli/executor.js";
-import { isBundleFreeRead, stripClientFlags, wantsAsyncSubmit, wantsBundle } from "../../dist/cli/remote.js";
-import { describeTransportError, remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "../../dist/cli/remote-fetch.js";
+import {
+  BundlePrepError,
+  isBundleFreeRead,
+  reportBundlePrepFailure,
+  stripClientFlags,
+  wantsAsyncSubmit,
+  wantsBundle,
+} from "../../dist/cli/remote.js";
+import {
+  describeTransportError,
+  remoteDispatcher,
+  remoteTimeoutMs,
+  reportUnreachable,
+  resolveRemoteTimeoutSeconds,
+} from "../../dist/cli/remote-fetch.js";
+import { jobStatusReporter } from "../../dist/cli/jobs.js";
+import { maxFindingsFlag } from "../../dist/cli/executor.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HEAD = "9999999999999999999999999999999999999999";
@@ -235,40 +250,36 @@ test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async n
       const body = JSON.parse(init.body);
       posts.push(body);
       const first = posts.length === 1;
+      const payload = first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" };
       return {
         status: 202,
         ok: true,
-        json: async () => (first ? { jobId: "job-thin", status: "queued" } : { jobId: "job-full", status: "queued" }),
+        text: async () => JSON.stringify(payload),
+        json: async () => payload,
       };
     }
     if (url.includes("/v1/jobs/job-thin")) {
-      return {
-        status: 200,
-        ok: true,
-        json: async () => ({
-          job: {
-            jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
-            createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
-            result: null,
-            error: "needFull: the shipped thin bundle could not be applied; resend full history",
-            clientGone: false,
-          },
-        }),
+      const payload = {
+        job: {
+          jobId: "job-thin", command: "find", argv: ["find"], status: "failed",
+          createdAt: 1, startedAt: 1, finishedAt: 2, logTotal: 0, log: [],
+          result: null,
+          error: "needFull: the shipped thin bundle could not be applied; resend full history",
+          clientGone: false,
+        },
       };
+      return { status: 200, ok: true, text: async () => JSON.stringify(payload), json: async () => payload };
     }
     if (url.includes("/v1/jobs/job-full")) {
-      return {
-        status: 200,
-        ok: true,
-        json: async () => ({
-          job: {
-            jobId: "job-full", command: "find", argv: ["find"], status: "completed",
-            createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
-            result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
-            error: null, clientGone: false,
-          },
-        }),
+      const payload = {
+        job: {
+          jobId: "job-full", command: "find", argv: ["find"], status: "completed",
+          createdAt: 3, startedAt: 3, finishedAt: 4, logTotal: 0, log: [],
+          result: { code: 0, output: "{\"ok\":true}\n", log: [], truncated: false },
+          error: null, clientGone: false,
+        },
       };
+      return { status: 200, ok: true, text: async () => JSON.stringify(payload), json: async () => payload };
     }
     throw new Error(`unexpected fetch in test: ${url}`);
   };
@@ -292,4 +303,269 @@ test("remote find under PIR_REMOTE_ASYNC=1 retries full history after an async n
     else process.env.PIR_REMOTE_ASYNC = savedAsync;
     repo.cleanup();
   }
+});
+
+// --- #44/#45: bundle-free error classification and fallback discipline ---
+
+test("reportBundlePrepFailure names the local stage, never connectivity (#44)", () => {
+  const msg = reportBundlePrepFailure(
+    new BundlePrepError("git update-ref refs/pir/bundle-head 1234 failed: fatal: ...: Read-only file system"),
+  );
+  assert.match(msg, /failed to prepare the review bundle locally/);
+  assert.match(msg, /local git error, not a server connectivity problem/);
+  assert.match(msg, /Read-only file system/);
+  assert.doesNotMatch(msg, /cannot reach/);
+  assert.doesNotMatch(msg, /PIR_REMOTE_TIMEOUT/);
+});
+
+/** Capture process.stderr.write during fn; the remote client reports errors there. */
+async function captureStderr(fn) {
+  const chunks = [];
+  const original = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString());
+    return true;
+  };
+  try {
+    return { result: await fn(), stderr: chunks.join("") };
+  } finally {
+    process.stderr.write = original;
+  }
+}
+
+/**
+ * Run a bundle-free `findings list` against a scripted /v1/review responder.
+ * `respond(n, body)` returns { status, headers?, body } for the nth POST;
+ * retry tests pass "retry-after: 0" so the bounded backoff is instant.
+ */
+async function withBundleFreeScenario(t, respond) {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  const { createTempGitRepo } = await import("../fixtures/helpers.js");
+  const repo = createTempGitRepo("pir-bfree-");
+  repo.write("src/a.ts", "export const a = 1;\n");
+  repo.commit("second");
+  const posts = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).includes("/v1/review")) {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      const next = respond(posts.length, body);
+      return {
+        status: next.status,
+        ok: next.status >= 200 && next.status < 300,
+        headers: new Map(Object.entries(next.headers ?? {})),
+        text: async () => (typeof next.body === "string" ? next.body : JSON.stringify(next.body ?? {})),
+      };
+    }
+    throw new Error(`unexpected fetch in test: ${String(input)}`);
+  };
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+    repo.cleanup();
+  });
+  const run = async () => captureStderr(() => remoteExec("https://pir.invalid", ["--cwd", repo.dir, "findings", "list", "--json"], {}));
+  return { posts, run };
+}
+
+const RELAY_OK = { status: 200, body: { code: 0, output: "[]\n", log: [] } };
+
+test("#45: 401 on a bundle-free read fails fast — no bundle resend, no retry", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 401,
+    body: { error: "missing or invalid bearer token" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 1, "auth failure must not trigger a second request");
+  assert.equal(posts[0].noBundle, true);
+  assert.match(stderr, /rejected the request \(401\)/);
+  assert.match(stderr, /check --token/);
+  assert.doesNotMatch(stderr, /resending/);
+});
+
+test("#45: 429 retries the same bundle-free request, then succeeds", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 429, headers: { "retry-after": "0" }, body: { error: "busy" } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2, "one bounded retry of the same request");
+  for (const post of posts) {
+    assert.equal(post.noBundle, true, "retry must not upgrade to a bundle");
+    assert.equal(post.bundleBase64, "", "no history may be uploaded for a transient failure");
+  }
+  assert.match(stderr, /retrying the bundle-free request/);
+});
+
+test("#45: persistent 429 exhausts the bounded retry and surfaces the original error", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 429,
+    headers: { "retry-after": "0" },
+    body: { error: "rate limited" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 3, "initial attempt plus two retries");
+  assert.ok(posts.every((p) => p.noBundle === true && p.bundleBase64 === ""));
+  assert.match(stderr, /server error 429/);
+  assert.match(stderr, /rate limited/);
+});
+
+test("#45: 5xx on the bundle-free lane retries the same request, never converts to a bundle", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({
+    status: 503,
+    headers: { "retry-after": "0" },
+    body: { error: "overloaded" },
+  }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 3);
+  assert.ok(posts.every((p) => p.noBundle === true && p.bundleBase64 === ""));
+  assert.match(stderr, /server error 503/);
+});
+
+test("#45: explicit needFull still falls back to one bundled resend", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 200, body: { needFull: true } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2);
+  assert.ok(posts[1].bundleBase64.length > 0, "the resend carries real history");
+  assert.notEqual(posts[1].noBundle, true);
+  assert.match(stderr, /needs full history, resending/);
+});
+
+test("#45: a 400 refusal (pre-bundle-free server) falls back to one bundled resend", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(
+    t,
+    (n) => (n === 1 ? { status: 400, body: { error: "fatal: empty bundle" } } : RELAY_OK),
+  );
+  const { result, stderr } = await run();
+  assert.equal(result, 0);
+  assert.equal(posts.length, 2);
+  assert.ok(posts[1].bundleBase64.length > 0);
+  assert.match(stderr, /refused the bundle-free request, resending with bundle/);
+});
+
+test("#44: an ok response that is not JSON is a decoding-stage error, not an empty success", async (t) => {
+  const { posts, run } = await withBundleFreeScenario(t, () => ({ status: 200, body: "<html>gateway error page</html>" }));
+  const { result, stderr } = await run();
+  assert.equal(result, 3);
+  assert.equal(posts.length, 1);
+  assert.match(stderr, /response-decoding stage/);
+  assert.match(stderr, /not valid JSON/);
+});
+
+// ---------------------------------------------------------------------------
+// PR3 (#42 batch 3): remote timeout resolution (#54), wait heartbeats (#55),
+// unlimited findings parsing (#57).
+// ---------------------------------------------------------------------------
+
+test("resolveRemoteTimeoutSeconds precedence: flag > env > config > default (#54)", () => {
+  const mk = (argv = [], env = {}, config = null) => resolveRemoteTimeoutSeconds({ argv, env, config });
+  assert.deepEqual(mk(), { seconds: 1800, source: "default" });
+  assert.deepEqual(mk(["--remote-timeout", "60"]), { seconds: 60, source: "flag" });
+  assert.deepEqual(mk(["--remote-timeout=0"]), { seconds: 0, source: "flag" });
+  assert.deepEqual(mk([], { PIR_REMOTE_TIMEOUT: "45" }), { seconds: 45, source: "env" });
+  assert.deepEqual(mk([], {}, { server: { timeoutSeconds: 90 } }), { seconds: 90, source: "config" });
+  assert.deepEqual(mk(["--remote-timeout", "7"], { PIR_REMOTE_TIMEOUT: "45" }, { server: { timeoutSeconds: 90 } }), {
+    seconds: 7,
+    source: "flag",
+  });
+  assert.deepEqual(mk([], { PIR_REMOTE_TIMEOUT: "45" }, { server: { timeoutSeconds: 90 } }), {
+    seconds: 45,
+    source: "env",
+  });
+  // Invalid values are usage errors on every level — never silent fallbacks.
+  assert.throws(() => mk(["--remote-timeout", "18OO"]), UsageError);
+  assert.throws(() => mk(["--remote-timeout", "-5"]), UsageError);
+  assert.throws(() => mk([], { PIR_REMOTE_TIMEOUT: "soon" }), UsageError);
+  assert.throws(() => mk([], {}, { server: { timeoutSeconds: 1.5 } }), UsageError);
+});
+
+test("jobStatusReporter prints on transitions and heartbeats, never invents progress (#55)", () => {
+  const lines = [];
+  const original = process.stderr.write;
+  process.stderr.write = (chunk) => {
+    lines.push(String(chunk));
+    return true;
+  };
+  try {
+    const report = jobStatusReporter("job-1234567890", { heartbeatMs: 60_000 });
+    const now = Date.now();
+    const job = (over = {}) => ({
+      jobId: "job-1234567890",
+      command: "audit",
+      argv: ["audit"],
+      status: "running",
+      createdAt: now - (2 * 60 + 13) * 60_000,
+      startedAt: now - (2 * 60 + 13) * 60_000,
+      finishedAt: null,
+      logTotal: 1240,
+      log: [],
+      result: null,
+      error: null,
+      clientGone: false,
+      ...over,
+    });
+    report(job()); // first observation prints
+    report(job()); // same status inside the window: silent
+    report(job({ logTotal: 1252 })); // still inside the window: silent
+    assert.equal(lines.length, 1);
+    assert.match(lines[0], /job job-1234 running for 2h13m/);
+    assert.match(lines[0], /connection alive, last poll ok/);
+    assert.match(lines[0], /log lines 1240/);
+    assert.match(lines[0], /review progress is not observable from job polling/);
+
+    // A state transition prints immediately, carrying the log delta since
+    // the last PRINTED line (silent polls accumulate into it: 1240 -> 1264).
+    report(job({ status: "completed", logTotal: 1264, finishedAt: now }));
+    assert.equal(lines.length, 2);
+    assert.match(lines[1], /job job-1234 completed/);
+    assert.match(lines[1], /\+24/);
+
+    // Past the heartbeat window with no transition, the line repeats — with
+    // the honest "no new lines" wording when the log did not move.
+    const late = jobStatusReporter("job-1234567890", { heartbeatMs: 0 });
+    late(job());
+    late(job());
+    assert.ok(lines.length >= 4);
+    assert.match(lines[lines.length - 1], /no new lines|\+\d+/);
+  } finally {
+    process.stderr.write = original;
+  }
+});
+
+test("maxFindingsFlag: positive int, literal unlimited -> null, garbage rejected (#57)", () => {
+  assert.equal(maxFindingsFlag(new Map()), undefined);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "10"]])), 10);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "unlimited"]])), null);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", "UNLIMITED"]])), null);
+  assert.equal(maxFindingsFlag(new Map([["--max-findings", " Unlimited "]])), null);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "0"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "-3"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "many"]])), UsageError);
+  assert.throws(() => maxFindingsFlag(new Map([["--max-findings", true]])), UsageError);
+});
+
+test("stripClientFlags removes --detach and --remote-timeout before forwarding (#53/#54)", () => {
+  assert.deepEqual(
+    stripClientFlags(["find", "--detach", "--remote-timeout", "60", "--json"]),
+    ["find", "--json"],
+  );
+  assert.deepEqual(stripClientFlags(["audit", "--detach", "--remote-timeout=0"]), ["audit"]);
+  assert.deepEqual(stripClientFlags(["find", "--json"]), ["find", "--json"]);
+});
+
+test("--detach cannot ride the registered-repo lane (#53, dogfood F-49)", async () => {
+  const { remoteExec } = await import("../../dist/cli/remote.js");
+  // Validation fires before any network IO, so a dead port is fine.
+  await assert.rejects(
+    remoteExec("http://127.0.0.1:9", ["find", "--detach", "--repo", "demo", "--json"], {}),
+    (error) => error instanceof UsageError && /cannot be combined with --repo/.test(error.message),
+  );
 });

@@ -1,6 +1,8 @@
 import process from "node:process";
-import { UsageError, parseArgs } from "./executor.js";
+import path from "node:path";
+import { UsageError, helpFor, parseArgs } from "./executor.js";
 import { describeTransportError, remoteDispatcher } from "./remote-fetch.js";
+import { findReceipts, receiptRecoveryCommands, updateReceiptFromResult } from "./receipts.js";
 
 /**
  * Client side of the server's job contract (#38): `pir jobs` inspects and
@@ -75,6 +77,50 @@ export interface PollOptions extends RemoteTarget {
 }
 
 /**
+ * Renders poll-liveness lines (#55): one when a job's status CHANGES (first
+ * observation included) and a heartbeat roughly every heartbeatMs otherwise.
+ * The wording separates what polling proves — the connection is alive and
+ * the server still reports the job — from what it cannot: review progress.
+ * Log growth is reported as observed, never extrapolated.
+ */
+export function jobStatusReporter(jobId: string, options: { heartbeatMs?: number } = {}): (job: JobView) => void {
+  const heartbeatMs = options.heartbeatMs ?? 60_000;
+  let lastStatus: string | null = null;
+  let lastPrintAt = 0;
+  let lastLogTotal: number | null = null;
+  return (job) => {
+    const now = Date.now();
+    const first = lastStatus === null;
+    const changed = !first && lastStatus !== job.status;
+    if (!first && !changed && now - lastPrintAt < heartbeatMs) return;
+    lastStatus = job.status;
+    lastPrintAt = now;
+    const delta = lastLogTotal === null ? null : job.logTotal - lastLogTotal;
+    lastLogTotal = job.logTotal;
+    const since = job.startedAt ?? job.createdAt;
+    const logPart =
+      delta === null
+        ? `log lines ${job.logTotal}`
+        : `log lines ${job.logTotal}${delta > 0 ? `, +${delta}` : ", no new lines"}`;
+    process.stderr.write(
+      `pir: job ${shortId(jobId)} ${job.status} for ${formatDuration(now - since)} ` +
+        `(connection alive, last poll ok; ${logPart}; review progress is not observable from job polling)\n`,
+    );
+  };
+}
+
+/** 8000 -> "2h13m", 90_000 -> "1m30s", 45_000 -> "45s", 3 days -> "3d2h". */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes}m${(totalSeconds % 60).toString().padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${minutes % 60}m`;
+  return `${Math.floor(hours / 24)}d${hours % 24}h`;
+}
+
+/**
  * Poll a job until it settles, streaming new log lines. No overall deadline
  * by design: an async audit may legitimately run for days; each individual
  * request is fast, and a dead server surfaces as repeated network failures
@@ -138,6 +184,13 @@ function ago(ts: number | null): string {
 export async function runJobsCommand(argv: string[], target: RemoteTarget): Promise<number> {
   const { positional, flags } = parseArgs(argv);
   const json = Boolean(flags.get("--json"));
+  // Defense in depth for library callers (#43): cli.ts already answers
+  // --help before dispatching jobs; nothing past this point may touch the
+  // network when help was asked for.
+  if (flags.get("--help") === true) {
+    process.stdout.write(helpFor("jobs"));
+    return 0;
+  }
   const sub = positional[1] ?? "list";
   if (!["list", "status", "wait", "fetch"].includes(sub)) {
     throw new UsageError(`unknown jobs subcommand: ${sub} (expected list | status | wait | fetch)`);
@@ -193,7 +246,13 @@ async function dispatchJobs(
   const summaries = (await fetchJobs(target)) as JobView[];
   const matches = summaries.filter((job) => job.jobId === jobIdArg || job.jobId.startsWith(jobIdArg));
   if (matches.length === 0) {
+    // #52: a restarted serve loses the in-memory registry, but the local
+    // receipt still names the submission — surface it instead of a dead end.
     process.stderr.write(`pir: unknown job: ${jobIdArg} (the registry is in-memory; the server may have restarted)\n`);
+    for (const { file, receipt } of findReceipts(jobIdArg)) {
+      process.stderr.write(`pir: local receipt ${path.basename(file)} (${receipt.kind} of ${receipt.head.slice(0, 8)}, submitted ${receipt.submittedAt})\n`);
+      for (const command of receiptRecoveryCommands(receipt)) process.stderr.write(`    ${command}\n`);
+    }
     return 3;
   }
   if (matches.length > 1) throw new UsageError(`ambiguous job id: ${jobIdArg} matches ${matches.length} jobs`);
@@ -222,6 +281,9 @@ async function dispatchJobs(
         onLog: (lines) => {
           if (!json) for (const line of lines) process.stderr.write(`${line}\n`);
         },
+        // #55: liveness heartbeats during a potentially hours-long wait —
+        // suppressed with --json (matching the log lines) and --quiet.
+        onStatus: json || flags.get("--quiet") === true ? undefined : jobStatusReporter(jobId),
       });
       if (job.status === "failed") {
         process.stderr.write(`pir: job ${shortId(jobId)} failed: ${job.error ?? "unknown error"}\n`);
@@ -248,5 +310,13 @@ function relayJob(job: JobView): number {
     process.stderr.write("pir: warning: job output was truncated server-side (size cap)\n");
   }
   process.stdout.write(job.result?.output ?? "");
+  // Pickup after a detach (#52): this is where the run id finally becomes
+  // known, so the receipt written at submission gets its authoritative
+  // update. No receipt for this job (or unparseable output) is a no-op.
+  try {
+    updateReceiptFromResult(job.jobId, job.result?.output ?? "");
+  } catch {
+    // Receipt bookkeeping must never fail the pickup itself.
+  }
   return job.result?.code ?? 0;
 }
