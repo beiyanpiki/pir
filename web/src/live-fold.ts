@@ -48,7 +48,15 @@ export function mergeEvents(previous: RunEvent[], pending: RunEvent[]): RunEvent
       last.sessionId === event.sessionId &&
       last.deltaType === event.deltaType
     ) {
-      merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts };
+      // Raw incremental chunks always append — a chunk may legitimately
+      // begin with the whole text held so far (markdown rule/indent runs),
+      // so text shape alone cannot identify a re-delivery (F-78). Only an
+      // explicitly cumulative delta — coalesced by the server (F-74) or by
+      // a previous flush's merge below — is known to span the streak from
+      // its start, and such text replaces what it already contains.
+      const text = event.cumulative && event.text.startsWith(last.text) ? event.text : last.text + event.text;
+      // The merged element now spans the streak from its start.
+      merged[merged.length - 1] = { ...last, text, seq: event.seq, ts: event.ts, cumulative: true };
     } else {
       merged.push(event);
     }
@@ -122,13 +130,16 @@ export function createLiveFold(): LiveFold {
         if (!fold) continue;
         const buffer = buffers.get(event.sessionId);
         if (buffer && buffer.kind === event.deltaType) {
-          // mergeEvents folds each 80ms batch into the last array element, so
-          // a delta re-observed past the seq cursor carries cumulative text
-          // from the run's start. Text that already contains what we hold
-          // means replace, not re-append — appending here re-added the whole
-          // tail on every flush (dogfood F-35). The startsWith fallback keeps
-          // genuinely new (unmerged) deltas appending.
-          buffer.text = event.text.startsWith(buffer.text) ? event.text : buffer.text + event.text;
+          // mergeEvents folds each 80ms batch into the last array element,
+          // so a delta re-observed past the seq cursor carries cumulative
+          // text from the run's start — marked `cumulative`, like a
+          // server-coalesced replay delta. Text that already contains what
+          // we hold means replace, not re-append — appending here re-added
+          // the whole tail on every flush (dogfood F-35). Unmarked deltas
+          // are raw incremental chunks and always append (F-78).
+          buffer.text = event.cumulative && event.text.startsWith(buffer.text)
+            ? event.text
+            : buffer.text + event.text;
         } else {
           flushBuffer(event.sessionId);
           buffers.set(event.sessionId, { kind: event.deltaType, text: event.text });

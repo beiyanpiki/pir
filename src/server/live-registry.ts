@@ -64,6 +64,17 @@ type RunEventListener = (event: RunEvent) => void;
 
 /** Bounded buffering: deltas are the bulk, so they are evicted first. */
 const MAX_BUFFERED_CHARS = 32 * 1024 * 1024;
+/**
+ * Per-run event-count cap. The char budget alone lets hundreds of
+ * thousands of tiny deltas pile up (#70); a replay that large is a poor
+ * trade for both sides — a synchronous serve-loop burst and tens of MB
+ * per joining client. The client's live fold is built for "tens of
+ * thousands" of replayed events, so 50k keeps replay bounded while a
+ * mid-run joiner still sees the full recent timeline.
+ */
+const MAX_BUFFERED_EVENTS_PER_RUN = 50_000;
+/** How far past the excess one eviction pass clears (amortizes the pass). */
+const EVENT_CAP_EVICTION_BATCH = 1024;
 const ENDED_RUN_GRACE_MS = 5 * 60 * 1000;
 const MAX_TRACKED_RUNS = 8;
 const PRUNE_INTERVAL_MS = 60 * 1000;
@@ -75,6 +86,8 @@ export interface LiveRegistryOptions {
   pruneIntervalMs?: number;
   /** Total buffered-char budget across all runs (default 32 MB). */
   maxBufferedChars?: number;
+  /** Per-run buffered-event cap (default 50k). */
+  maxBufferedEventsPerRun?: number;
 }
 
 function eventChars(event: RunEvent): number {
@@ -95,11 +108,13 @@ export class LiveRegistry {
   private readonly sweep: ReturnType<typeof setInterval> | undefined;
   private readonly endedRunGraceMs: number;
   private readonly maxBufferedChars: number;
+  private readonly maxBufferedEventsPerRun: number;
   private bufferedChars = 0;
 
   constructor(options: LiveRegistryOptions = {}) {
     this.endedRunGraceMs = options.endedRunGraceMs ?? ENDED_RUN_GRACE_MS;
     this.maxBufferedChars = options.maxBufferedChars ?? MAX_BUFFERED_CHARS;
+    this.maxBufferedEventsPerRun = options.maxBufferedEventsPerRun ?? MAX_BUFFERED_EVENTS_PER_RUN;
     this.unsubscribeBus = onRunEvent((event) => this.handle(event));
     // Ended-run grace is enforced without waiting for the next event: an
     // idle serve process must release buffers on its own.
@@ -174,6 +189,7 @@ export class LiveRegistry {
     state.events.push(event);
     this.bufferedChars += eventChars(event);
     this.enforceBudget();
+    this.enforceEventCap();
     this.pruneEnded();
   }
 
@@ -199,6 +215,104 @@ export class LiveRegistry {
       if (this.bufferedChars <= this.maxBufferedChars) return;
       this.trimFront(state);
     }
+  }
+
+  /**
+   * Bound each run's buffered event count (#70): the char budget alone
+   * allows hundreds of thousands of tiny deltas, and replaying that many
+   * events in one shot costs the serve loop and every joining client.
+   *
+   * First losslessly: consecutive same-session/same-type deltas coalesce
+   * into one cumulative-text event — they are streaming duplicates of the
+   * authoritative blocks, and the client's fold already treats cumulative
+   * delta text as a replace, so a replay of coalesced deltas loses no
+   * content, only streaming granularity. Only a stream still over the cap
+   * after coalescing evicts: oldest deltas first, then the oldest
+   * non-structural events — the same front-degradation the char budget's
+   * last resort applies. run-start/session-start/session-end/run-end are
+   * never evicted: they are the skeleton a joining client folds (session
+   * terminal state included), and their count is bounded by the session
+   * count.
+   *
+   * The pass is triggered lazily, a full batch past the cap: coalescing
+   * often absorbs the overage of a streaming tail on its own, and without
+   * the window every delta of a long streak would re-trigger an O(cap)
+   * pass. A run at the cap pays one pass per batch of arrivals, not per
+   * event; the buffer oscillates between cap-batch and cap+batch.
+   *
+   * The trailing delta run is the stream still in flight. Evicting it
+   * mid-streak would re-anchor the next coalesced event past what live
+   * clients already hold — on reconnect the overlap would then render
+   * twice or drop silently — so both eviction passes leave it alone. The
+   * zone is bounded (2× the batch): a genuinely growing streak collapses
+   * to one event per pass plus at most a batch of raw tail, and a
+   * non-coalescible delta run older than that is settled content —
+   * without the bound, an adversarial alternating-type tail would leave
+   * nothing droppable and the cap would silently stop bounding.
+   */
+  private enforceEventCap(): void {
+    const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
+    for (const state of this.runs.values()) {
+      if (state.events.length <= this.maxBufferedEventsPerRun + batch) continue;
+      this.coalesceDeltas(state);
+      let excess = state.events.length - this.maxBufferedEventsPerRun;
+      if (excess <= 0) continue;
+      excess += batch;
+      let inflight = 0;
+      for (let i = state.events.length - 1; i >= 0 && inflight < 2 * batch; i -= 1) {
+        if (state.events[i]!.kind !== "session-delta") break;
+        inflight += 1;
+      }
+      let retained: RunEvent[] = [];
+      state.events.forEach((event, index) => {
+        if (excess > 0 && index < state.events.length - inflight && event.kind === "session-delta") {
+          excess -= 1;
+          this.bufferedChars -= eventChars(event);
+          return;
+        }
+        retained.push(event);
+      });
+      if (excess > 0) {
+        const kept: RunEvent[] = [];
+        retained.forEach((event, index) => {
+          if (
+            excess > 0 && index < retained.length - inflight &&
+            event.kind !== "run-start" && event.kind !== "session-start" &&
+            event.kind !== "session-end" && event.kind !== "run-end"
+          ) {
+            excess -= 1;
+            this.bufferedChars -= eventChars(event);
+            return;
+          }
+          kept.push(event);
+        });
+        retained = kept;
+      }
+      state.events = retained;
+    }
+  }
+
+  /**
+   * Merge consecutive same-session/same-type deltas into one event with
+   * cumulative text and the newest seq/ts, marked `cumulative` so clients
+   * can tell a coalesced replay delta from a raw incremental one. Text
+   * content and emission order are preserved — only streaming granularity
+   * collapses.
+   */
+  private coalesceDeltas(state: LiveRunState): void {
+    const merged: RunEvent[] = [];
+    for (const event of state.events) {
+      const last = merged[merged.length - 1];
+      if (
+        event.kind === "session-delta" && last !== undefined && last.kind === "session-delta" &&
+        last.sessionId === event.sessionId && last.deltaType === event.deltaType
+      ) {
+        merged[merged.length - 1] = { ...last, text: last.text + event.text, seq: event.seq, ts: event.ts, cumulative: true };
+        continue;
+      }
+      merged.push(event);
+    }
+    state.events = merged;
   }
 
   private dropEvents(state: LiveRunState, keep: (event: RunEvent) => boolean): void {

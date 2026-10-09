@@ -238,7 +238,7 @@ export type RunEvent =
       displayId?: string;
       prompt: string;
     })
-  | (RunEventCommon & { kind: "session-delta"; sessionId: string; deltaType: "thinking" | "text"; text: string })
+  | (RunEventCommon & { kind: "session-delta"; sessionId: string; deltaType: "thinking" | "text"; text: string; /** Coalesced by the server: text spans the streak from its start, seq is the newest. */ cumulative?: boolean })
   | (RunEventCommon & { kind: "session-block"; sessionId: string; block: SessionBlock })
   | (RunEventCommon & { kind: "session-tool-result"; sessionId: string; toolCallId: string; name: string; isError: boolean; result: string; truncated: boolean })
   | (RunEventCommon & { kind: "session-end"; sessionId: string; error?: string; usage?: SessionUsage })

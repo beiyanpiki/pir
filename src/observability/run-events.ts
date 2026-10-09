@@ -72,6 +72,13 @@ export type RunEvent =
       sessionId: string;
       deltaType: "thinking" | "text";
       text: string;
+      /**
+       * Present (true) only on deltas produced by coalescing a streak of
+       * raw deltas: text then spans the whole streak from its start and
+       * seq is the streak's newest. Consumers append unmarked deltas and
+       * may replace their held text with a marked one that extends it.
+       */
+      cumulative?: boolean;
     }
   | {
       kind: "session-block";
