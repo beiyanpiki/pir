@@ -260,12 +260,20 @@ export class LiveRegistry {
 
   /** Buffered replay followed by live delivery for one run (or all runs). */
   subscribe(runId: string | null, listener: RunEventListener): { replay: RunEvent[]; unsubscribe: () => void } {
+    // Copy without spread-apply: push(...events) passes every element as a
+    // call argument, and V8 overflows the stack past ~125k buffered events
+    // (#70) — a long audit buffers that many deltas well within the char
+    // budget, which killed every SSE connection with a synchronous throw.
     const replay: RunEvent[] = [];
     if (runId) {
       const state = this.run(runId);
-      if (state) replay.push(...state.events);
+      if (state) {
+        for (const event of state.events) replay.push(event);
+      }
     } else {
-      for (const state of this.runs.values()) replay.push(...state.events);
+      for (const state of this.runs.values()) {
+        for (const event of state.events) replay.push(event);
+      }
       replay.sort((a, b) => a.seq - b.seq);
     }
     const wrapped = (event: RunEvent): void => {
