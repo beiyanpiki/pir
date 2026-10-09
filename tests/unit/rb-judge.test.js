@@ -47,8 +47,8 @@ test("readPinnedSha validates the vendored pin file", () => {
   });
 });
 
-test("depsMarker is namespaced per pinned SHA", () => {
-  assert.notEqual(depsMarker("/d", "a".repeat(40)), depsMarker("/d", "b".repeat(40)));
+test("depsMarker is one file whose content ties node_modules to a pinned SHA", () => {
+  assert.equal(depsMarker("/d"), path.join("/d", ".pir-npm-ci", "done"));
 });
 
 test("PIR_EVAL gate: parseable skip JSON, exit 0, no clone", () => {

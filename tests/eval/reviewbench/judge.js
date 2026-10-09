@@ -56,40 +56,50 @@ export function readPinnedSha(shaFile = path.join(FIXTURES_DIR, "REVIEWBENCH_SHA
   return sha;
 }
 
-/** Marker proving `npm ci` ran for exactly this pinned SHA (one-time cost). */
-export function depsMarker(repoDir, sha) {
-  return path.join(repoDir, ".pir-npm-ci", `${sha}.done`);
+/** Marker recording which pinned SHA the installed node_modules belong to. */
+export function depsMarker(repoDir) {
+  return path.join(repoDir, ".pir-npm-ci", "done");
 }
 
 /**
  * Ensure <repoDir> is a clone of repoUrl checked out (detached) at sha.
- * Pure git plumbing; testable against a local fixture remote. A broken
- * cache (interrupted clone, corrupt object store) is disposable: one full
- * wipe-and-reclone recovery before giving up.
+ * Pure git plumbing; testable against a local fixture remote.
+ *
+ * Failure handling distinguishes transient from local problems: a failed
+ * SHA fetch (network) propagates without touching the valid cache, while a
+ * local checkout failure triggers one wipe-and-reclone recovery.
  */
 export function ensurePinnedCheckout(repoDir, sha, { repoUrl = DEFAULT_REVIEWBENCH_REPO } = {}) {
-  const prepare = () => {
-    if (!existsSync(path.join(repoDir, ".git"))) {
-      rmSync(repoDir, { recursive: true, force: true });
-      mkdirSync(path.dirname(repoDir), { recursive: true });
-      execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe", timeout: GIT_TIMEOUT_MS });
-    }
-    try {
-      git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
-    } catch {
-      // The pinned SHA may not be reachable from the default branch tip.
-      git(repoDir, ["fetch", "-q", "origin", sha]);
-    }
+  const cloneAt = () => {
+    rmSync(repoDir, { recursive: true, force: true });
+    mkdirSync(path.dirname(repoDir), { recursive: true });
+    execFileSync("git", ["clone", "-q", "--no-checkout", repoUrl, repoDir], { stdio: "pipe", timeout: GIT_TIMEOUT_MS });
+  };
+  const checkoutPinned = () => {
     git(repoDir, ["checkout", "-q", "--detach", sha]);
     const head = git(repoDir, ["rev-parse", "HEAD"]).trim();
     if (head !== sha) throw new Error(`checkout landed on ${head}, expected ${sha}`);
   };
+
+  if (!existsSync(path.join(repoDir, ".git"))) cloneAt();
   try {
-    prepare();
+    git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
+  } catch {
+    // Network-bound: a failure here is transient — the existing cache (and
+    // its npm ci install) must survive for the retry.
+    git(repoDir, ["fetch", "-q", "origin", sha]);
+  }
+  try {
+    checkoutPinned();
   } catch (error) {
-    console.error(`judge clone unusable (${String(error.message ?? error)}); wiping and re-cloning at ${sha.slice(0, 8)}…`);
-    rmSync(repoDir, { recursive: true, force: true });
-    prepare();
+    console.error(`pinned checkout failed (${String(error.message ?? error)}); wiping the cache and re-cloning at ${sha.slice(0, 8)}…`);
+    cloneAt();
+    try {
+      git(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
+    } catch {
+      git(repoDir, ["fetch", "-q", "origin", sha]);
+    }
+    checkoutPinned();
   }
   return repoDir;
 }
@@ -124,14 +134,16 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const repoDir = path.join(cacheDir, "reviewbench");
   console.error(`ensuring review-bench/ReviewBench at pinned SHA ${sha.slice(0, 8)}…`);
   ensurePinnedCheckout(repoDir, sha, { repoUrl: options.repoUrl });
-  if (!existsSync(depsMarker(repoDir, sha))) {
+  const marker = depsMarker(repoDir);
+  const installedFor = existsSync(marker) ? readFileSync(marker, "utf8").trim() : null;
+  if (installedFor !== sha) {
     console.error("running one-time npm ci in the judge clone…");
     const install = spawnSync("npm", ["ci"], { cwd: repoDir, stdio: "inherit" });
     if (install.error || install.status !== 0) {
       throw new Error(`npm ci failed in the judge clone (exit ${install.status ?? install.error?.message ?? "?"}) — deps marker NOT written, fix the cause and re-run`);
     }
-    mkdirSync(path.dirname(depsMarker(repoDir, sha)), { recursive: true });
-    writeFileSync(depsMarker(repoDir, sha), new Date().toISOString());
+    mkdirSync(path.dirname(marker), { recursive: true });
+    writeFileSync(marker, sha);
   }
 
   const judgeArgs = ["--prefix", repoDir, "run", "judge", "--",
