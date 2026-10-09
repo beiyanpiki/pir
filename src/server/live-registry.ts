@@ -73,6 +73,8 @@ const MAX_BUFFERED_CHARS = 32 * 1024 * 1024;
  * mid-run joiner still sees the full recent timeline.
  */
 const MAX_BUFFERED_EVENTS_PER_RUN = 50_000;
+/** How far past the excess one eviction pass clears (amortizes the pass). */
+const EVENT_CAP_EVICTION_BATCH = 1024;
 const ENDED_RUN_GRACE_MS = 5 * 60 * 1000;
 const MAX_TRACKED_RUNS = 8;
 const PRUNE_INTERVAL_MS = 60 * 1000;
@@ -219,16 +221,24 @@ export class LiveRegistry {
    * Bound each run's buffered event count (#70): the char budget alone
    * allows hundreds of thousands of tiny deltas, and replaying that many
    * events in one shot costs the serve loop and every joining client.
-   * Oldest deltas go first — they are streaming duplicates of the
-   * authoritative blocks; once deltas run out, the oldest events go
-   * regardless of kind, the same front-degradation the char budget's last
-   * resort applies.
+   * Eviction prefers the oldest deltas — they are streaming duplicates of
+   * the authoritative blocks — then the oldest non-structural events, the
+   * same front-degradation the char budget's last resort applies.
+   * run-start/session-start are never evicted here: a joining client
+   * cannot fold a replay whose session skeleton is missing, and their
+   * count is bounded by the session count.
+   *
+   * Eviction runs in batches — a margin beyond the excess — so a run
+   * sitting at the cap does not pay a full-buffer pass on every arriving
+   * event; the buffer oscillates between cap-batch and cap+1.
    */
   private enforceEventCap(): void {
+    const batch = Math.min(EVENT_CAP_EVICTION_BATCH, this.maxBufferedEventsPerRun >> 1);
     for (const state of this.runs.values()) {
       let excess = state.events.length - this.maxBufferedEventsPerRun;
       if (excess <= 0) continue;
-      const retained: RunEvent[] = [];
+      excess += batch;
+      let retained: RunEvent[] = [];
       for (const event of state.events) {
         if (excess > 0 && event.kind === "session-delta") {
           excess -= 1;
@@ -238,7 +248,16 @@ export class LiveRegistry {
         retained.push(event);
       }
       if (excess > 0) {
-        for (const event of retained.splice(0, excess)) this.bufferedChars -= eventChars(event);
+        const kept: RunEvent[] = [];
+        for (const event of retained) {
+          if (excess > 0 && event.kind !== "run-start" && event.kind !== "session-start") {
+            excess -= 1;
+            this.bufferedChars -= eventChars(event);
+            continue;
+          }
+          kept.push(event);
+        }
+        retained = kept;
       }
       state.events = retained;
     }

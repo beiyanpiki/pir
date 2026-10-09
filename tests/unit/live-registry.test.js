@@ -154,37 +154,70 @@ test("subscribe: replays a 200k-event buffer without stack overflow", () => {
 // #70 follow-up: bound the buffered event count per run — the char budget
 // alone let hundreds of thousands of tiny deltas pile up, making every SSE
 // replay an unbounded burst for the serve loop and the joining client.
+// Eviction is batched (cap 10, batch 5): each pass clears the excess plus a
+// margin, so the buffer oscillates between cap-batch and cap+1.
 test("event cap: oldest deltas are dropped first when a run exceeds the count cap", () => {
-  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 5, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 10, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
   try {
     const now = Date.now();
     emitRunEventForTest(runStart("A", now));
     emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
-    for (let i = 0; i < 8; i += 1) emitRunEventForTest(delta("A", "s1", `d${i}`, now));
+    for (let i = 0; i < 20; i += 1) emitRunEventForTest(delta("A", "s1", `d${i}`, now));
     emitRunEventForTest(block("A", "s1", "settled", now));
 
     const events = registry.snapshot("A").events;
-    assert.equal(events.length, 5, "buffer is capped");
+    assert.ok(events.length <= 11, "buffer stays capped");
+    assert.ok(events.length >= 5, "eviction clears a batch, not the whole buffer");
     const kinds = events.map((event) => event.kind);
     assert.ok(kinds.includes("run-start") && kinds.includes("session-start") && kinds.includes("session-block"),
       "run structure and the authoritative block survive");
     const deltaTexts = events.filter((event) => event.kind === "session-delta").map((event) => event.text);
-    assert.deepEqual(deltaTexts, ["d6", "d7"], "oldest deltas dropped first, newest kept");
+    assert.deepEqual(deltaTexts, ["d18", "d19"], "oldest deltas dropped first, newest kept");
   } finally {
     registry.dispose();
   }
 });
 
-test("event cap: without deltas the oldest events are trimmed from the front", () => {
-  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 3, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+// Deltas eventually run out; from then on the cap eats the oldest
+// non-structural events. run-start/session-start must survive — a joining
+// client cannot fold a replay whose session skeleton is missing.
+test("event cap: without deltas the oldest non-structural events go, skeleton survives", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 5, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
   try {
     const now = Date.now();
     emitRunEventForTest(runStart("A", now));
-    for (let i = 0; i < 4; i += 1) emitRunEventForTest(block("A", "s1", `b${i}`, now));
+    emitRunEventForTest(sessionStart("A", "s1", "x".repeat(10), now));
+    for (let i = 0; i < 6; i += 1) emitRunEventForTest(block("A", "s1", `b${i}`, now));
 
     const events = registry.snapshot("A").events;
-    assert.equal(events.length, 3, "buffer is capped");
-    assert.deepEqual(events.map((event) => event.block.text), ["b1", "b2", "b3"], "oldest trimmed from the front");
+    assert.ok(events.length <= 6, "buffer stays near the cap");
+    assert.equal(events[0].kind, "run-start", "run skeleton survives cap eviction");
+    assert.equal(events[1].kind, "session-start", "session skeleton survives cap eviction");
+    assert.deepEqual(events.slice(2).map((event) => event.block.text), ["b3", "b4", "b5"],
+      "oldest non-structural events trimmed from the front");
+  } finally {
+    registry.dispose();
+  }
+});
+
+// A run at the cap must not pay a full-buffer eviction pass on every
+// arriving event: unbatched eviction is O(cap) per event (O(n²) over a long
+// run). The batch keeps it amortized O(1) — bounded wall time for 60k
+// events at a 20k cap (the unbatched version takes orders of magnitude
+// longer and blows this bound).
+test("event cap: eviction at the cap is amortized, not per-event full passes", () => {
+  const registry = new LiveRegistry({ maxBufferedEventsPerRun: 20_000, endedRunGraceMs: 60_000, pruneIntervalMs: 60_000 });
+  try {
+    const now = Date.now();
+    emitRunEventForTest(runStart("A", now));
+    emitRunEventForTest(sessionStart("A", "s1", "x", now));
+    const started = process.hrtime.bigint();
+    for (let i = 0; i < 60_000; i += 1) emitRunEventForTest(delta("A", "s1", "x", now));
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+
+    const events = registry.snapshot("A").events;
+    assert.ok(events.length <= 20_001, "buffer stays capped");
+    assert.ok(elapsedMs < 5_000, `60k events at a 20k cap buffer in ${Math.round(elapsedMs)}ms, not per-event full passes`);
   } finally {
     registry.dispose();
   }
