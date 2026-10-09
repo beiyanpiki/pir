@@ -1,7 +1,7 @@
 {
   "name": "pir-web",
   "private": true,
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Read-only web UI for pir review runs (served by pir serve --web)",
   "type": "module",
   "scripts": {
