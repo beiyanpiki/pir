@@ -20,14 +20,22 @@ class DrainHarness {
     this.verifierSessions = 0;
     this.verifierActive = 0;
     this.verifierPeak = 0;
-    this.verifierWaiters = [];
     this.reviewPrompts = [];
   }
 
-  /** Resolves once <n> finding-verifier sessions exist simultaneously. */
+  /**
+   * Resolves once <n> finding-verifier sessions exist simultaneously. Polls
+   * on a timer: a bare promise could leave the whole test process with no
+   * I/O in flight and let the event loop drain while choreography is pending.
+   */
   waitVerifierSessions(n) {
-    if (this.verifierSessions >= n) return Promise.resolve();
-    return new Promise((resolve) => this.verifierWaiters.push({ n, resolve }));
+    return new Promise((resolve) => {
+      const check = () => {
+        if (this.verifierSessions >= n) resolve();
+        else setTimeout(check, 1);
+      };
+      check();
+    });
   }
 
   async createSession(config) {
@@ -35,11 +43,6 @@ class DrainHarness {
       this.verifierSessions += 1;
       this.verifierActive += 1;
       this.verifierPeak = Math.max(this.verifierPeak, this.verifierActive);
-      this.verifierWaiters = this.verifierWaiters.filter((w) => {
-        if (this.verifierSessions < w.n) return true;
-        w.resolve();
-        return false;
-      });
     }
     const harness = this;
     return {
@@ -276,30 +279,19 @@ test("parallel drain: a rejected verdict frees its reserved slot for the next ca
 test("parallel drain: token budget exhaustion stops dispatching; in-flight verifications still land", async () => {
   const list = candidates(5);
   const fx = await findFixture();
-  // Deterministic choreography (usage 100/session, maxTokens 350): after the
-  // reviewer (100), alpha lands at 200 and gamma is admitted; beta lands at
-  // 300 and delta is admitted; gamma lands at 400 so the fifth admission is
-  // refused; delta was already in flight and still lands (500).
-  const gates = new Map(list.map((c) => [c.title, deferred()]));
+  // Deterministic without choreography: landings are in admission order, so
+  // the n-th admission check always sees the same spend. Usage is 100 per
+  // session (reviewer included): the 4th admission (delta) sees 100+200=300
+  // and fits maxTokens=400, while the 5th (epsilon) always sees 100+300=400
+  // and is refused — no gate for epsilon to sit on, so a slow completion of
+  // delta before gamma can only shift session timing, never the outcome.
   const factory = new DrainHarness({
     reviewer: reviewerRecording(list),
-    verifier: async (tool, text) => {
-      const candidate = list.find((c) => text.includes(c.title));
-      await gates.get(candidate.title).promise;
-      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
-    },
+    verifier: verifierConfirming(),
     usage: true,
   });
   try {
-    const runPromise = fx.run(factory, { maxRounds: 5, maxTokens: 350, verifyConcurrency: 2 });
-    await factory.waitVerifierSessions(2);
-    gates.get(list[0].title).resolve(); // alpha lands (200) -> gamma admitted
-    await factory.waitVerifierSessions(3);
-    gates.get(list[1].title).resolve(); // beta lands (300) -> delta admitted
-    await factory.waitVerifierSessions(4);
-    gates.get(list[2].title).resolve(); // gamma lands (400) -> no further admission
-    gates.get(list[3].title).resolve(); // delta (in flight) lands anyway (500)
-    const outcome = await runPromise;
+    const outcome = await fx.run(factory, { maxRounds: 5, maxTokens: 400, verifyConcurrency: 2 });
     assert.equal(factory.verifierSessions, 4, "budget-exhausted admission refuses the fifth");
     assert.equal(outcome.findings.length, 4, "the in-flight fourth verification lands");
     assert.equal(outcome.pendingCandidates, 1);
