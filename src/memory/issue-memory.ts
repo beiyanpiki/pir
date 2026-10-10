@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { normalizeClaimText } from "../findings/identity.js";
+import { claimOverlap, normalizeClaimText } from "../findings/identity.js";
 import { parseJsonArray, SUPPRESSION_SOURCES, type MemorySource } from "../core/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
@@ -27,6 +27,36 @@ export interface IssueMemory {
 }
 
 export type IssueDraft = Omit<IssueMemory, "id" | "anchorPaths"> & { anchorPaths?: string[] };
+
+/**
+ * Decisions that count as a historical dismissal for cross-entity signal
+ * (roadmap M1) — the same list as applyVerdict's suppressive decisions;
+ * "confirmed" is not a dismissal. Kept local to avoid a runtime cycle with
+ * core/review-state.
+ */
+const DISMISSAL_DECISIONS: readonly IssueDecision[] = ["expected", "false_positive", "accepted_risk", "wont_fix"];
+
+export interface SimilarDismissedInput {
+  category: string;
+  anchorPaths: string[];
+  normalizedClaim: string;
+}
+
+export interface SimilarDismissedSample {
+  id: string;
+  decision: IssueDecision;
+  claim: string;
+  scope: IssueScope;
+  /** Staleness is signal, not exclusion — samples carry the flag. */
+  stale: boolean;
+  overlap: number;
+}
+
+export interface SimilarDismissedResult {
+  /** Total matching dismissals; samples are the top few by overlap. */
+  count: number;
+  samples: SimilarDismissedSample[];
+}
 
 interface Row {
   id: string;
@@ -149,6 +179,45 @@ export class IssueMemoriesRepo {
         featureKey,
       )
       .map(toDomain);
+  }
+
+  /**
+   * Cross-entity dismissal signal (roadmap M1, observational): past findings
+   * that were dismissed AND resemble this candidate by shared anchor path or
+   * claim overlap. Unlike the scope-channels in matchIssueHistory, this is a
+   * straight table scan over the whole project's issues (bounded size; index
+   * only if a measured need appears) and deliberately includes stale entries
+   * — staleness is signal, not exclusion. Background context only: the result
+   * can never suppress; applyVerdict's trusted-decision + endorsement path
+   * is the sole suppression route.
+   */
+  similarDismissed(
+    input: SimilarDismissedInput,
+    opts?: { minOverlap?: number; limit?: number },
+  ): SimilarDismissedResult {
+    const minOverlap = opts?.minOverlap ?? 0.5;
+    const limit = opts?.limit ?? 3;
+    const category = normalizeClaimText(input.category);
+    const paths = new Set(input.anchorPaths);
+    const rows = this.store.all<Row>(
+      "SELECT * FROM issue_memories WHERE project_id = ?",
+      this.projectId,
+    );
+    const scored: SimilarDismissedSample[] = [];
+    for (const row of rows) {
+      const memory = toDomain(row);
+      if (!DISMISSAL_DECISIONS.includes(memory.decision)) continue;
+      if (category && normalizeClaimText(memory.category) !== category) continue;
+      const pathIntersection = memory.anchorPaths.some((path) => paths.has(path));
+      const overlap = input.normalizedClaim ? claimOverlap(memory.claim, input.normalizedClaim) : 0;
+      if (!pathIntersection && overlap < minOverlap) continue;
+      scored.push({
+        id: memory.id, decision: memory.decision, claim: memory.claim,
+        scope: memory.scope, stale: memory.stale, overlap,
+      });
+    }
+    scored.sort((a, b) => b.overlap - a.overlap || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return { count: scored.length, samples: scored.slice(0, limit) };
   }
 
   recent(limit = 50): IssueMemory[] {
