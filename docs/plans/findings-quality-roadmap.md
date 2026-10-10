@@ -14,13 +14,13 @@ acceptance criteria, and the benchmark protocol that judges them.
 Progress is tracked in issue #73; this file is re-synced to reality as
 slices land.
 
-**Status (post-Q3).** D1 (this plan + ADR 0003) merged via #74; B1 merged
-via #76; Q1 merged via #78; Q2 merged via #80; Q3 merged via #81. The
-original D1-rooted stacked-PR convention was retired when D1 merged —
-every landed slice branched off `dev` directly and later slices do the
-same (see "PR convention"; ADR 0003's process paragraph is amended to
-match). **Next slice: Q4 — persisted confidence, `--min-confidence`
-split, run-level verdict.**
+**Status (post-Q5).** D1 (this plan + ADR 0003) merged via #74; B1 merged
+via #76; Q1 merged via #78; Q2 merged via #80; Q3 merged via #81; Q4
+merged via #83; Q5 merged via #84. The original D1-rooted stacked-PR
+convention was retired when D1 merged — every landed slice branched off
+`dev` directly and later slices do the same (see "PR convention"; ADR
+0003's process paragraph is amended to match). **Next slice: C1 —
+change-mode diff coverage ledger.**
 
 ## Goals
 
@@ -70,9 +70,9 @@ split, run-level verdict.**
 | Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | merged #78 (ReviewBench row waived by the baseline deferral) | B1 (for delta rows) | S | L |
 | Q2 | Parallel verification drain (`verifyConcurrency`) | feat | merged #80 (live A/B 1.56x wall-clock, identical fingerprint sets) | — | M | M |
 | Q3 | Verifier evidence gate on `submit_verdict` | feat | merged #81 (dogfood fixed two citation gaps, F-116/F-117) | — | S–M | M |
-| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | **next** | — | M | L |
-| Q5 | Separate verifier model option | feat | pending | Q2 preferred (design carries a no-Q2 fallback) | S | L |
-| C1 | Change-mode diff coverage ledger | feat | pending | — | M | M |
+| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | merged #83 (bucketing-only split; live QA bucketed a real P1 at confidence 0.97 under `--min-confidence 0.99`; `runVerdict` on outcome/envelope/run.json) | — | M | L |
+| Q5 | Separate verifier model option | feat | merged #84 (Q2 drain seam populated; live QA: verifier transcript effective model = the override id, manifest records both models) | Q2 preferred (design carries a no-Q2 fallback) | S | L |
+| C1 | Change-mode diff coverage ledger | feat | **next** | — | M | M |
 | M1 | Memory denoising, observational (similar-dismissed context) | feat | pending | — | M | M |
 | F1 | Multi-angle finder fan-out (default-off) | feat | pending | B1 numbers, Q2 pool | L | H |
 
@@ -981,9 +981,12 @@ re-evaluation after model upgrades.
    **Q3** — merged (#81): verifier evidence gate on `submit_verdict`;
    the dogfood loop found and fixed two citation-matching gaps
    (F-116/F-117).
-5. **Q4 next** (`feat/confidence-and-run-verdict`), then Q5 → C1 → M1
-   (Q4/Q5 touch options plumbing — landing before C1/F1 reduces
-   conflicts; no semantic dependency).
+5. **Q4** — merged (#83): confidence persists end-to-end (migration v7),
+   `--min-confidence` buckets without deleting, deterministic `runVerdict`
+   lands on the outcome, envelope and run.json. **Q5** — merged (#84):
+   `--verify-model` / `PIR_VERIFIER_MODEL` populates the Q2 drain seam;
+   manifest records both models. The options-plumbing conflict window the
+   sequencing note flagged is closed — **C1 next**, then M1.
 6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
    lands before F1 (see the deferral note under "Benchmark protocol").
 7. ADR 0003 status → Accepted once Q1–Q3 have landed under the
