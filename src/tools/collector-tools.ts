@@ -160,7 +160,20 @@ export function createFinishRoundTool(outcome: RoundOutcome): ReviewTool {
 
 export interface VerdictCollector { verdict?: VerifierResult }
 
-export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[]): ReviewTool {
+/**
+ * Session-local evidence snapshot, taken when submit_verdict executes. A
+ * session with zero pinned reads and zero code-evidence calls has not
+ * examined anything — a second opinion without new evidence is exactly the
+ * hallucination pattern the evidence gate exists to stop.
+ */
+export interface VerifierEvidence {
+  /** Distinct paths pinned-read at head this session. */
+  readPaths: ReadonlySet<string>;
+  /** Code-evidence calls this session (searches, structural lookups, get_change). */
+  evidenceCalls: number;
+}
+
+export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
   const known = new Set(matchedIds ?? []);
   return {
     name: "submit_verdict",
@@ -179,6 +192,10 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         if (collector.verdict) throw new Error("submit_verdict was already submitted.");
         const verdict = member(params.verdict, VERDICTS, "verdict");
         const rationale = text(params.rationale, "rationale");
+        const seen = evidence?.();
+        if (seen && seen.readPaths.size === 0 && seen.evidenceCalls === 0) {
+          throw new Error("No evidence gathered in this session: read the candidate's code (read_code/get_change) or run a search before submitting a verdict.");
+        }
         const confidence = params.confidence === undefined ? 0.7 : params.confidence;
         if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("confidence must be a finite number from 0 to 1.");
         const codeFeedback = params.codeFeedback === undefined ? undefined : text(params.codeFeedback, "codeFeedback", 2000);

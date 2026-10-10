@@ -1,4 +1,4 @@
-import type { AgentHandle, AgentSessionFactory, SessionUsage } from "./types.js";
+import type { AgentHandle, AgentSessionFactory, ReviewTool, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
 import { auditVerifierPrompt, verifierPrompt } from "./prompts.js";
 import type { CandidateFinding, MemoryMatch, VerifierResult } from "../findings/types.js";
@@ -41,7 +41,20 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
     rationale: `verifier session error: ${error instanceof Error ? error.message : String(error)}`,
   });
   try {
-    const historyTools = createVerifierMemoryTools(deps.ctx).map((tool) => {
+    // Session-local evidence for the submit_verdict gate: only this session's
+    // pinned head reads and code-evidence calls count, the same per-session
+    // observer pattern the audit reviewer uses for coverage.
+    const pinnedReads = new Set<string>();
+    let evidenceCalls = 0;
+    const sessionCtx: ToolContext = { ...deps.ctx, readObserver: (path, revision) => { if (revision === "head") pinnedReads.add(path); } };
+    const counting = (tool: ReviewTool): ReviewTool => ({
+      ...tool,
+      async execute(params: Record<string, unknown>) {
+        evidenceCalls += 1;
+        return tool.execute(params);
+      },
+    });
+    const historyTools = createVerifierMemoryTools(sessionCtx).map((tool) => {
       if (tool.name !== "get_relevant_issue_memory") return tool;
       return { ...tool, async execute(params: Record<string, unknown>) {
         // Even an empty or failed lookup crosses the historical-feedback boundary.
@@ -50,14 +63,14 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
       } };
     });
     session = await deps.factory.createSession({
-      cwd: deps.ctx.repoRoot, systemRole: "finding verifier",
+      cwd: sessionCtx.repoRoot, systemRole: "finding verifier",
       tools: [
-        ...(deps.audit ? [] : [createGetChangeTool(deps.ctx)]),
-        createReadCodeTool(deps.ctx), createSearchTextTool(deps.ctx),
-        createFindSymbolTool(deps.ctx), createFindReferencesTool(deps.ctx),
-        createFindCallersTool(deps.ctx), createFindCalleesTool(deps.ctx),
-        ...createMemoryTools(deps.ctx), ...historyTools,
-        createSubmitVerdictTool(collector, deps.priorDecisions.map((match) => match.memoryId)),
+        ...(deps.audit ? [] : [counting(createGetChangeTool(sessionCtx))]),
+        createReadCodeTool(sessionCtx), counting(createSearchTextTool(sessionCtx)),
+        counting(createFindSymbolTool(sessionCtx)), counting(createFindReferencesTool(sessionCtx)),
+        counting(createFindCallersTool(sessionCtx)), counting(createFindCalleesTool(sessionCtx)),
+        ...createMemoryTools(sessionCtx), ...historyTools,
+        createSubmitVerdictTool(collector, deps.priorDecisions.map((match) => match.memoryId), () => ({ readPaths: pinnedReads, evidenceCalls })),
       ],
       builtinTools: [...READONLY_BUILTIN_TOOLS], model: deps.model, transcriptFile: deps.transcriptFile,
       ...(deps.onSessionEvent ? { onEvent: (event: unknown) => deps.onSessionEvent!.sdkEvent(event) } : {}),

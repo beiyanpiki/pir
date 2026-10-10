@@ -160,6 +160,7 @@ test("verifier receives full evidence, pinned revisions and current context tool
     assert.match(prompt, /SPECIAL_EVIDENCE/);
     assert.match(prompt, /pinned-merge-base/);
     assert.match(prompt, /ACTUAL_TRIGGER/);
+    await tool("get_change").execute({});
     assert.equal((await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches failure", confidence: 0.9, decisionAssessments: [{ memoryId: decision.memoryId, stillApplies: false }], codeFeedback: "must not cross memory boundary" })).terminate, true);
   });
   const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [decision] });
@@ -176,6 +177,7 @@ test("verifier cleanup errors preserve confirmed verdicts and available usage", 
   for (const options of [{ usageError: true }, { disposeError: true }, { usageError: true, disposeError: true }]) {
     warnings.length = 0;
     const f = factory(async (tool) => {
+      await tool("get_change").execute({});
       await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches a real failure", confidence: 0.9 });
     }, options);
     const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [] });
@@ -210,6 +212,7 @@ test("code feedback survives only with neither initial matches nor issue lookup"
   for (const lookup of [false, true]) {
     const f = factory(async (tool) => {
       if (lookup) await tool("get_relevant_issue_memory").execute({ claim: candidate.claim });
+      await tool("get_change").execute({});
       await tool("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_REASON", codeFeedback: "CHECK_CODE_ONLY" });
     });
     const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [] });

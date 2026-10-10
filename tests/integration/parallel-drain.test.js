@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { findIssues, auditIssues } from "../../dist/core/supervisor.js";
 import { createAppContext } from "../../dist/app/context.js";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 
 /**
  * Model-free harness for the parallel verification drain: a scripted session
@@ -114,13 +114,13 @@ function reviewerRecording(candidatesList, { needsMoreRounds = false } = {}) {
   };
 }
 
-function verifierConfirming() {
+function verifierConfirming(path = "src/pay.ts") {
   return async (tool) => {
-    await tool("submit_verdict").execute({
+    await submitVerdictWithEvidence(tool, {
       verdict: "confirmed",
       rationale: "traced the path in the test double",
       confidence: 0.9,
-    });
+    }, path);
   };
 }
 
@@ -162,7 +162,7 @@ test("parallel drain: C=4 peaks at 4 verifier sessions and lands results in admi
     verifier: async (tool, text) => {
       const candidate = list.find((c) => text.includes(c.title));
       await gates.get(candidate.title).promise;
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
     },
   });
   try {
@@ -203,7 +203,7 @@ test("parallel drain: C=4 findings equal the serial run (fingerprint, status, di
       verifier: async (tool, text) => {
         const candidate = list.find((c) => text.includes(c.title));
         await gates.get(candidate.title).promise;
-        await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+        await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
       },
     });
     const runPromise = parallelFx.run(factory, { maxRounds: 1, verifyConcurrency: 4 });
@@ -257,7 +257,7 @@ test("parallel drain: a rejected verdict frees its reserved slot for the next ca
     reviewer: reviewerRecording(list),
     verifier: async (tool, text) => {
       const verdict = text.includes(list[0].title) ? "rejected" : "confirmed";
-      await tool("submit_verdict").execute({ verdict, rationale: "checked the code", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict, rationale: "checked the code", confidence: 0.9 });
     },
   });
   try {
@@ -286,7 +286,7 @@ test("parallel drain: token budget exhaustion stops dispatching; in-flight verif
     verifier: async (tool, text) => {
       const candidate = list.find((c) => text.includes(c.title));
       await gates.get(candidate.title).promise;
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
     },
     usage: true,
   });
@@ -324,7 +324,7 @@ test("parallel drain: investigation feedback lands in admission order and keeps 
     },
     verifier: async (tool, text) => {
       const candidate = list.find((c) => text.includes(c.title));
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "confirmed",
         rationale: "traced it",
         confidence: 0.9,
@@ -438,7 +438,7 @@ test("parallel drain (audit): gated completions still land in admission order an
   const parallelFx = await auditFixture();
   try {
     const serial = await serialFx.run(
-      new DrainHarness({ reviewer: auditReviewerRecording(list), verifier: verifierConfirming() }),
+      new DrainHarness({ reviewer: auditReviewerRecording(list), verifier: verifierConfirming("src/a/util.ts") }),
       { verifyConcurrency: 1 },
     );
     const gates = new Map(list.map((c) => [c.title, deferred()]));
@@ -447,7 +447,7 @@ test("parallel drain (audit): gated completions still land in admission order an
       verifier: async (tool, text) => {
         const candidate = list.find((c) => text.includes(c.title));
         await gates.get(candidate.title).promise;
-        await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "snapshot defect", confidence: 0.9 });
+        await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "snapshot defect", confidence: 0.9 }, "src/a/util.ts");
       },
     });
     const runPromise = parallelFx.run(factory, { verifyConcurrency: 4 });
@@ -466,7 +466,7 @@ test("parallel drain (audit): gated completions still land in admission order an
 test("parallel drain (audit): maxFindings reservation holds under concurrency", async () => {
   const list = candidates(4);
   const fx = await auditFixture();
-  const factory = new DrainHarness({ reviewer: auditReviewerRecording(list), verifier: verifierConfirming() });
+  const factory = new DrainHarness({ reviewer: auditReviewerRecording(list), verifier: verifierConfirming("src/a/util.ts") });
   try {
     const outcome = await fx.run(factory, { maxFindings: 2, verifyConcurrency: 4 });
     assert.equal(factory.verifierSessions, 2);
