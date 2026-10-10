@@ -87,12 +87,16 @@ export function createReadCodeTool(ctx: ToolContext): ReviewTool {
         const lines = file.content === "" ? [] : file.content.split("\n");
         if (file.content.endsWith("\n")) lines.pop();
         const end = Math.min(requestedEnd, lines.length);
-        // Coverage observation (C1): fire once with the actual window. The
-        // range-less fire inside readReviewFile keeps the audit path-count
-        // contract (including collector evidence reads) unchanged.
-        ctx.readObserver?.(file.path, revision, { startLine: start, endLine: end });
         if (start > Math.max(1, lines.length)) throw new Error("startLine is beyond the file");
         const page = pageLines(lines, start - 1, Math.min(MAX_WINDOW, Math.max(0, end - start + 1)), charOffset, (i) => `${String(i + 1).padStart(5)}| `);
+        // Coverage observation (C1): fire with the window actually returned —
+        // read_code pages at MAX_WINDOW, so only lines the session could see
+        // count, and a call that threw returned nothing. The range-less fire
+        // inside readReviewFile keeps the audit path-count contract
+        // (including collector evidence reads) unchanged.
+        if (page.lines.length > 0) {
+          ctx.readObserver?.(file.path, revision, { startLine: start, endLine: start - 1 + page.lines.length });
+        }
         const more = page.nextOffset < end;
         const continuation = more ? { path: file.path, revision, startLine: page.nextOffset + 1, endLine: end, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;
         return bounded([provenance, `totalLines: ${lines.length}; startLine: ${start}; charOffset: ${charOffset}`, ...page.lines,

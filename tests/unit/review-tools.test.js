@@ -482,3 +482,32 @@ test("coverage observers: read_code fires with the clamped window; get_change fi
     repo.cleanup();
   }
 });
+
+test("coverage observers: read_code credits only the lines actually returned (dogfood F-120)", async () => {
+  const repo = createTempGitRepo();
+  try {
+    repo.write("big.ts", "seed\n");
+    repo.commit("base");
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
+    repo.write("big.ts", `${lines.join("\n")}\n`);
+    repo.commit("grow");
+    const reads = [];
+    const ctx = {
+      ...(await context(repo)),
+      readObserver: (p, revision, range) => reads.push({ path: p, revision, range }),
+    };
+    const read = createReadCodeTool(ctx);
+    // Default whole-file request: read_code returns one 240-line page, so
+    // only that page is a read — not the requested 300-line window.
+    await read.execute({ path: "big.ts" });
+    const last = reads.at(-1);
+    assert.deepEqual(last.range, { startLine: 1, endLine: 240 });
+    // A call that returns nothing must not credit any window.
+    const rangedBefore = reads.filter((r) => r.range !== undefined).length;
+    await read.execute({ path: "big.ts", startLine: 5, charOffset: 999999 });
+    await read.execute({ path: "big.ts", startLine: 5000 });
+    assert.equal(reads.filter((r) => r.range !== undefined).length, rangedBefore);
+  } finally {
+    repo.cleanup();
+  }
+});
