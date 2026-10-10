@@ -1,3 +1,4 @@
+import { SEVERITY_ORDER } from "../findings/types.js";
 import type { CandidateFinding, MemoryMatch, VerifiedFinding, VerifierResult } from "../findings/types.js";
 import type { IssueDecision } from "../memory/issue-memory.js";
 
@@ -58,6 +59,23 @@ export function reportedCount(state: ReviewState): number {
   return state.verified.filter((f) => f.status === "confirmed" || f.status === "uncertain").length;
 }
 
+/**
+ * Deterministic run-level verdict (roadmap Q4) — computed from the verified
+ * findings alone, no extra session. Mirrors Codex's overall_correctness:
+ * style findings never flip "incorrect" (a P0 style nit is still not a
+ * broken change), and decision-suppressed findings are not reported, so
+ * they cannot move the verdict.
+ */
+export type RunVerdict = "incorrect" | "correct-with-findings" | "needs-review" | "correct";
+
+export function computeRunVerdict(state: ReviewState): RunVerdict {
+  const confirmed = state.verified.filter((f) => f.status === "confirmed");
+  if (confirmed.some((f) => f.category !== "style" && SEVERITY_ORDER[f.severity] <= 1)) return "incorrect";
+  if (confirmed.length > 0) return "correct-with-findings";
+  if (state.verified.some((f) => f.status === "uncertain")) return "needs-review";
+  return "correct";
+}
+
 export function applyVerdict(
   state: ReviewState,
   candidate: CandidateFinding,
@@ -106,6 +124,7 @@ export function applyVerdict(
     status,
     verifierRationale: verdict.rationale,
     memoryMatches: annotated,
+    confidence: verdict.confidence,
   };
   state.verified.push(finding);
   return finding;

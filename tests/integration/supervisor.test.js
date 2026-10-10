@@ -852,3 +852,86 @@ test("applyVerdict: endorsed confirmed decision keeps the verifier status; suppr
   );
   assert.equal(suppressed.status, "accepted_risk");
 });
+
+test("findIssues: min-confidence buckets low-confidence confirmed findings and computes the run verdict (Q4)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  let verdictIndex = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      for (let i = 1; i <= 2; i++) {
+        await tool("record_candidate").execute({
+          title: `issue ${i}`,
+          claim: `claim ${i}: the quota path ${i} skips its guard`,
+          trigger: `trigger ${i}`,
+          category: "correctness",
+          severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+        });
+      }
+      await tool("finish_round").execute({ summary: "two issues", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      verdictIndex += 1;
+      // First candidate below the threshold (bucketed); second exactly at the
+      // threshold (not bucketed — the boundary is exclusive).
+      await submitVerdictWithEvidence(tool, {
+        verdict: "confirmed", rationale: "traced it", confidence: verdictIndex === 1 ? 0.4 : 0.7,
+      });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { minConfidence: 0.7 },
+    });
+    // Bucketing only: both stay reported confirmed findings.
+    assert.equal(outcome.findings.length, 2);
+    assert.ok(outcome.findings.every((f) => f.status === "confirmed"));
+    assert.equal(outcome.minConfidence, 0.7);
+    assert.equal(outcome.lowConfidenceFindings.length, 1);
+    assert.equal(outcome.lowConfidenceFindings[0].displayId, outcome.findings[0].displayId);
+    // Confidence persists with the row (insert round-trip through the store).
+    const repersisted = ctx.memory.findings.get(outcome.lowConfidenceFindings[0].id);
+    assert.equal(repersisted.confidence, 0.4);
+    assert.equal(ctx.memory.findings.get(outcome.findings[1].id).confidence, 0.7);
+    // A confirmed non-style P1 makes the run verdict deterministic.
+    assert.equal(outcome.runVerdict, "incorrect");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: without min-confidence nothing is bucketed and a clean run verifies correct (Q4)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("finish_round").execute({ summary: "nothing found", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: {},
+    });
+    assert.equal(outcome.findings.length, 0);
+    assert.deepEqual(outcome.lowConfidenceFindings, []);
+    assert.equal(outcome.minConfidence, 0);
+    assert.equal(outcome.runVerdict, "correct");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
