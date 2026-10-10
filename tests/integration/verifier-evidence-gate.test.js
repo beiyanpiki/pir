@@ -195,20 +195,64 @@ test("evidence gate stage 2: a rationale citing an unread path is rejected until
   }
 });
 
-test("evidence gate stage 2: path tokens without line numbers and quoted citations both match", async () => {
-  const fx = await fixture();
-  const factory = scriptedFactory(async ({ tools }) => {
-    await tools("read_code").execute({ path: "src/pay.ts" });
-    const accepted = await tools("submit_verdict").execute({
-      verdict: "rejected", rationale: '`src/pay.ts` shows the guard fires first; no defect', confidence: 0.9,
-    });
-    assert.equal(accepted.terminate, true, "a bare backticked path with no :line still counts as a citation");
-  });
+test("evidence gate stage 2: extension-less, root-dotfile, and spaced read paths are citable (dogfood F-116)", async () => {
+  const repo = createTempGitRepo("pir-evidence-gate-paths-");
+  repo.write("Makefile", "build:\n\tnode build.js\n");
+  repo.write(".gitignore", "node_modules/\n");
+  repo.write("docs/my notes.md", "# notes\n");
+  const head = repo.commit("odd paths");
+  const ctx = {
+    repoRoot: repo.dir,
+    headCommit: head,
+    changeSet: { baseCommit: head, headCommit: head, mergeBase: head, files: [], patch: "" },
+    codeMap: { structuralQueries: false },
+    memory: null,
+  };
+  const oddCandidate = {
+    title: "build step swallows failures",
+    claim: "the build rule swallows the compiler exit code",
+    trigger: "make build with a failing compile",
+    category: "correctness",
+    severity: "P1",
+    anchors: [{ path: "Makefile", startLine: 2 }],
+    identity: buildIdentity({ category: "correctness", claim: "the build rule swallows the compiler exit code", trigger: "make build with a failing compile" }),
+  };
   try {
-    const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
-    assert.equal(result.verdict, "rejected");
+    // No dot at all: a token grammar can never represent "Makefile", but the
+    // gate must accept the rationale citing the file it actually read.
+    const makeFactory = scriptedFactory(async ({ tools }) => {
+      await tools("read_code").execute({ path: "Makefile" });
+      const accepted = await tools("submit_verdict").execute({
+        verdict: "confirmed", rationale: "the build rule at Makefile:2 swallows the compiler exit code", confidence: 0.9,
+      });
+      assert.equal(accepted.terminate, true);
+    });
+    const makeResult = await runVerifier({ factory: makeFactory, ctx, candidate: oddCandidate, priorDecisions: [] });
+    assert.equal(makeResult.verdict, "confirmed");
+
+    // The only dot is the leading one: ".gitignore" defeats prefix+extension grammars.
+    const dotfileFactory = scriptedFactory(async ({ tools }) => {
+      await tools("read_code").execute({ path: ".gitignore" });
+      const accepted = await tools("submit_verdict").execute({
+        verdict: "rejected", rationale: ".gitignore already excludes the generated path", confidence: 0.9,
+      });
+      assert.equal(accepted.terminate, true);
+    });
+    const dotfileResult = await runVerifier({ factory: dotfileFactory, ctx, candidate: oddCandidate, priorDecisions: [] });
+    assert.equal(dotfileResult.verdict, "rejected");
+
+    // Spaces are outside any path-token class; verbatim substring still cites.
+    const spacedFactory = scriptedFactory(async ({ tools }) => {
+      await tools("read_code").execute({ path: "docs/my notes.md" });
+      const accepted = await tools("submit_verdict").execute({
+        verdict: "rejected", rationale: 'the documented contract in "docs/my notes.md" contradicts the claim', confidence: 0.9,
+      });
+      assert.equal(accepted.terminate, true);
+    });
+    const spacedResult = await runVerifier({ factory: spacedFactory, ctx, candidate: oddCandidate, priorDecisions: [] });
+    assert.equal(spacedResult.verdict, "rejected");
   } finally {
-    fx.cleanup();
+    repo.cleanup();
   }
 });
 

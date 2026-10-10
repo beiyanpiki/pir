@@ -173,8 +173,22 @@ export interface VerifierEvidence {
   evidenceCalls: number;
 }
 
-/** path[:line] token in a rationale; the optional line suffix is not part of the path. */
-const RATIONALE_PATH_TOKEN = /[A-Za-z0-9._\-/]+\.[A-Za-z0-9]+(?::\d+)?/g;
+/**
+ * Whether the rationale cites the pinned-read path verbatim. A read path may
+ * have no token grammar at all — Dockerfile/Makefile (no dot), .gitignore
+ * (leading dot), paths with spaces — so this is a substring search, guarded
+ * only against matching inside a longer path-like token (reading "a.ts" must
+ * not be satisfied by the rationale mentioning "meta.tsconfig").
+ */
+function citesReadPath(rationale: string, readPath: string): boolean {
+  let idx = rationale.indexOf(readPath);
+  while (idx !== -1) {
+    const before = idx === 0 ? "" : rationale[idx - 1]!;
+    if (!/[A-Za-z0-9._\-/]/.test(before)) return true;
+    idx = rationale.indexOf(readPath, idx + 1);
+  }
+  return false;
+}
 
 export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
   const known = new Set(matchedIds ?? []);
@@ -200,13 +214,12 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
           throw new Error("No evidence gathered in this session: read the candidate's code (read_code/get_change) or run a search before submitting a verdict.");
         }
         if (evidenceSeen && evidenceSeen.readPaths.size === 0) {
-          throw new Error("No pinned read in this session: read the candidate's code with read_code, then cite the read path as path:line in the rationale.");
+          throw new Error("No pinned read in this session: read the candidate's code with read_code, then mention the read path in the rationale.");
         }
         if (evidenceSeen) {
-          const citesReadPath = (rationale.match(RATIONALE_PATH_TOKEN) ?? [])
-            .some((token) => evidenceSeen.readPaths.has(token.replace(/:\d+$/, "")));
-          if (!citesReadPath) {
-            throw new Error("The rationale cites no pinned-read path: read the relevant code with read_code and cite it as path:line in the rationale.");
+          const cited = [...evidenceSeen.readPaths].some((readPath) => citesReadPath(rationale, readPath));
+          if (!cited) {
+            throw new Error("The rationale cites no pinned-read path: read the relevant code with read_code and mention the read path in the rationale.");
           }
         }
         const confidence = params.confidence === undefined ? 0.7 : params.confidence;
