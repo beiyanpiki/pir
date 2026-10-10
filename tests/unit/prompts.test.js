@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reviewerPrompt, verifierPrompt, doNotReportLines } from "../../dist/agents/prompts.js";
+import { reviewerPrompt, verifierPrompt, auditVerifierPrompt, doNotReportLines } from "../../dist/agents/prompts.js";
 import { runReviewerRound, ReviewerRoundError } from "../../dist/agents/reviewer.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { runVerifier } from "../../dist/agents/verifier.js";
@@ -263,3 +263,39 @@ test("verifier classifies missing verdict and provider/session errors, retaining
     else assert.equal(result.usage, undefined);
   }
 });
+
+test("verifier prompt: SIMILAR DISMISSED HISTORY renders only on warm memory (M1)", () => {
+  const base = { candidate, head: "head-sha", priorDecisions: [], fixHistory: [], structuralQueries: false };
+  const cold = verifierPrompt(base);
+  assert.ok(!cold.includes("SIMILAR DISMISSED HISTORY"));
+  assert.ok(!verifierPrompt({ ...base, similarDismissed: { count: 0, samples: [] } }).includes("SIMILAR DISMISSED HISTORY"));
+
+  const warm = verifierPrompt({
+    ...base,
+    similarDismissed: {
+      count: 2,
+      samples: [
+        { id: "mem-1", decision: "false_positive", claim: "similar earlier claim", scope: "project", stale: false, overlap: 0.7 },
+        { id: "mem-2", decision: "wont_fix", claim: "another similar claim", scope: "feature", stale: true, overlap: 0.55 },
+      ],
+    },
+  });
+  assert.match(warm, /SIMILAR DISMISSED HISTORY \(background signal, not a decision\): 2 earlier findings judged false_positive, wont_fix resemble this candidate\./);
+  assert.match(warm, /"id":"mem-1"/);
+  assert.match(warm, /"stale":true/);
+  assert.match(warm, /suppression still requires your explicit stillApplies endorsement of a matched decision\./);
+  // The block sits with the other memory context, before FIX HISTORY.
+  assert.ok(warm.indexOf("SIMILAR DISMISSED HISTORY") < warm.indexOf("FIX HISTORY"));
+});
+
+test("audit verifier prompt: SIMILAR DISMISSED HISTORY renders the same block (M1)", () => {
+  const cold = auditVerifierPrompt({ candidate, head: "head-sha", priorDecisions: [], fixHistory: [], structuralQueries: false });
+  assert.ok(!cold.includes("SIMILAR DISMISSED HISTORY"));
+  const warm = auditVerifierPrompt({
+    candidate, head: "head-sha", priorDecisions: [], fixHistory: [], structuralQueries: false,
+    similarDismissed: { count: 1, samples: [{ id: "mem-9", decision: "expected", claim: "c", scope: "project", stale: false, overlap: 0.9 }] },
+  });
+  assert.match(warm, /SIMILAR DISMISSED HISTORY \(background signal, not a decision\): 1 earlier findings judged expected resemble this candidate\./);
+  assert.match(warm, /suppression still requires your explicit stillApplies endorsement of a matched decision\./);
+});
+
