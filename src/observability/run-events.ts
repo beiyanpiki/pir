@@ -397,6 +397,8 @@ export interface RunManifest {
   base: string | null;
   head: string;
   model: string | null;
+  /** Q5: the separate verifier model when set; null = verifiers used `model`. */
+  verifierModel: string | null;
   startedAt: number;
   finishedAt: number;
   stoppedBecause: string;

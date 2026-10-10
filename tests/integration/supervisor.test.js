@@ -935,3 +935,87 @@ test("findIssues: without min-confidence nothing is bucketed and a clean run ver
     repo.cleanup();
   }
 });
+
+test("findIssues: --verify-model routes verifier sessions to a separate model and lands on the manifest (Q5)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "one issue", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { model: "reviewer/model", verifierModel: "verifier/model" },
+    });
+    const reviewers = factory.createdSessions.filter((s) => s.config.systemRole === "code reviewer");
+    const verifiers = factory.createdSessions.filter((s) => s.config.systemRole === "finding verifier");
+    assert.equal(reviewers.length, 1);
+    assert.equal(reviewers[0].config.model, "reviewer/model");
+    assert.equal(verifiers.length, 1);
+    assert.equal(verifiers[0].config.model, "verifier/model");
+    // The run manifest records both models (Q5).
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    assert.equal(manifest.model, "reviewer/model");
+    assert.equal(manifest.verifierModel, "verifier/model");
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: without --verify-model verifier sessions use the reviewer model (Q5 fallback)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "one issue", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { model: "reviewer/model" },
+    });
+    const verifiers = factory.createdSessions.filter((s) => s.config.systemRole === "finding verifier");
+    assert.equal(verifiers.length, 1);
+    assert.equal(verifiers[0].config.model, "reviewer/model");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
