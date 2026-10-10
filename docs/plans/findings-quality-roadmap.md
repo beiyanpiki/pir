@@ -107,6 +107,13 @@ Two measurement surfaces, one per cost tier:
   The real-world gate: the 2× test-25 baseline on dev plus delta rows
   appended by each behavioral PR — currently deferred, see below.
 
+Standing rules for both surfaces and the post-baseline delta-row era:
+
+- **Variance discipline:** any "no regression" claim on recall/precision
+  requires both runs not worse than baseline's worse run.
+- **Cost:** ReviewBench subset-10 is the iteration surface; full test-25
+  only for baseline and release-ish claims.
+
 **B1-baseline deferral (maintainer decision, recorded in #73):** the 2×
 test-25 baseline on dev is deferred until development completes. Until it
 lands, behavioral PRs are gated by the scenario harness alone. The
@@ -131,11 +138,6 @@ consequences, stated honestly rather than pretended away:
   for that half; F1's clauses stand (it merges post-baseline).
 - `tests/eval/reviewbench/RESULTS.md` and the harness README carry the
   same notice so a contributor opening either sees it.
-
-- **Variance discipline:** any "no regression" claim on recall/precision
-  requires both runs not worse than baseline's worse run.
-- **Cost:** ReviewBench subset-10 is the iteration surface; full test-25
-  only for baseline and release-ish claims.
 
 ---
 
