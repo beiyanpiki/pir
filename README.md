@@ -204,6 +204,17 @@ verifier sessions in parallel during each verification drain, for both find
 and audit. Reported findings never exceed `--max-findings` even when
 verifications race, and finding order stays deterministic.
 
+Each verifier self-assesses a 0–1 confidence, persisted with the finding and
+included in JSON results as `confidence`. `--min-confidence <x>` (0–1,
+default 0 = off; `PIR_MIN_CONFIDENCE` env when the flag is absent) buckets
+confirmed findings below the threshold into a separate `lowConfidenceFindings`
+list and a low-confidence section of the text report. Bucketing only: the
+findings stay reported, still count toward `--max-findings`, and the exit-code
+contract is unchanged. Every review also computes a deterministic
+`runVerdict` — `incorrect` (any confirmed non-style P0/P1),
+`correct-with-findings`, `needs-review` (uncertain, nothing confirmed), or
+`correct` — on the JSON result and the run manifest.
+
 Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.

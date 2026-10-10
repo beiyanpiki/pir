@@ -147,6 +147,8 @@ pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 
 验证默认串行。`--verify-concurrency <n>`（1–8，默认 1；未传 flag 时读 `PIR_VERIFY_CONCURRENCY` 环境变量）让每轮验证排空最多并行运行 n 个 verifier 会话，find 与 audit 均适用。即使验证并发竞争，报告的 findings 数也不会超过 `--max-findings`，且 findings 顺序保持确定。
 
+每个 verifier 会对结论给出 0–1 的置信度，随 finding 一起持久化，并在 JSON 结果中以 `confidence` 输出。`--min-confidence <x>`（0–1，默认 0 即关闭；未传 flag 时读 `PIR_MIN_CONFIDENCE` 环境变量）把置信度低于阈值的 confirmed findings 分桶到单独的 `lowConfidenceFindings` 列表和文本报告的 low-confidence 分节。这只是分桶呈现：finding 仍然照常报告、照常计入 `--max-findings`，退出码契约不变。每次评审还会计算一个确定性的 `runVerdict`——`incorrect`（存在 confirmed 的非 style P0/P1）、`correct-with-findings`、`needs-review`（只有 uncertain）或 `correct`——随 JSON 结果与 run manifest 一起输出。
+
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。
 
 ## 输出协议
