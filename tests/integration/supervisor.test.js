@@ -1176,3 +1176,90 @@ test("findIssues: reviewer reads survive a failure thrown after the reviewer rou
     repo.cleanup();
   }
 });
+
+test("findIssues: cold memory keeps the verifier prompt free of dismissal context (M1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const verifierPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "one issue", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool, promptText) => {
+      verifierPrompts.push(promptText);
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} });
+    assert.equal(verifierPrompts.length, 1);
+    assert.ok(!verifierPrompts[0].includes("SIMILAR DISMISSED HISTORY"));
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: warm memory surfaces cross-entity dismissals in the verifier prompt (M1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  // A dismissal recorded against the same anchor path but a different claim
+  // and no fingerprint: only the M1 cross-entity channel can surface it.
+  ctx.memory.issues.insert({
+    featureKey: null,
+    entityKey: null,
+    fingerprint: null,
+    category: "correctness",
+    claim: "a completely different historical note about billing retries",
+    trigger: "unrelated trigger",
+    decision: "false_positive",
+    priority: null,
+    rationale: "team assessed",
+    scope: "project",
+    source: "user_explicit",
+    createdAtCommit: null,
+    validUntilCommit: null,
+    stale: false,
+    anchorPaths: ["src/pay.ts"],
+  });
+  const verifierPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "one issue", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool, promptText) => {
+      verifierPrompts.push(promptText);
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} });
+    assert.equal(verifierPrompts.length, 1);
+    assert.match(verifierPrompts[0], /SIMILAR DISMISSED HISTORY \(background signal, not a decision\): 1 earlier findings judged false_positive resemble this candidate\./);
+    assert.match(verifierPrompts[0], /suppression still requires your explicit stillApplies endorsement/);
+    // Observational: the finding still verifies and reports normally.
+    assert.equal(outcome.findings.length, 1);
+    assert.equal(outcome.findings[0].status, "confirmed");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});

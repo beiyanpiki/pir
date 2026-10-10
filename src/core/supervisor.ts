@@ -241,10 +241,18 @@ async function verifyOne(deps: DrainDeps, candidate: CandidateFinding): Promise<
     memoryId: m.id, decision: m.decision, scope: m.scope, source: m.source, claim: m.claim,
     rationale: m.rationale, trigger: m.trigger, stale: m.stale,
   }));
+  // Cross-entity dismissal signal (M1, observational): computed once per
+  // candidate before dispatch; background context for the verifier prompt,
+  // never a suppression input.
+  const similarDismissed = deps.memory.issues.similarDismissed({
+    category: candidate.category,
+    anchorPaths: [...new Set(candidate.anchors.map((a) => a.path))],
+    normalizedClaim: candidate.identity.normalizedClaim,
+  });
   const transcriptName = `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`;
   const model = deps.verifierModel ?? deps.model;
   const verdict = await runVerifier({
-    factory: deps.factory, ctx: deps.ctx, candidate, priorDecisions: memoryMatches, model,
+    factory: deps.factory, ctx: deps.ctx, candidate, priorDecisions: memoryMatches, similarDismissed, model,
     ...(deps.audit ? { audit: true } : {}),
     languageGuidance: deps.verifierGuidance,
     transcriptFile: deps.transcriptDir ? path.join(deps.transcriptDir, transcriptName) : undefined,
