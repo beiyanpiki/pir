@@ -19,6 +19,7 @@ import {
 import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
+import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
 import {
   feedback,
   feedbackPriority,
@@ -80,6 +81,10 @@ Usage:
                       out — nothing is padded to reach it. "unlimited"
                       removes the cap (#57; remote needs a same-version
                       server)
+  --verify-concurrency <n>
+                      parallel verifier sessions during each verification
+                      drain (1-8, default 1; PIR_VERIFY_CONCURRENCY env
+                      applies when the flag is absent)
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -105,6 +110,10 @@ Usage:
                       unlimited unless set (rounds and findings still cap)
   --max-findings <n>  whole-run cap on reported findings (default 10);
                       "unlimited" removes it (#57)
+  --verify-concurrency <n>
+                      parallel verifier sessions during each verification
+                      drain (1-8, default 1; PIR_VERIFY_CONCURRENCY env
+                      applies when the flag is absent)
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
   --dry-run           preview the scope a real audit of the same tree and
                       options would take (#56): head/tree ids, selection and
@@ -340,6 +349,7 @@ export const VALUE_FLAGS = new Set([
   "--max-rounds",
   "--max-tokens",
   "--max-findings",
+  "--verify-concurrency",
   "--fail-on",
   "--model",
   "--provider",
@@ -826,6 +836,28 @@ export function maxFindingsFlag(flags: Map<string, string | boolean>): number | 
 }
 
 /**
+ * --verify-concurrency: parallel verifier sessions during a verification
+ * drain. Precedence: flag > PIR_VERIFY_CONCURRENCY env > undefined (the
+ * supervisor applies the default of 1). Bounded 1–MAX_VERIFY_CONCURRENCY so
+ * a bad value fails as a usage error instead of deep in a run.
+ */
+export function verifyConcurrencyFlag(
+  flags: Map<string, string | boolean>,
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = flags.get("--verify-concurrency") ?? env.PIR_VERIFY_CONCURRENCY;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new UsageError(`invalid --verify-concurrency: a value is required (integer 1-${MAX_VERIFY_CONCURRENCY})`);
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_VERIFY_CONCURRENCY) {
+    throw new UsageError(`invalid --verify-concurrency: ${raw} (integer 1-${MAX_VERIFY_CONCURRENCY} required)`);
+  }
+  return value;
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -904,6 +936,7 @@ async function cmdFind(
     maxRounds: positiveIntFlag(flags, "--max-rounds"),
     maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
+    verifyConcurrency: verifyConcurrencyFlag(flags),
     model: flags.get("--model") as string | undefined,
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
@@ -1004,7 +1037,7 @@ async function cmdAudit(
   // no model, no writes. Run-shaping flags cannot affect a preview, so they
   // are rejected instead of silently ignored.
   if (flags.get("--dry-run") === true) {
-    for (const shaping of ["--max-tokens", "--max-findings", "--fail-on"]) {
+    for (const shaping of ["--max-tokens", "--max-findings", "--verify-concurrency", "--fail-on"]) {
       if (flags.has(shaping)) {
         throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
       }
@@ -1025,6 +1058,7 @@ async function cmdAudit(
     skipGlobs,
     maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
+    verifyConcurrency: verifyConcurrencyFlag(flags),
     model: flags.get("--model") as string | undefined,
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),

@@ -145,6 +145,8 @@ pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 
 `--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
 
+验证默认串行。`--verify-concurrency <n>`（1–8，默认 1；未传 flag 时读 `PIR_VERIFY_CONCURRENCY` 环境变量）让每轮验证排空最多并行运行 n 个 verifier 会话，find 与 audit 均适用。即使验证并发竞争，报告的 findings 数也不会超过 `--max-findings`，且 findings 顺序保持确定。
+
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。
 
 ## 输出协议
