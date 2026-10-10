@@ -125,8 +125,12 @@ consequences, stated honestly rather than pretended away:
   deferral (see the ADR's Status section): Q1–Q3 merged under the
   scenario-harness gate, the baseline era opened, F1's A/B rows
   non-regressing.
-- `tests/eval/reviewbench/RESULTS.md` carries the same notice so a
-  contributor opening the row registry sees it.
+- Blanket rule for the per-slice sections below: where an acceptance or
+  QA clause cites a ReviewBench delta row and the slice lands
+  pre-baseline (Q2–M1), the scenario-harness variance bar substitutes
+  for that half; F1's clauses stand (it merges post-baseline).
+- `tests/eval/reviewbench/RESULTS.md` and the harness README carry the
+  same notice so a contributor opening either sees it.
 
 - **Variance discipline:** any "no regression" claim on recall/precision
   requires both runs not worse than baseline's worse run.
@@ -596,7 +600,9 @@ negligible).
 
 Tests green; live transcripts show the gate never silently passing; no
 increase in `uncertain`/`missing-verdict` rates beyond noise in the
-benchmark delta row.
+benchmark delta row. (Pre-baseline slice — the ReviewBench half is
+waived per the deferral note; the scenario-harness variance bar
+substitutes.)
 
 ---
 
@@ -797,7 +803,9 @@ uncovered hunks and (stage 2) a forced follow-up round in the round log.
 ### Acceptance
 
 Tests green; live QA recorded; benchmark delta row (expected: recall trend
-up on `diff-only` golden findings; precision unchanged).
+up on `diff-only` golden findings; precision unchanged). (Pre-baseline
+slice — the ReviewBench half is waived per the deferral note; the
+scenario-harness variance bar substitutes.)
 
 ---
 
@@ -870,7 +878,8 @@ no-op there — expected and asserted in tests).
 Tests green; live QA recorded; benchmark delta row (cold-memory tasks
 expected unchanged — the row documents the no-op, the mechanism's value is
 for warm-memory production use and later benchmarking on pir's own
-history).
+history). (Pre-baseline slice — the ReviewBench half is waived per the
+deferral note; the scenario-harness variance bar substitutes.)
 
 ---
 
