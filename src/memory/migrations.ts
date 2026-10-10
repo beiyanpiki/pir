@@ -288,4 +288,14 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE review_runs ADD COLUMN updated_at INTEGER`,
     ],
   },
+  {
+    version: 7,
+    statements: [
+      // Verifier confidence (roadmap Q4): the verifier's 0–1 self-assessment
+      // survives applyVerdict and persists with the finding, so reporting can
+      // bucket on it (--min-confidence). Nullable: rows persisted before this
+      // column have no confidence on record.
+      `ALTER TABLE findings ADD COLUMN confidence REAL`,
+    ],
+  },
 ];

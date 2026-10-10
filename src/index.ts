@@ -23,6 +23,8 @@ export { detectPacks, loadBuiltInPacks, renderGuidance, resolveLanguagePacks } f
 export type { ActivePack, LanguagePack, PluginSelection } from "./plugins/index.js";
 export { findIssues, auditIssues, AuditScopeError } from "./core/supervisor.js";
 export type { FindOptions, FindOutcome, AuditOptions, AuditOutcome } from "./core/supervisor.js";
+export { computeRunVerdict } from "./core/review-state.js";
+export type { RunVerdict } from "./core/review-state.js";
 export type { ReviewTarget } from "./core/review-target.js";
 export { buildRepoSnapshot, pathMatchesGlob, MAX_AUDIT_FILE_BYTES } from "./changes/snapshot.js";
 export type { RepoSnapshot, AuditScope, ScopedEntry, TreeEntry } from "./changes/snapshot.js";

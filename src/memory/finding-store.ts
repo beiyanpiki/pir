@@ -20,6 +20,8 @@ export interface FindingRow {
   anchors: string;
   memoryMatches: string;
   verifierRationale: string | null;
+  /** Verifier 0–1 self-assessment; null for rows persisted before Q4. */
+  confidence: number | null;
   round: number;
   createdAt: number;
   updatedAt: number;
@@ -98,6 +100,7 @@ function rawToRow(raw: Record<string, unknown>): FindingRow {
     anchors: String(raw.anchors ?? "[]"),
     memoryMatches: String(raw.memory_matches ?? "[]"),
     verifierRationale: (raw.verifier_rationale as string | null) ?? null,
+    confidence: (raw.confidence as number | null) ?? null,
     round: Number(raw.round),
     createdAt: Number(raw.created_at),
     updatedAt: Number(raw.updated_at),
@@ -124,8 +127,8 @@ export class FindingStore {
     const displayId = this.nextDisplayId();
     const now = Date.now();
     this.store.run(
-      `INSERT INTO findings (id, project_id, run_id, display_id, fingerprint, title, claim, trigger, category, severity, status, feature_key, entity_key, anchors, memory_matches, verifier_rationale, round, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO findings (id, project_id, run_id, display_id, fingerprint, title, claim, trigger, category, severity, status, feature_key, entity_key, anchors, memory_matches, verifier_rationale, confidence, round, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       id,
       this.projectId,
       runId,
@@ -142,6 +145,7 @@ export class FindingStore {
       JSON.stringify(finding.anchors ?? []),
       JSON.stringify(finding.memoryMatches ?? []),
       finding.verifierRationale ?? null,
+      finding.confidence ?? null,
       finding.round,
       now,
       now,
@@ -178,6 +182,7 @@ export class FindingStore {
       anchors: JSON.stringify(finding.anchors ?? []),
       memoryMatches: JSON.stringify(finding.memoryMatches ?? []),
       verifierRationale: finding.verifierRationale ?? null,
+      confidence: finding.confidence ?? null,
       round: finding.round,
       createdAt: now,
       updatedAt: now,
@@ -394,10 +399,11 @@ export class FindingStore {
   updateVerified(id: string, finding: VerifiedFinding): FindingRow | null {
     const now = Date.now();
     this.store.run(
-      "UPDATE findings SET status = ?, verifier_rationale = ?, memory_matches = ?, updated_at = ? WHERE id = ?",
+      "UPDATE findings SET status = ?, verifier_rationale = ?, memory_matches = ?, confidence = ?, updated_at = ? WHERE id = ?",
       finding.status,
       finding.verifierRationale ?? null,
       JSON.stringify(finding.memoryMatches ?? []),
+      finding.confidence ?? null,
       now,
       id,
     );

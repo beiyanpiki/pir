@@ -210,6 +210,7 @@ Limits:
 | `--max-rounds N` | `2` for `find`; includes verification-only rounds |
 | `--max-tokens N` | unlimited unless set; checked between sessions |
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
+| `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |
@@ -244,6 +245,12 @@ For review results, inspect these fields in order:
 2. `data.incomplete`, `stoppedBecause`, `verificationErrors`,
    `uncertaintyReasons`, and audit `incompleteReasons`: assess completion.
 3. `data.findings`: select reported statuses and retain verifier rationale.
+   With `--min-confidence` set, `data.lowConfidenceFindings` lists the
+   confirmed findings below the threshold (they also remain in `findings`),
+   and `data.runVerdict` gives the deterministic run-level verdict:
+   `incorrect` (any confirmed non-style P0/P1), `correct-with-findings`
+   (other confirmed), `needs-review` (uncertain, nothing confirmed), or
+   `correct`.
 4. `data.pendingCandidates` and `pendingFindings`: list unresolved work.
 5. Audit `data.coverage` and `suspectedDuplicates`: account for scope.
 6. `usage`, `usageComplete`, `estimatedTokens`, and `durationMs`: report
@@ -257,6 +264,7 @@ featureKey, entityKey
 anchors: [{ path, startLine, endLine? }]
 evidence: [{ kind, path?, startLine?, excerpt?, description? }]
 verifierRationale, memoryMatches, round, createdAt
+confidence: verifier self-assessment 0–1 (null when not on record)
 ```
 
 Status handling:

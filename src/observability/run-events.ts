@@ -401,6 +401,8 @@ export interface RunManifest {
   finishedAt: number;
   stoppedBecause: string;
   incomplete: boolean;
+  /** Deterministic run-level verdict from the verified findings (Q4). */
+  runVerdict: "incorrect" | "correct-with-findings" | "needs-review" | "correct";
   /** Null = the run reported without a findings cap (#57). */
   maxFindings: number | null;
   /** Explicit cap policy alongside maxFindings (#57). */

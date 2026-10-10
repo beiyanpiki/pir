@@ -43,6 +43,8 @@ export interface FindingView {
   evidence: Array<{ kind: string; path?: string; startLine?: number; excerpt?: string; description?: string }>;
   memoryMatches: MemoryMatch[];
   verifierRationale: string | null;
+  /** Verifier 0–1 self-assessment; null when no confidence is on record. */
+  confidence: number | null;
   round: number;
   createdAt: number;
 }
@@ -63,6 +65,7 @@ export function toFindingView(ctx: AppContext, row: FindingRow): FindingView {
     evidence: ctx.memory.findings.evidence(row.id),
     memoryMatches: ctx.memory.findings.memoryMatches(row),
     verifierRationale: row.verifierRationale,
+    confidence: row.confidence,
     round: row.round,
     createdAt: row.createdAt,
   };

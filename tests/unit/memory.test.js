@@ -548,3 +548,99 @@ test("bootstrap replaces obsolete agent-generated entries while user-added entri
     repo.cleanup();
   }
 });
+
+test("verifier confidence round-trips through insert/get/updateVerified (Q4)", async () => {
+  const repo = createTempGitRepo();
+  const memory = await openMemory(repo);
+  try {
+    const identity = buildIdentity({
+      featureKey: "conf-flow",
+      entityKey: "E.conf",
+      category: "correctness",
+      claim: "confident claim",
+      trigger: "t",
+    });
+    const base = {
+      title: "confident finding",
+      claim: "confident claim",
+      trigger: "t",
+      category: "correctness",
+      severity: "P1",
+      featureKey: "conf-flow",
+      entityKey: "E.conf",
+      anchors: [],
+      evidence: [],
+      round: 1,
+      identity,
+      status: "confirmed",
+      memoryMatches: [],
+    };
+    const inserted = memory.findings.insert({ ...base, confidence: 0.82 }, "run-q4");
+    assert.equal(inserted.confidence, 0.82);
+    const fetched = memory.findings.get(inserted.id);
+    assert.equal(fetched.confidence, 0.82);
+
+    // The audit checkpoint path rewrites the same row including confidence.
+    const updated = memory.findings.updateVerified(inserted.id, {
+      status: "confirmed", verifierRationale: "re-checked", memoryMatches: [], confidence: 0.64,
+    });
+    assert.equal(updated.confidence, 0.64);
+
+    // A finding without confidence (e.g. a pending candidate) persists as null.
+    const bare = memory.findings.insert({ ...base, claim: "bare claim", identity: buildIdentity({
+      featureKey: "conf-flow", entityKey: "E.bare", category: "correctness", claim: "bare claim", trigger: "t",
+    }) }, "run-q4");
+    assert.equal(bare.confidence, null);
+  } finally {
+    memory.close();
+    repo.cleanup();
+  }
+});
+
+test("migration v7: an existing (pre-confidence) db upgrades in place (Q4)", async () => {
+  const repo = createTempGitRepo("pir-conf-mig-");
+  const dbPath = `${repo.dir}/.pir/memory.sqlite`;
+  const memory = await Memory.open(repo.dir, { dbPath });
+  const run = memory.findings.createRun({ base: "b", head: "h" });
+  const identity = buildIdentity({
+    featureKey: "mig", entityKey: "E.mig", category: "correctness", claim: "migration claim", trigger: "t",
+  });
+  const row = memory.findings.insert({
+    title: "migrated finding", claim: "migration claim", trigger: "t", category: "correctness",
+    severity: "P2", featureKey: "mig", entityKey: "E.mig", anchors: [], evidence: [],
+    round: 1, identity, status: "confirmed", memoryMatches: [],
+  }, run.id);
+  memory.close();
+
+  // Simulate a v6 db: drop the column and its migration record.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  db.exec("BEGIN");
+  db.exec("ALTER TABLE findings DROP COLUMN confidence");
+  db.exec("DELETE FROM _migrations WHERE version >= 7");
+  db.exec("COMMIT");
+  db.close();
+
+  // Reopening re-applies v7: the column is back, the row survives (its
+  // confidence is gone with the column — nullable means "not on record").
+  const upgraded = await Memory.open(repo.dir, { dbPath });
+  try {
+    const columns = upgraded.store.all("PRAGMA table_info(findings)").map((r) => r.name);
+    assert.ok(columns.includes("confidence"), `confidence column missing: ${columns.join(",")}`);
+    const survived = upgraded.findings.get(row.displayId);
+    assert.ok(survived, "row survives the upgrade");
+    assert.equal(survived.confidence, null);
+    // Re-running is a no-op (already claimed at the current version).
+    const again = await Memory.open(repo.dir, { dbPath });
+    try {
+      const reread = again.findings.get(row.displayId);
+      assert.ok(reread);
+      assert.equal(reread.confidence, null);
+    } finally {
+      again.close();
+    }
+  } finally {
+    upgraded.close();
+    repo.cleanup();
+  }
+});

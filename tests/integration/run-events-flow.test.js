@@ -87,6 +87,12 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
       factory: new FakeSessionFactory({ reviewerScript: reviewerRecordsCandidate, verifierScript: verifierConfirms }),
       options: { model: "fake/model" },
     });
+    // Q4: confidence rides the verdict onto the persisted finding, the split
+    // defaults off, and the deterministic verdict is on the outcome.
+    assert.equal(outcome.findings[0].confidence, 0.9);
+    assert.deepEqual(outcome.lowConfidenceFindings, []);
+    assert.equal(outcome.minConfidence, 0);
+    assert.equal(outcome.runVerdict, "incorrect");
 
     // ---- bus sequence -----------------------------------------------------
     const kinds = events.map((event) => event.kind);
@@ -136,6 +142,8 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.equal(manifest.runId, outcome.runId);
     assert.equal(manifest.status, "completed");
     assert.equal(manifest.model, "fake/model");
+    // Q4: the deterministic verdict lands on the manifest — one confirmed P1 ⇒ incorrect.
+    assert.equal(manifest.runVerdict, "incorrect");
     assert.equal(manifest.sessions.length, 2);
     assert.deepEqual(
       manifest.sessions.map((session) => session.sessionKind).sort(),

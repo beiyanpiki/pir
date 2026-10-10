@@ -18,7 +18,7 @@ import {
   resolveRemoteTimeoutSeconds,
 } from "../../dist/cli/remote-fetch.js";
 import { jobStatusReporter } from "../../dist/cli/jobs.js";
-import { maxFindingsFlag } from "../../dist/cli/executor.js";
+import { maxFindingsFlag, minConfidenceFlag } from "../../dist/cli/executor.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HEAD = "9999999999999999999999999999999999999999";
@@ -550,6 +550,20 @@ test("maxFindingsFlag: positive int, literal unlimited -> null, garbage rejected
   assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "-3"]])), UsageError);
   assert.throws(() => maxFindingsFlag(new Map([["--max-findings", "many"]])), UsageError);
   assert.throws(() => maxFindingsFlag(new Map([["--max-findings", true]])), UsageError);
+});
+
+test("minConfidenceFlag: flag > PIR_MIN_CONFIDENCE env, bounded 0-1 (Q4)", () => {
+  assert.equal(minConfidenceFlag(new Map()), undefined);
+  assert.equal(minConfidenceFlag(new Map([["--min-confidence", "0.7"]])), 0.7);
+  assert.equal(minConfidenceFlag(new Map([["--min-confidence", "0"]])), 0);
+  assert.equal(minConfidenceFlag(new Map([["--min-confidence", "1"]])), 1);
+  assert.equal(minConfidenceFlag(new Map(), { PIR_MIN_CONFIDENCE: "0.55" }), 0.55);
+  // flag wins over env
+  assert.equal(minConfidenceFlag(new Map([["--min-confidence", "0.2"]]), { PIR_MIN_CONFIDENCE: "0.55" }), 0.2);
+  assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", "-0.1"]])), UsageError);
+  assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", "1.1"]])), UsageError);
+  assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", "high"]])), UsageError);
+  assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", true]])), UsageError);
 });
 
 test("stripClientFlags removes --detach and --remote-timeout before forwarding (#53/#54)", () => {

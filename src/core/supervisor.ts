@@ -18,7 +18,7 @@ import { Budget } from "./budget.js";
 import { CoverageLedger, type CoverageSummary } from "./coverage.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
-import { applyVerdict, createReviewState, reportedCount, type RoundInfo } from "./review-state.js";
+import { applyVerdict, computeRunVerdict, createReviewState, reportedCount, type RoundInfo, type RunVerdict } from "./review-state.js";
 import type { VerifiedFinding } from "../findings/types.js";
 import type { FindingRow } from "../memory/finding-store.js";
 import type { CandidateFinding } from "../findings/types.js";
@@ -48,6 +48,12 @@ export interface FindOptions {
   maxFindings?: number | null;
   /** Parallel verifier sessions during each verification drain (1–8, default 1). */
   verifyConcurrency?: number;
+  /**
+   * Confirmed findings below this 0–1 verifier confidence are bucketed into
+   * `lowConfidenceFindings` (0 = off). Bucketing only: they stay reported
+   * and still count toward maxFindings.
+   */
+  minConfidence?: number;
   /** Language-pack activation: auto-detect at head (default), manual list, or off. */
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
@@ -88,6 +94,11 @@ export interface FindOutcome {
   memoryPackTokens: number;
   runId: string;
   maxFindings: number | null;
+  /** Effective threshold (0 when off) alongside `lowConfidenceFindings`. */
+  minConfidence: number;
+  /** Confirmed findings with confidence < minConfidence (bucketing only — they stay in `findings`). */
+  lowConfidenceFindings: FindingRow[];
+  runVerdict: RunVerdict;
   /** Language packs whose guidance was injected into reviewer/verifier prompts. */
   plugins: ActivePack[];
   transcriptDir?: string;
@@ -114,6 +125,29 @@ function verifyConcurrencyOption(value: number | undefined, name: string): numbe
     throw new Error(`${name} must be between 1 and ${MAX_VERIFY_CONCURRENCY}`);
   }
   return concurrency;
+}
+
+const DEFAULT_MIN_CONFIDENCE = 0;
+
+function minConfidenceOption(value: number | undefined, name: string): number {
+  if (value === undefined) return DEFAULT_MIN_CONFIDENCE;
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${name} must be between 0 and 1`);
+  }
+  return value;
+}
+
+/**
+ * The `--min-confidence` reporting split (Q4): confirmed findings below the
+ * threshold. Bucketing only — the rows stay in `findings`/`state.verified`
+ * reported as today, still count toward maxFindings, and keep driving the
+ * exit-code contract; this is a presentation view over the same set.
+ * Uncertain findings are never bucketed (they are already flagged), and
+ * rows without a recorded confidence stay in the main section.
+ */
+function lowConfidenceRows(rows: readonly FindingRow[], threshold: number): FindingRow[] {
+  if (threshold <= 0) return [];
+  return rows.filter((row) => row.status === "confirmed" && row.confidence !== null && row.confidence < threshold);
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +381,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
+  const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
   const budget = new Budget({
     maxRounds,
     maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
@@ -491,7 +526,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change", status: "failed",
       base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-      stoppedBecause: failureMessage, incomplete: true, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+      stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
+      maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -504,6 +540,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     (needsReview && state.stoppedBecause !== "reviewer signaled completion");
   const persisted = state.verified.map((f) => deps.memory.findings.insert(f, run.id));
   const pendingFindings = state.pending.map((candidate) => deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id));
+  const runVerdict = computeRunVerdict(state);
+  const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
   deps.memory.findings.finishRun(run.id, {
     rounds: state.round, candidates: state.known.length,
     confirmed: state.verified.filter((f) => f.status === "confirmed").length,
@@ -524,7 +562,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change",
     status: incomplete ? "incomplete" : "completed",
     base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, runVerdict,
+    maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -536,6 +575,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     stoppedBecause: state.stoppedBecause ?? "completed", estimatedTokens: budget.tokenEstimate,
     usage: budget.usage, usageComplete: budget.usageComplete, durationMs: budget.elapsedMs,
     memoryPackTokens: memoryPack.approxTokens, runId: run.id, maxFindings,
+    minConfidence, lowConfidenceFindings, runVerdict,
     plugins: languagePacks.active,
     ...(transcriptDir ? { transcriptDir } : {}),
   };
@@ -568,6 +608,12 @@ export interface AuditOptions {
   maxVerificationsPerRound?: number;
   /** Parallel verifier sessions during each verification drain (1–8, default 1). */
   verifyConcurrency?: number;
+  /**
+   * Confirmed findings below this 0–1 verifier confidence are bucketed into
+   * `lowConfidenceFindings` (0 = off). Bucketing only: they stay reported
+   * and still count toward maxFindings.
+   */
+  minConfidence?: number;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];
 }
@@ -633,6 +679,11 @@ export interface AuditOutcome {
   runId: string;
   /** Null when the run reported without a findings cap (#57). */
   maxFindings: number | null;
+  /** Effective threshold (0 when off) alongside `lowConfidenceFindings`. */
+  minConfidence: number;
+  /** Confirmed findings with confidence < minConfidence (bucketing only — they stay in `findings`). */
+  lowConfidenceFindings: FindingRow[];
+  runVerdict: RunVerdict;
   plugins: ActivePack[];
   transcriptDir?: string;
 }
@@ -642,6 +693,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
+  const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
   const budget = new Budget({
     maxRounds: Number.MAX_SAFE_INTEGER,
@@ -912,7 +964,8 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit", status: "failed",
       base: null, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-      stoppedBecause: failureMessage, incomplete: true, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+      stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
+      maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -960,6 +1013,8 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const pendingFindings = state.pending
     .map((candidate) => (candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined))
     .filter((row): row is FindingRow => row !== undefined);
+  const runVerdict = computeRunVerdict(state);
+  const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
   sink.runEnded({
     status: incomplete ? "incomplete" : "completed",
     stoppedBecause,
@@ -973,7 +1028,8 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     status: incomplete ? "incomplete" : "completed",
     base: null, head: snapshot.commit, model: options.model ?? null,
     startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause, incomplete, maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+    stoppedBecause, incomplete, runVerdict,
+    maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -1004,6 +1060,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     durationMs: budget.elapsedMs,
     runId: run.id,
     maxFindings,
+    minConfidence, lowConfidenceFindings, runVerdict,
     plugins: languagePacks.active,
     ...(transcriptDir ? { transcriptDir } : {}),
   };

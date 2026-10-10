@@ -115,6 +115,8 @@ export interface VerifiedFinding extends CandidateFinding {
   status: FindingStatus;
   verifierRationale?: string;
   memoryMatches: MemoryMatch[];
+  /** Verifier self-assessed 0–1 (submit_verdict; fallback verdicts use 0). */
+  confidence?: number;
 }
 
 /** A persisted finding row as returned by the store. */
