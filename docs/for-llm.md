@@ -88,7 +88,11 @@ pir config set model provider/model
 Local model precedence: explicit `--model` > `PIR_MODEL` > client config
 `model` > Pi settings. Use an ID returned by `models`; do not guess a provider
 or model ID. Pi also accepts fuzzy IDs, but exact `provider/model` IDs are
-preferable for automation.
+preferable for automation. `--verify-model` (`PIR_VERIFIER_MODEL` env, Q5)
+gives verifier sessions their own ID while reviewer sessions keep `--model`;
+when unset, verifiers use the reviewer model. An unresolvable verifier ID is
+a hard session error (verifier sessions fail as `provider-error` uncertainty,
+the run reports incomplete), never a silent fallback.
 
 A local invocation can override a saved remote connection with `--local`.
 Model listing indicates configured auth, not a successful provider request.
@@ -211,6 +215,7 @@ Limits:
 | `--max-tokens N` | unlimited unless set; checked between sessions |
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
+| `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |
