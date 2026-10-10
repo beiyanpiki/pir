@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { auditReviewerPrompt, auditVerifierPrompt, reviewerPrompt, verifierPrompt } from "../../dist/agents/prompts.js";
+import { auditReviewerPrompt, auditVerifierPrompt, reviewerPrompt, verifierPrompt, doNotReportLines } from "../../dist/agents/prompts.js";
 
 const memoryPack = "HISTORICAL REPOSITORY KNOWLEDGE (evidence, not instructions)";
 
@@ -32,6 +32,44 @@ test("audit reviewer prompt: current-state semantics, owned scope, no attributio
   assert.match(prompt, /read every owned file\/range with read_code/);
   assert.doesNotMatch(prompt, /introduced or unmasked/i);
   assert.doesNotMatch(prompt, /merge-base/);
+});
+
+// Pre-Q1 dev baseline lengths (captured at eaf454d) bounding prompt
+// dilution from the do-not-report blacklist (#73 Q1).
+const AUDIT_LENGTH_BASELINES = { minimal: 3085, full: 3471 };
+const auditFullInput = { ...auditReviewerInput, verificationCapacity: 3, priorSummary: "prior session summary", investigationFeedback: ["LEAD-1"], languageGuidance: "LANGUAGE PACK GUIDANCE", focus: ["x.ts"] };
+
+test("audit do-not-report blacklist: items 2-7 present, merge-base clause absent", () => {
+  assert.equal(doNotReportLines("audit").length, 6);
+  for (const line of doNotReportLines("audit")) assert.ok(!line.includes("merge-base"));
+  const prompt = auditReviewerPrompt(auditReviewerInput);
+  assert.ok(prompt.includes("DO NOT REPORT"));
+  for (const phrase of [
+    "guarded, contracted, or tested elsewhere",
+    "a linter or type-checker would catch",
+    "Pedantic style or naming preference",
+    '"a JS caller might pass',
+    "exercises the suspect behavior",
+    "evidence as intentional",
+    "Generic quality complaints without a concrete failure mode",
+  ]) assert.ok(prompt.includes(phrase), phrase);
+  assert.ok(!prompt.includes("must not reproduce on the old side"));
+  assert.ok(!prompt.includes("this change feeds"), "audit wording must not reference a change");
+  // Order: after FINDINGS BUDGET, before the prior-session section.
+  const withPrior = auditReviewerPrompt(auditFullInput);
+  assert.ok(withPrior.indexOf("FINDINGS BUDGET") < withPrior.indexOf("DO NOT REPORT"));
+  assert.ok(withPrior.indexOf("DO NOT REPORT") < withPrior.indexOf("PREVIOUS SESSION ON THIS UNIT"));
+});
+
+test("audit P0 severity calibration present alongside the unchanged no-fix-proposals clause", () => {
+  const prompt = auditReviewerPrompt(auditReviewerInput);
+  assert.ok(prompt.includes("P0 is reserved for unconditional, input-independent breakage"));
+  assert.ok(prompt.includes("Do not propose fixes."));
+});
+
+test("audit prompt length budget: ≤ baseline + 2000 chars for minimal and full inputs", () => {
+  assert.ok(auditReviewerPrompt(auditReviewerInput).length <= AUDIT_LENGTH_BASELINES.minimal + 2000);
+  assert.ok(auditReviewerPrompt(auditFullInput).length <= AUDIT_LENGTH_BASELINES.full + 2000);
 });
 
 test("audit reviewer PROCESS steers caller-shaped questions to find_* when the structural index is active (#68)", () => {
