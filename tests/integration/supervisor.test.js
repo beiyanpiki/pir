@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { findIssues } from "../../dist/core/supervisor.js";
@@ -1015,6 +1015,163 @@ test("findIssues: without --verify-model verifier sessions use the reviewer mode
     assert.equal(verifiers.length, 1);
     assert.equal(verifiers[0].config.model, "reviewer/model");
   } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: coverage ledger accumulates hunk pages and read windows across the run (C1)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      // Deliberate reads: page the raw hunk, then read the head file.
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "read the diff", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: {},
+    });
+    assert.equal(outcome.rounds.length, 1);
+    const coverage = outcome.rounds[0].coverage;
+    assert.ok(coverage, "round info carries the coverage snapshot");
+    assert.equal(coverage.hunksTotal, 1);
+    assert.equal(coverage.hunksCovered, 1);
+    assert.equal(coverage.filesTotal, 1);
+    assert.equal(coverage.filesCovered, 1);
+    // The run manifest carries the detailed per-file ledger.
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+    assert.ok(manifest.changeCoverage.files.some((f) => f.path === "src/pay.ts" && f.covered === 1 && f.total === 1));
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a reviewer that never reads the diff reports zero coverage (C1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("finish_round").execute({ summary: "guessed", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: {},
+    });
+    assert.deepEqual(outcome.rounds[0].coverage, { hunksTotal: 1, hunksCovered: 0, filesTotal: 1, filesCovered: 0 });
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed run's manifest still carries the coverage ledger (dogfood F-121)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      // Never calls finish_round — the round fails and the run fails with it.
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} }),
+      /reviewer did not call finish_round/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    // The failed round's read lands in the ledger via ReviewerRoundError.
+    assert.equal(manifest.changeCoverage.hunksTotal, 1);
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: reviewer reads survive a failure thrown after the reviewer round (dogfood F-122)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  // Any memory.findings.touchRun call explodes: the first one lands after the
+  // reviewer round succeeded, simulating a drain/persistence crash that loses
+  // the round — the reviewer's reads must already be in the ledger.
+  const memory = new Proxy(ctx.memory, {
+    get(target, prop) {
+      if (prop === "findings") {
+        return new Proxy(target.findings, {
+          get(t, key) {
+            if (key === "touchRun") return () => { throw new Error("touchRun exploded"); };
+            const value = t[key];
+            return typeof value === "function" ? value.bind(t) : value;
+          },
+        });
+      }
+      const value = target[prop];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      await tool("finish_round").execute({ summary: "read it", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory, codeMap: ctx.codeMap, factory, options: {} }),
+      /touchRun exploded/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();
     repo.cleanup();
   }

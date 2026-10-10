@@ -37,18 +37,35 @@ export interface ReviewerRoundResult {
   usage?: SessionUsage;
   /** Audit mode: pinned head paths read during this session (coverage evidence). */
   readPaths?: string[];
+  /**
+   * Change mode (C1): per-session coverage evidence — raw hunks paged from
+   * get_change and ranged head read_code windows. findIssues replays both
+   * into the run's shared ChangeCoverage; reads accumulate across rounds.
+   */
+  coverageEvidence?: {
+    hunks: Array<{ path: string; hunkIndex: number }>;
+    reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }>;
+  };
 }
 
 /** Incomplete rounds remain failures, but retain evidence for error persistence. */
 export class ReviewerRoundError extends Error {
   readonly candidates: CandidateFinding[];
   readonly usage?: SessionUsage;
+  /** C1: the failed session's coverage evidence, so its reads still land. */
+  readonly coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> };
 
-  constructor(cause: unknown, candidates: CandidateFinding[], usage?: SessionUsage) {
+  constructor(
+    cause: unknown,
+    candidates: CandidateFinding[],
+    usage?: SessionUsage,
+    coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> },
+  ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ReviewerRoundError";
     this.candidates = [...candidates];
     this.usage = usage ? { ...usage } : undefined;
+    this.coverageEvidence = coverageEvidence;
   }
 }
 
@@ -97,11 +114,22 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
   const collector: CandidateCollector = { candidates: [] };
   const outcome: RoundOutcome = { summary: "", nextFocus: [], needsMoreRounds: false, submitted: false };
   const readPaths = new Set<string>();
+  const hunkReads: Array<{ path: string; hunkIndex: number }> = [];
+  const headReads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> = [];
   // The observer is per-session: only this session's pinned head reads count
-  // toward this unit's coverage evidence.
+  // toward this unit's coverage evidence. Change mode (C1) additionally
+  // records raw hunk pages and ranged head reads; the range-less observer
+  // calls (readReviewFile availability, collector evidence snapshots) are
+  // not reads for the change ledger.
   const sessionCtx: ToolContext = deps.audit
     ? { ...deps.ctx, readObserver: (path, revision) => { if (revision === "head") readPaths.add(path); } }
-    : deps.ctx;
+    : {
+        ...deps.ctx,
+        readObserver: (path, revision, range) => {
+          if (revision === "head" && range !== undefined) headReads.push({ path, range });
+        },
+        hunkObserver: (path, hunkIndex) => hunkReads.push({ path, hunkIndex }),
+      };
 
   const tools = [
     ...(deps.audit
@@ -194,7 +222,14 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
       failure ??= { cause };
     }
   }
-  if (failure) throw new ReviewerRoundError(failure.cause, collector.candidates, usage);
+  if (failure) {
+    throw new ReviewerRoundError(
+      failure.cause,
+      collector.candidates,
+      usage,
+      deps.audit ? undefined : { hunks: hunkReads, reads: headReads },
+    );
+  }
 
   return {
     candidates: collector.candidates,
@@ -208,5 +243,6 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
     blockers: outcome.blockers ?? [],
     usage,
     ...(deps.audit ? { readPaths: [...readPaths] } : {}),
+    ...(!deps.audit ? { coverageEvidence: { hunks: hunkReads, reads: headReads } } : {}),
   };
 }

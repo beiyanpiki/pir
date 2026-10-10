@@ -405,6 +405,8 @@ export interface RunManifest {
   incomplete: boolean;
   /** Deterministic run-level verdict from the verified findings (Q4). */
   runVerdict: "incorrect" | "correct-with-findings" | "needs-review" | "correct";
+  /** Change mode (C1): diff coverage ledger — which hunks the reviewer read. */
+  changeCoverage?: import("../core/change-coverage.js").ChangeCoverageSummary;
   /** Null = the run reported without a findings cap (#57). */
   maxFindings: number | null;
   /** Explicit cap policy alongside maxFindings (#57). */

@@ -436,3 +436,78 @@ test("find_* descriptions lead with the use case, keep provenance caveats, and c
     assert.match(tool.description, /read_code/);
   }
 });
+
+test("coverage observers: read_code fires with the clamped window; get_change fires only on raw hunk pages (C1)", async () => {
+  const repo = createTempGitRepo();
+  try {
+    repo.write("source.ts", "one\nthree\nfive\nseven\n");
+    repo.commit("base");
+    repo.write("source.ts", "one\ntwo\nthree\nfive\nsix\nseven\neight\n");
+    repo.commit("head change");
+    const reads = [];
+    const hunks = [];
+    const ctx = {
+      ...(await context(repo)),
+      readObserver: (p, revision, range) => reads.push({ path: p, revision, range }),
+      hunkObserver: (p, hunkIndex) => hunks.push({ path: p, hunkIndex }),
+    };
+    const read = createReadCodeTool(ctx);
+    // Whole-file page, then a bounded window, then a miss. readReviewFile
+    // fires the range-less availability event; read_code adds the window.
+    await read.execute({ path: "source.ts" });
+    await read.execute({ path: "source.ts", startLine: 2, endLine: 3 });
+    await read.execute({ path: "missing.ts" });
+    await read.execute({ path: "source.ts", revision: "base" });
+    assert.deepEqual(reads, [
+      { path: "source.ts", revision: "head", range: undefined },
+      { path: "source.ts", revision: "head", range: { startLine: 1, endLine: 7 } },
+      { path: "source.ts", revision: "head", range: undefined },
+      { path: "source.ts", revision: "head", range: { startLine: 2, endLine: 3 } },
+      { path: "source.ts", revision: "base", range: undefined },
+      { path: "source.ts", revision: "base", range: { startLine: 1, endLine: 4 } },
+    ]);
+
+    const change = createGetChangeTool(ctx);
+    // Overview (even when it inlines bodies) and hunk-index listings are
+    // navigation, not reads — they never fire the hunk observer.
+    await change.execute({});
+    await change.execute({ path: "source.ts" });
+    assert.deepEqual(hunks, []);
+    // The path+hunkIndex raw-lines page is a deliberate read.
+    await change.execute({ path: "source.ts", hunkIndex: 0 });
+    assert.deepEqual(hunks, [{ path: "source.ts", hunkIndex: 0 }]);
+    await change.execute({ path: "source.ts", hunkIndex: 9 });
+    assert.deepEqual(hunks, [{ path: "source.ts", hunkIndex: 0 }]);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("coverage observers: read_code credits only the lines actually returned (dogfood F-120)", async () => {
+  const repo = createTempGitRepo();
+  try {
+    repo.write("big.ts", "seed\n");
+    repo.commit("base");
+    const lines = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`);
+    repo.write("big.ts", `${lines.join("\n")}\n`);
+    repo.commit("grow");
+    const reads = [];
+    const ctx = {
+      ...(await context(repo)),
+      readObserver: (p, revision, range) => reads.push({ path: p, revision, range }),
+    };
+    const read = createReadCodeTool(ctx);
+    // Default whole-file request: read_code returns one 240-line page, so
+    // only that page is a read — not the requested 300-line window.
+    await read.execute({ path: "big.ts" });
+    const last = reads.at(-1);
+    assert.deepEqual(last.range, { startLine: 1, endLine: 240 });
+    // A call that returns nothing must not credit any window.
+    const rangedBefore = reads.filter((r) => r.range !== undefined).length;
+    await read.execute({ path: "big.ts", startLine: 5, charOffset: 999999 });
+    await read.execute({ path: "big.ts", startLine: 5000 });
+    assert.equal(reads.filter((r) => r.range !== undefined).length, rangedBefore);
+  } finally {
+    repo.cleanup();
+  }
+});

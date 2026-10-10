@@ -19,6 +19,7 @@ import { CoverageLedger, type CoverageSummary } from "./coverage.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
 import { applyVerdict, computeRunVerdict, createReviewState, reportedCount, type RoundInfo, type RunVerdict } from "./review-state.js";
+import { ChangeCoverage } from "./change-coverage.js";
 import type { VerifiedFinding } from "../findings/types.js";
 import type { FindingRow } from "../memory/finding-store.js";
 import type { CandidateFinding } from "../findings/types.js";
@@ -398,6 +399,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
   const requestedHead = options.head ?? (await getHeadCommit(deps.repoRoot));
   const changeSet = await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead);
+  // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
+  // pages accumulate across rounds. No behavior change — accounting only.
+  const changeCoverage = new ChangeCoverage(changeSet);
   const base = changeSet.baseCommit ?? changeSet.base;
   const head = changeSet.headCommit ?? changeSet.head;
   const run = deps.memory.findings.createRun({ base, head });
@@ -472,6 +476,11 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round }),
         });
+        // Replay the round's coverage evidence the moment it exists: anything
+        // throwing later in the round (drain, budget, persistence) must not
+        // discard the reviewer's deliberate reads from the ledger (F-122).
+        for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
+        for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
         budget.chargeSession(result.usage, memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
@@ -501,6 +510,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         confirmed: drained.confirmed, rejected: drained.rejected, uncertain: drained.uncertain, suppressed: drained.suppressed,
         pending: state.pending.length,
         reviewerRan: result !== undefined, summary: result?.summary ?? "Verified queued candidates",
+        coverage: changeCoverage.counts(),
       });
       deps.memory.findings.touchRun(run.id);
       if (result) expandFrontier(state, result, drained.feedbackVerdicts);
@@ -518,6 +528,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       state.known.push(...recovered);
       state.pending.push(...recovered);
       budget.chargeSession(error.usage, error.message);
+      // The failed round's deliberate reads still count toward the ledger.
+      for (const hunk of error.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
+      for (const read of error.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
     }
     for (const finding of state.verified) deps.memory.findings.insert(finding, run.id);
     for (const candidate of state.pending) deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id);
@@ -537,6 +550,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
       stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
       maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+      changeCoverage: changeCoverage.summary(),
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
@@ -573,6 +587,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
     stoppedBecause: state.stoppedBecause ?? "completed", incomplete, runVerdict,
     maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+    changeCoverage: changeCoverage.summary(),
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
