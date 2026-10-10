@@ -2,14 +2,25 @@
 
 ## Status
 
-Proposed (2026-10-09). This ADR lands inside the plan-only PR that
-introduces the roadmap (D1, the stack root); the implementation is
-specified in
+Proposed (2026-10-09; process paragraph and acceptance clause amended
+2026-10-10, see below). This ADR landed with the plan-only PR that
+introduced the roadmap (D1, #74); the implementation is specified in
 [docs/plans/findings-quality-roadmap.md](../plans/findings-quality-roadmap.md)
 — a development record that is deleted once the series completes — and
-arrives as the stacked PR series defined there. Each item of the decision
-is binding for that series; items may be individually reverted with
-evidence from the benchmark, in which case this ADR is amended.
+arrives as ordinary PRs against `dev`, tracked in issue #73 (the original
+D1-rooted stacked-PR convention was retired when D1 merged). Each item of
+the decision is binding for that series; items may be individually
+reverted with evidence from the benchmark, in which case this ADR is
+amended.
+
+Acceptance (amended for the B1-baseline deferral — maintainer decision
+recorded in #73): status moves to Accepted once Q1–Q3 have landed under
+the scenario-harness variance gate and the pre-F1 ReviewBench baseline
+era has opened with F1's A/B rows non-regressing. Per-PR ReviewBench
+rows for slices merged before the baseline are waived by the deferral —
+the baseline's dev build already contains those slices, so their
+individual effect is not isolable after the fact; their measurable gate
+is the scenario harness.
 
 ## Context
 

@@ -12,10 +12,11 @@ comparisons — every row records provider/model/SHA.
 **No baseline yet — deferred by maintainer decision** (tracking issue #73;
 see the "B1-baseline deferral" note in
 [docs/plans/findings-quality-roadmap.md](../../../docs/plans/findings-quality-roadmap.md)).
-The 2× full test-25 baseline runs on dev are recorded when the baseline
-era resumes — before F1's gate and the ADR 0003 acceptance gates. Behavior
-PRs then append delta rows here (Q1's row is recorded retroactively at
-that point).
+The 2× full test-25 baseline runs on dev are recorded before F1's gate —
+from then on, behavior PRs append delta rows here. Per-PR rows for slices
+merged before the baseline (Q1–M1) are **waived**: the baseline's dev
+build already contains them, so their individual effect is not isolable
+after the fact; their gate was the scenario harness.
 
 ## Round registry
 
