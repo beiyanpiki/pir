@@ -106,13 +106,19 @@ test("evidence gate: memory lookup alone never satisfies it — the error persis
   }
 });
 
-test("evidence gate: a search alone counts as evidence", async () => {
+test("evidence gate: a search alone gathers evidence but stage 2 still demands a cited pinned read", async () => {
   const fx = await fixture();
   const factory = scriptedFactory(async ({ tools }) => {
     const search = await tools("search_text").execute({ pattern: "consumeQuota", revision: "head" });
     assert.ok(!search.text.startsWith("ERROR"), search.text);
-    const accepted = await tools("submit_verdict").execute({
+    const rejected = await tools("submit_verdict").execute({
       verdict: "rejected", rationale: "the searched call path contradicts the claim", confidence: 0.9,
+    });
+    assert.match(rejected.text, /No pinned read in this session/);
+    const read = await tools("read_code").execute({ path: "src/pay.ts" });
+    assert.ok(!read.text.startsWith("ERROR"), read.text);
+    const accepted = await tools("submit_verdict").execute({
+      verdict: "rejected", rationale: "the search at src/pay.ts:1 contradicts the claimed call path", confidence: 0.9,
     });
     assert.equal(accepted.terminate, true);
   });
@@ -124,13 +130,19 @@ test("evidence gate: a search alone counts as evidence", async () => {
   }
 });
 
-test("evidence gate: get_change counts in change mode; audit has no get_change but searches still count", async () => {
+test("evidence gate: get_change counts as evidence in change mode; audit has no get_change but searches still count", async () => {
   const fx = await fixture();
   const changeFactory = scriptedFactory(async ({ tools }) => {
     const change = await tools("get_change").execute({});
     assert.ok(!change.text.startsWith("ERROR"), change.text);
-    const accepted = await tools("submit_verdict").execute({
+    // Evidence alone is not acceptance: stage 2 wants a cited pinned read.
+    const rejected = await tools("submit_verdict").execute({
       verdict: "confirmed", rationale: "the diff shows the quota charge moved ahead of the call", confidence: 0.9,
+    });
+    assert.match(rejected.text, /No pinned read in this session/);
+    await tools("read_code").execute({ path: "src/pay.ts" });
+    const accepted = await tools("submit_verdict").execute({
+      verdict: "confirmed", rationale: "the diff shows the quota charge moved ahead of the call at src/pay.ts:1", confidence: 0.9,
     });
     assert.equal(accepted.terminate, true);
   });
@@ -145,8 +157,9 @@ test("evidence gate: get_change counts in change mode; audit has no get_change b
   const auditFactory = scriptedFactory(async ({ tools }) => {
     const search = await tools("search_text").execute({ pattern: "consumeQuota", revision: "head" });
     assert.ok(!search.text.startsWith("ERROR"), search.text);
+    await tools("read_code").execute({ path: "src/pay.ts" });
     const accepted = await tools("submit_verdict").execute({
-      verdict: "confirmed", rationale: "the snapshot really reaches this failure", confidence: 0.9,
+      verdict: "confirmed", rationale: "the snapshot reaches this failure at src/pay.ts:1", confidence: 0.9,
     });
     assert.equal(accepted.terminate, true);
   });
@@ -156,6 +169,46 @@ test("evidence gate: get_change counts in change mode; audit has no get_change b
     assert.equal(auditFactory.state.config.tools.some((tool) => tool.name === "get_change"), false, "audit verifier sessions carry no get_change, so it cannot satisfy the gate there");
   } finally {
     auditFx.cleanup();
+  }
+});
+
+test("evidence gate stage 2: a rationale citing an unread path is rejected until that path is read", async () => {
+  const fx = await fixture();
+  const factory = scriptedFactory(async ({ tools }) => {
+    await tools("read_code").execute({ path: "src/pay.ts" });
+    const rejected = await tools("submit_verdict").execute({
+      verdict: "confirmed", rationale: "the failure is obvious in src/other/never-read.ts:3", confidence: 0.9,
+    });
+    assert.match(rejected.text, /cites no pinned-read path/);
+    const otherRead = await tools("read_code").execute({ path: "src/other/never-read.ts" });
+    assert.match(otherRead.text, /file not found at this snapshot/, "fixture has no such file; a failed read must not satisfy the gate either");
+    const accepted = await tools("submit_verdict").execute({
+      verdict: "confirmed", rationale: "quota is charged at src/pay.ts:1 before the gateway call", confidence: 0.9,
+    });
+    assert.equal(accepted.terminate, true);
+  });
+  try {
+    const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
+    assert.equal(result.verdict, "confirmed");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("evidence gate stage 2: path tokens without line numbers and quoted citations both match", async () => {
+  const fx = await fixture();
+  const factory = scriptedFactory(async ({ tools }) => {
+    await tools("read_code").execute({ path: "src/pay.ts" });
+    const accepted = await tools("submit_verdict").execute({
+      verdict: "rejected", rationale: '`src/pay.ts` shows the guard fires first; no defect', confidence: 0.9,
+    });
+    assert.equal(accepted.terminate, true, "a bare backticked path with no :line still counts as a citation");
+  });
+  try {
+    const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
+    assert.equal(result.verdict, "rejected");
+  } finally {
+    fx.cleanup();
   }
 });
 

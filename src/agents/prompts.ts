@@ -118,7 +118,7 @@ export function verifierPrompt(input: {
     "VERDICT RULES",
     "confirmed: both a concrete current failure and changed cause are established. rejected: concrete counter-evidence disproves realness or change attribution. uncertain: identify missing evidence or a tool limit instead of guessing. Confidence is finite 0..1 and measures evidence strength, not severity.",
     "Code-only follow-up may go in codeFeedback (at most 2000 characters); never copy historical decisions, memory rationales or acceptance policy into feedback. For uncertain, set uncertaintyReason to missing-evidence or tool-limit as appropriate.",
-    "A verdict is accepted only after this session has examined evidence: read the candidate's code (read_code/get_change) or run a search before calling submit_verdict.",
+    "A verdict is accepted only after this session has examined evidence: read the candidate's code (read_code/get_change) or run a search before calling submit_verdict, and the rationale must cite at least one pinned-read path as path:line.",
     "You MUST end by calling submit_verdict with an evidence-based rationale. Call this terminal tool ALONE, never batched with other tools, and make no further calls.",
   ];
   if (input.structuralQueries === false) lines.push("Structural index unavailable: rely on pinned read_code/search_text/get_change.");
@@ -210,7 +210,7 @@ export function auditVerifierPrompt(input: {
     "VERDICT RULES",
     "confirmed: a concrete failure is reachable at the snapshot. rejected: concrete counter-evidence disproves realness. uncertain: identify missing evidence or a tool limit instead of guessing. Confidence is finite 0..1 and measures evidence strength, not severity.",
     "Code-only follow-up may go in codeFeedback (at most 2000 characters); never copy historical decisions, memory rationales or acceptance policy into feedback. For uncertain, set uncertaintyReason to missing-evidence or tool-limit as appropriate.",
-    "A verdict is accepted only after this session has examined evidence: read the candidate's code (read_code) or run a search before calling submit_verdict.",
+    "A verdict is accepted only after this session has examined evidence: read the candidate's code (read_code) or run a search before calling submit_verdict, and the rationale must cite at least one pinned-read path as path:line.",
     "You MUST end by calling submit_verdict with an evidence-based rationale. Call this terminal tool ALONE, never batched with other tools, and make no further calls.",
   ];
   if (input.structuralQueries === false) lines.push("Structural index unavailable: rely on pinned read_code/search_text.");

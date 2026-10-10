@@ -173,6 +173,9 @@ export interface VerifierEvidence {
   evidenceCalls: number;
 }
 
+/** path[:line] token in a rationale; the optional line suffix is not part of the path. */
+const RATIONALE_PATH_TOKEN = /[A-Za-z0-9._\-/]+\.[A-Za-z0-9]+(?::\d+)?/g;
+
 export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
   const known = new Set(matchedIds ?? []);
   return {
@@ -192,9 +195,19 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         if (collector.verdict) throw new Error("submit_verdict was already submitted.");
         const verdict = member(params.verdict, VERDICTS, "verdict");
         const rationale = text(params.rationale, "rationale");
-        const seen = evidence?.();
-        if (seen && seen.readPaths.size === 0 && seen.evidenceCalls === 0) {
+        const evidenceSeen = evidence?.();
+        if (evidenceSeen && evidenceSeen.readPaths.size === 0 && evidenceSeen.evidenceCalls === 0) {
           throw new Error("No evidence gathered in this session: read the candidate's code (read_code/get_change) or run a search before submitting a verdict.");
+        }
+        if (evidenceSeen && evidenceSeen.readPaths.size === 0) {
+          throw new Error("No pinned read in this session: read the candidate's code with read_code, then cite the read path as path:line in the rationale.");
+        }
+        if (evidenceSeen) {
+          const citesReadPath = (rationale.match(RATIONALE_PATH_TOKEN) ?? [])
+            .some((token) => evidenceSeen.readPaths.has(token.replace(/:\d+$/, "")));
+          if (!citesReadPath) {
+            throw new Error("The rationale cites no pinned-read path: read the relevant code with read_code and cite it as path:line in the rationale.");
+          }
         }
         const confidence = params.confidence === undefined ? 0.7 : params.confidence;
         if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("confidence must be a finite number from 0 to 1.");

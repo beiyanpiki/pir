@@ -154,44 +154,67 @@ test("incomplete reviewer rounds preserve recorded candidates and usage after di
   } finally { repo.cleanup(); }
 });
 
+/** One-file repo so verifier sessions can satisfy the Q3 evidence gate with a real pinned read. */
+function evidenceCtx() {
+  const repo = createTempGitRepo("pir-verifier-evidence-");
+  repo.write("counter.ts", "export const next = (n: number) => n + 1;\n");
+  const head = repo.commit("evidence fixture");
+  return {
+    repo,
+    // headCommit/baseCommit become real SHAs so read_code resolves; the fake
+    // merge-base string stays so prompt assertions keep their marker.
+    ctx: { ...ctx, repoRoot: repo.dir, headCommit: head, changeSet: { ...ctx.changeSet, baseCommit: head, headCommit: head } },
+  };
+}
+
 test("verifier receives full evidence, pinned revisions and current context tools", async () => {
+  const evidence = evidenceCtx();
   const f = factory(async (tool, prompt) => {
     for (const name of ["get_change", "get_project_memory", "get_feature_memory", "get_entity_memory", "get_relevant_issue_memory", "get_fix_history"]) tool(name);
     assert.match(prompt, /SPECIAL_EVIDENCE/);
     assert.match(prompt, /pinned-merge-base/);
     assert.match(prompt, /ACTUAL_TRIGGER/);
-    await tool("get_change").execute({});
-    assert.equal((await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches failure", confidence: 0.9, decisionAssessments: [{ memoryId: decision.memoryId, stillApplies: false }], codeFeedback: "must not cross memory boundary" })).terminate, true);
+    await tool("read_code").execute({ path: "counter.ts" });
+    assert.equal((await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches failure at counter.ts:1", confidence: 0.9, decisionAssessments: [{ memoryId: decision.memoryId, stillApplies: false }], codeFeedback: "must not cross memory boundary" })).terminate, true);
   });
-  const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [decision] });
-  assert.equal(result.verdict, "confirmed");
-  assert.deepEqual(result.decisionAssessments, [{ memoryId: decision.memoryId, stillApplies: false }]);
-  assert.equal(result.codeFeedback, undefined);
-  assert.deepEqual(result.usage, usage);
-  assert.deepEqual(f.events, ["usage", "dispose"]);
+  try {
+    const result = await runVerifier({ factory: f, ctx: evidence.ctx, candidate, priorDecisions: [decision] });
+    assert.equal(result.verdict, "confirmed");
+    assert.deepEqual(result.decisionAssessments, [{ memoryId: decision.memoryId, stillApplies: false }]);
+    assert.equal(result.codeFeedback, undefined);
+    assert.deepEqual(result.usage, usage);
+    assert.deepEqual(f.events, ["usage", "dispose"]);
+  } finally {
+    evidence.repo.cleanup();
+  }
 });
 
 test("verifier cleanup errors preserve confirmed verdicts and available usage", async (t) => {
   const warnings = [];
   t.mock.method(console, "error", (message) => warnings.push(message));
-  for (const options of [{ usageError: true }, { disposeError: true }, { usageError: true, disposeError: true }]) {
-    warnings.length = 0;
-    const f = factory(async (tool) => {
-      await tool("get_change").execute({});
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches a real failure", confidence: 0.9 });
-    }, options);
-    const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [] });
-    assert.equal(result.verdict, "confirmed");
-    assert.equal(result.rationale, "Changed code reaches a real failure");
-    assert.equal(result.confidence, 0.9);
-    assert.equal(result.uncertaintyReason, undefined);
-    assert.deepEqual(result.usage, options.usageError ? undefined : usage);
-    if (options.usageError) assert.equal(Object.hasOwn(result, "usage"), false);
-    assert.deepEqual(f.events, ["usage", "dispose"]);
-    assert.deepEqual(warnings, [
-      ...(options.usageError ? ["verifier warning: session usage unavailable"] : []),
-      ...(options.disposeError ? ["verifier warning: session disposal failed"] : []),
-    ]);
+  const evidence = evidenceCtx();
+  try {
+    for (const options of [{ usageError: true }, { disposeError: true }, { usageError: true, disposeError: true }]) {
+      warnings.length = 0;
+      const f = factory(async (tool) => {
+        await tool("read_code").execute({ path: "counter.ts" });
+        await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "Changed code reaches a real failure at counter.ts:1", confidence: 0.9 });
+      }, options);
+      const result = await runVerifier({ factory: f, ctx: evidence.ctx, candidate, priorDecisions: [] });
+      assert.equal(result.verdict, "confirmed");
+      assert.equal(result.rationale, "Changed code reaches a real failure at counter.ts:1");
+      assert.equal(result.confidence, 0.9);
+      assert.equal(result.uncertaintyReason, undefined);
+      assert.deepEqual(result.usage, options.usageError ? undefined : usage);
+      if (options.usageError) assert.equal(Object.hasOwn(result, "usage"), false);
+      assert.deepEqual(f.events, ["usage", "dispose"]);
+      assert.deepEqual(warnings, [
+        ...(options.usageError ? ["verifier warning: session usage unavailable"] : []),
+        ...(options.disposeError ? ["verifier warning: session disposal failed"] : []),
+      ]);
+    }
+  } finally {
+    evidence.repo.cleanup();
   }
 });
 
@@ -209,14 +232,19 @@ test("verifier cleanup errors do not overwrite the original provider failure", a
 });
 
 test("code feedback survives only with neither initial matches nor issue lookup", async () => {
-  for (const lookup of [false, true]) {
-    const f = factory(async (tool) => {
-      if (lookup) await tool("get_relevant_issue_memory").execute({ claim: candidate.claim });
-      await tool("get_change").execute({});
-      await tool("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_REASON", codeFeedback: "CHECK_CODE_ONLY" });
-    });
-    const result = await runVerifier({ factory: f, ctx, candidate, priorDecisions: [] });
-    assert.equal(result.codeFeedback, lookup ? undefined : "CHECK_CODE_ONLY");
+  const evidence = evidenceCtx();
+  try {
+    for (const lookup of [false, true]) {
+      const f = factory(async (tool) => {
+        if (lookup) await tool("get_relevant_issue_memory").execute({ claim: candidate.claim });
+        await tool("read_code").execute({ path: "counter.ts" });
+        await tool("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_REASON (counter.ts:1)", codeFeedback: "CHECK_CODE_ONLY" });
+      });
+      const result = await runVerifier({ factory: f, ctx: evidence.ctx, candidate, priorDecisions: [] });
+      assert.equal(result.codeFeedback, lookup ? undefined : "CHECK_CODE_ONLY");
+    }
+  } finally {
+    evidence.repo.cleanup();
   }
 });
 
