@@ -35,6 +35,10 @@ const severityCalibrationLine =
  * long-standing defects by definition and must NOT carry that clause.
  */
 export function doNotReportLines(mode: "change" | "audit"): string[] {
+  const speculativeBreakage =
+    mode === "change"
+      ? 'Speculative downstream breakage requires a downstream path you have read that this change feeds (file + behavior); hypothetical callers or inputs ("a JS caller might pass…") are not findings.'
+      : 'Speculative downstream breakage requires a downstream path you have read that exercises the suspect behavior (file + behavior); hypothetical callers or inputs ("a JS caller might pass…") are not findings.';
   const lines: Array<string | null> = [
     mode === "change"
       ? "A defect that already exists at the merge-base: the defect must not reproduce on the old side unless this change unmasked it."
@@ -42,7 +46,7 @@ export function doNotReportLines(mode: "change" | "audit"): string[] {
     "Code that looks suspicious but is guarded, contracted, or tested elsewhere — confirm the guard once, then move on; it is not a finding.",
     "Issues a linter or type-checker would catch (unused imports, formatting), unless they mask a real defect.",
     "Pedantic style or naming preference with no behavioral impact.",
-    'Speculative downstream breakage requires a downstream path you have read that this change feeds (file + behavior); hypothetical callers or inputs ("a JS caller might pass…") are not findings.',
+    speculativeBreakage,
     "Design choices that tests, contracts, or comments evidence as intentional.",
     "Generic quality complaints without a concrete failure mode.",
   ];

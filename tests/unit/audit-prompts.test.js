@@ -49,10 +49,12 @@ test("audit do-not-report blacklist: items 2-7 present, merge-base clause absent
     "a linter or type-checker would catch",
     "Pedantic style or naming preference",
     '"a JS caller might pass',
+    "exercises the suspect behavior",
     "evidence as intentional",
     "Generic quality complaints without a concrete failure mode",
   ]) assert.ok(prompt.includes(phrase), phrase);
   assert.ok(!prompt.includes("must not reproduce on the old side"));
+  assert.ok(!prompt.includes("this change feeds"), "audit wording must not reference a change");
   // Order: after FINDINGS BUDGET, before the prior-session section.
   const withPrior = auditReviewerPrompt(auditFullInput);
   assert.ok(withPrior.indexOf("FINDINGS BUDGET") < withPrior.indexOf("DO NOT REPORT"));
