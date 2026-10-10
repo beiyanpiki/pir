@@ -283,25 +283,12 @@ async function drainVerifications(
   const completed = new Map<number, VerifyOneOutcome>();
   let nextToLand = 0;
 
-  // Workers stalled on the maxFindings reservation sleep until the next
-  // landing frees a slot; spurious wakeups just re-run the admission checks.
-  const admissionWaiters = new Set<() => void>();
-  const wakeAdmission = (): void => {
-    for (const wake of [...admissionWaiters]) {
-      admissionWaiters.delete(wake);
-      wake();
-    }
-  };
-  const waitForAdmission = (): Promise<void> =>
-    new Promise<void>((resolve) => { admissionWaiters.add(resolve); });
-
   const tryLand = (): void => {
     while (completed.has(nextToLand)) {
       const outcome = completed.get(nextToLand)!;
       completed.delete(nextToLand);
       nextToLand += 1;
       land(outcome);
-      wakeAdmission();
     }
   };
 
@@ -328,7 +315,11 @@ async function drainVerifications(
       const slot = admit();
       if (slot === null) return;
       if (slot === "wait") {
-        await waitForAdmission();
+        // Reservation-stalled: a landing will free a slot; re-run the checks
+        // after a short timer. The timer keeps the event loop alive while the
+        // worker polls — a pure-promise wait could let the loop drain under a
+        // slow runner and kill the whole process.
+        await new Promise<void>((resolve) => { setTimeout(resolve, 1); });
         continue;
       }
       let outcome: VerifyOneOutcome;
@@ -338,7 +329,6 @@ async function drainVerifications(
         // Stop the drain: nothing further is admitted or landed, and the
         // failed candidate stays pending for the run-failure path to persist.
         failure ??= { error };
-        wakeAdmission();
         return;
       }
       completed.set(slot.seq, outcome);
