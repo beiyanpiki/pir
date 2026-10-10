@@ -400,12 +400,18 @@ baseline/candidate builds — its negative expectations
 (`preexisting-bug-unchanged`, `guarded-negative`, clean refactors) are the
 direct measurement of this change; (b) dogfood gate on this diff itself.
 Plus, since B1 has landed: ReviewBench subset-10 delta row before/after.
+*(Recorded outcome: (a) and (b) ran — runs 5–6 passed the variance bar;
+the subset-10 row was waived by the B1-baseline deferral, not skipped by
+choice.)*
 
 ### Acceptance
 
 - Tests green; benchmark delta row shows precision not worse and recall not
   worse beyond the variance rule; if either regresses, the offending item
   is removed in the same PR rather than argued for.
+  *(Superseded by the B1-baseline deferral for the ReviewBench half: the
+  row is waived, the scenario-harness variance bar was the gate that
+  applied — and passed.)*
 
 ### Out of scope
 
@@ -957,7 +963,7 @@ re-evaluation after model upgrades.
    ReviewBench 2× test-25 baseline is deferred by maintainer decision
    until development completes (see "Benchmark protocol").
 3. **Q1** — merged (#78): scenario-harness runs 5–6 passed the variance
-   bar; its ReviewBench delta row is deferred to the B1-baseline era.
+   bar; its ReviewBench delta row is waived by the baseline deferral.
 4. **Q2 next** (`feat/parallel-verify-drain`), then Q3 — logically
    independent; Q2 first is preferred (F1 needs its worker pool; Q5 works
    without it via its documented fallback).

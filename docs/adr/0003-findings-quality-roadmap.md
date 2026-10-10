@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed (2026-10-09; process paragraph and acceptance clause amended
-2026-10-10, see below). This ADR landed with the plan-only PR that
+Proposed (2026-10-09; process paragraph, acceptance clause, and the
+Decision §3 measurement amendment dated 2026-10-10, see below). This ADR landed with the plan-only PR that
 introduced the roadmap (D1, #74); the implementation is specified in
 [docs/plans/findings-quality-roadmap.md](../plans/findings-quality-roadmap.md)
 — a development record that is deleted once the series completes — and
@@ -112,6 +112,11 @@ production review agents are judged on.
    behavioral changes merge, and each behavioral PR records a delta row.
    Changes that cannot beat their regression risk on both surfaces are
    reverted or stay default-off.
+   *(Amended 2026-10-10, maintainer decision in #73: the ReviewBench
+   baseline is deferred until before F1 — pre-baseline behavioral slices
+   merge on the scenario-harness gate alone and their per-PR ReviewBench
+   rows are waived; the delta-row regime resumes from the baseline
+   onward. The amended acceptance clause in Status states the gate.)*
 4. **ReviewBench is adopted for local evaluation only.** Leaderboard
    submission, the docker agent contract (`AGENT_CONTRACT.md`), and portal
    onboarding are explicitly out of scope. Corpus metadata and golden files
