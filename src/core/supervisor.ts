@@ -527,6 +527,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       state.known.push(...recovered);
       state.pending.push(...recovered);
       budget.chargeSession(error.usage, error.message);
+      // The failed round's deliberate reads still count toward the ledger.
+      for (const hunk of error.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
+      for (const read of error.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
     }
     for (const finding of state.verified) deps.memory.findings.insert(finding, run.id);
     for (const candidate of state.pending) deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id);
@@ -546,6 +549,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
       stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
       maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
+      changeCoverage: changeCoverage.summary(),
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,

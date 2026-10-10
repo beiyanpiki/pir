@@ -52,12 +52,20 @@ export interface ReviewerRoundResult {
 export class ReviewerRoundError extends Error {
   readonly candidates: CandidateFinding[];
   readonly usage?: SessionUsage;
+  /** C1: the failed session's coverage evidence, so its reads still land. */
+  readonly coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> };
 
-  constructor(cause: unknown, candidates: CandidateFinding[], usage?: SessionUsage) {
+  constructor(
+    cause: unknown,
+    candidates: CandidateFinding[],
+    usage?: SessionUsage,
+    coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> },
+  ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ReviewerRoundError";
     this.candidates = [...candidates];
     this.usage = usage ? { ...usage } : undefined;
+    this.coverageEvidence = coverageEvidence;
   }
 }
 
@@ -214,7 +222,14 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
       failure ??= { cause };
     }
   }
-  if (failure) throw new ReviewerRoundError(failure.cause, collector.candidates, usage);
+  if (failure) {
+    throw new ReviewerRoundError(
+      failure.cause,
+      collector.candidates,
+      usage,
+      deps.audit ? undefined : { hunks: hunkReads, reads: headReads },
+    );
+  }
 
   return {
     candidates: collector.candidates,

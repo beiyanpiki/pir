@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { findIssues } from "../../dist/core/supervisor.js";
@@ -1092,6 +1092,38 @@ test("findIssues: a reviewer that never reads the diff reports zero coverage (C1
     });
     assert.deepEqual(outcome.rounds[0].coverage, { hunksTotal: 1, hunksCovered: 0, filesTotal: 1, filesCovered: 0 });
   } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed run's manifest still carries the coverage ledger (dogfood F-121)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      // Never calls finish_round — the round fails and the run fails with it.
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} }),
+      /reviewer did not call finish_round/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    // The failed round's read lands in the ledger via ReviewerRoundError.
+    assert.equal(manifest.changeCoverage.hunksTotal, 1);
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();
     repo.cleanup();
   }
