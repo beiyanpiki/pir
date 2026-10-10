@@ -17,8 +17,19 @@ export interface ToolContext {
   changeSet?: ChangeSet;
   codeMap: CodeMapProvider;
   memory: Memory | null;
-  /** Optional per-session observer for pinned reads (audit coverage evidence). */
-  readObserver?: (path: string, revision: ReviewRevision) => void;
+  /**
+   * Optional per-session observer for pinned reads (audit coverage evidence;
+   * change-mode coverage ledger). Fired for every successful read; read_code
+   * additionally supplies the observed line window, `range.endLine === null`
+   * meaning open-ended. Callers that only need the path may ignore it.
+   */
+  readObserver?: (path: string, revision: ReviewRevision, range?: { startLine: number; endLine: number | null }) => void;
+  /**
+   * Optional per-session observer for raw diff hunks (change-mode coverage
+   * ledger): fired by get_change only when raw hunk lines are returned —
+   * overview and hunk-index listings do not count as reads.
+   */
+  hunkObserver?: (path: string, hunkIndex: number) => void;
 }
 
 export type ReviewRevision = "head" | "base" | "merge-base";

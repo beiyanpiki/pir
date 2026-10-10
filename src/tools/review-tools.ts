@@ -86,8 +86,12 @@ export function createReadCodeTool(ctx: ToolContext): ReviewTool {
         if (file.content === null) return bounded(`${provenance}\nERROR: file not found at this snapshot; request the actual old/new path explicitly for deletes or renames.`);
         const lines = file.content === "" ? [] : file.content.split("\n");
         if (file.content.endsWith("\n")) lines.pop();
-        if (start > Math.max(1, lines.length)) throw new Error("startLine is beyond the file");
         const end = Math.min(requestedEnd, lines.length);
+        // Coverage observation (C1): fire once with the actual window. The
+        // range-less fire inside readReviewFile keeps the audit path-count
+        // contract (including collector evidence reads) unchanged.
+        ctx.readObserver?.(file.path, revision, { startLine: start, endLine: end });
+        if (start > Math.max(1, lines.length)) throw new Error("startLine is beyond the file");
         const page = pageLines(lines, start - 1, Math.min(MAX_WINDOW, Math.max(0, end - start + 1)), charOffset, (i) => `${String(i + 1).padStart(5)}| `);
         const more = page.nextOffset < end;
         const continuation = more ? { path: file.path, revision, startLine: page.nextOffset + 1, endLine: end, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;
@@ -267,6 +271,9 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
           const hunk = file.hunks[hunkIndex];
           if (!hunk) throw new Error("hunkIndex is beyond the available hunks");
           const page = pageLines(hunk.lines, offset, limit, charOffset);
+          // Raw hunk lines were returned to the session — a deliberate read
+          // (C1). Overview and hunk-index listings never fire the observer.
+          if (page.lines.length > 0) ctx.hunkObserver?.(file.path, hunkIndex);
           const more = page.nextOffset < hunk.lines.length;
           const continuation = more ? { path: file.path, hunkIndex, offset: page.nextOffset, limit, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;
           const nextHunk = hunkIndex + 1 < file.hunks.length ? { path: file.path, hunkIndex: hunkIndex + 1, offset: 0, limit } : null;
