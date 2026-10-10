@@ -9,7 +9,7 @@ import { createAppContext } from "../../dist/app/context.js";
 import { onRunEvent } from "../../dist/observability/run-events.js";
 import { LiveRegistry } from "../../dist/server/live-registry.js";
 import { buildIdentity } from "../../dist/findings/identity.js";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 
 /**
  * End-to-end observability flow: a scripted findIssues run (no model) must
@@ -67,7 +67,7 @@ async function reviewerRecordsCandidate(tool) {
 }
 
 async function verifierConfirms(tool) {
-  await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "reproduced", confidence: 0.9 });
+  await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "reproduced", confidence: 0.9 });
 }
 
 test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes run.json", async () => {

@@ -37,3 +37,17 @@ export function createTempGitRepo(prefix = "pir-test-") {
 export function git(cwd, args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
 }
+
+/**
+ * Submit a verifier verdict the way the evidence gate requires (Q3): one
+ * pinned head read of `path`, then a rationale citing it. Scripted verifier
+ * sessions in the integration suites must model this contract — a bare
+ * submit_verdict is rejected as evidence-free.
+ */
+export async function submitVerdictWithEvidence(tool, verdict, path = "src/pay.ts") {
+  await tool("read_code").execute({ path });
+  return tool("submit_verdict").execute({
+    ...verdict,
+    rationale: `${verdict.rationale} Evidence: read ${path}:1.`,
+  });
+}

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { findIssues } from "../../dist/core/supervisor.js";
 import { applyVerdict, createReviewState } from "../../dist/core/review-state.js";
@@ -70,7 +70,7 @@ test("pending candidates survive a per-round verification cap without another re
     await finish(tools);
   }, async (tools) => {
     verified++;
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "src/counter.ts:1 reaches changed arithmetic" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "src/counter.ts:1 reaches changed arithmetic" }, "src/counter.ts");
   });
   try {
     const out = await findIssues({ ...f.ctx, factory: sessions, options: { maxRounds: 2, maxFindings: 10 } });
@@ -89,7 +89,7 @@ test("unverified candidates are persisted separately when rounds run out", async
     for (let i = 0; i < 3; i++) await record(tools, i);
     await finish(tools);
   }, async (tools) => {
-    await tools("submit_verdict").execute({ verdict: "rejected", rationale: "The caller rules this input out" });
+    await submitVerdictWithEvidence(tools, { verdict: "rejected", rationale: "The caller rules this input out" }, "src/counter.ts");
   });
   try {
     const out = await findIssues({ ...f.ctx, factory: sessions, options: { maxRounds: 1, maxVerificationsPerRound: 1 } });
@@ -110,7 +110,7 @@ test("verification prioritizes severity without treating the findings cap as a t
     await finish(tools);
   }, async (tools, prompt) => {
     seen = prompt;
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "Reachable data loss" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "Reachable data loss" }, "src/counter.ts");
   });
   try {
     const out = await findIssues({ ...f.ctx, factory: sessions, options: { maxFindings: 1 } });
@@ -132,7 +132,7 @@ test("concrete follow-up continues after a candidate-free first round", async ()
       await finish(tools);
     }
   }, async (tools) => {
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "Caller requires one increment" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "Caller requires one increment" }, "src/counter.ts");
   });
   try {
     const out = await findIssues({ ...f.ctx, factory: sessions, options: { maxRounds: 2 } });
@@ -155,7 +155,7 @@ test("reviewer receives code feedback, not a verifier rationale", async () => {
       await finish(tools);
     }
   }, async (tools) => {
-    await tools("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_VERIFIER_REASON", codeFeedback: "CODE_ONLY_GUARD: caller.ts validates this input" });
+    await submitVerdictWithEvidence(tools, { verdict: "rejected", rationale: "PRIVATE_VERIFIER_REASON", codeFeedback: "CODE_ONLY_GUARD: caller.ts validates this input" }, "src/counter.ts");
   });
   try {
     await findIssues({ ...f.ctx, factory: sessions, options: { maxRounds: 2 } });
@@ -206,7 +206,7 @@ test("real usage aggregates once and stops before another verifier session", asy
     await finish(tools);
   }, async (tools) => {
     verified++;
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "confirmed" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "confirmed" }, "src/counter.ts");
   }, true);
   try {
     const out = await findIssues({ ...f.ctx, factory: sessions, options: { maxTokens: 300 } });

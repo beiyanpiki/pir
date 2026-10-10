@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { auditIssues, AuditScopeError } from "../../dist/core/supervisor.js";
 
@@ -77,7 +77,7 @@ test("audit: full sweep reviews every unit, confirms snapshot defects, persists 
   }, async (tools, prompt) => {
     assert.ok(!/introduced by this change/.test(prompt), "audit verifier prompt must not demand attribution");
     assert.match(prompt, /Do NOT evaluate change attribution/i);
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "reachable at the pinned snapshot" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "reachable at the pinned snapshot" }, "src/a/util.ts");
   });
   try {
     const out = await auditIssues({ ...f.ctx, factory: sessions });
@@ -127,7 +127,7 @@ test("audit: finishing a unit without pinned reads is rejected and retried, then
     for (const file of owned) await tools("read_code").execute({ path: file });
     await tools("finish_round").execute({ summary: "covered", nextFocus: [], needsMoreRounds: false });
   }, async (tools) => {
-    await tools("submit_verdict").execute({ verdict: "rejected", rationale: "counter-evidence at snapshot" });
+    await submitVerdictWithEvidence(tools, { verdict: "rejected", rationale: "counter-evidence at snapshot" }, "src/a/util.ts");
   });
   try {
     const out = await auditIssues({ ...f.ctx, factory: sessions });
@@ -147,7 +147,7 @@ test("audit: token budget stop leaves the rest of the scope honestly unreviewed"
     for (const file of owned) await tools("read_code").execute({ path: file });
     await tools("finish_round").execute({ summary: "covered", nextFocus: [], needsMoreRounds: false });
   }, async (tools) => {
-    await tools("submit_verdict").execute({ verdict: "confirmed", rationale: "reachable at snapshot" });
+    await submitVerdictWithEvidence(tools, { verdict: "confirmed", rationale: "reachable at snapshot" }, "src/a/util.ts");
   });
   try {
     const out = await auditIssues({ ...f.ctx, factory: sessions, options: { maxTokens: 1 } });
@@ -199,10 +199,10 @@ test("audit: prior accepted-risk suppression still requires the verifier's mater
     await tools("finish_round").execute({ summary: "covered", nextFocus: [], needsMoreRounds: false });
   }, async (tools, prompt, config) => {
     seenPrompts.push(prompt);
-    await tools("submit_verdict").execute({
+    await submitVerdictWithEvidence(tools, {
       verdict: "confirmed", rationale: "technically real at the snapshot",
       decisionAssessments: [{ memoryId: prompt.match(/"memoryId":"([^"]+)"/)?.[1] ?? "m1", stillApplies: false, rationale: "callers changed" }],
-    });
+    }, "src/a/util.ts");
   });
   try {
     // Seed a trusted accepted-risk decision for this exact fingerprint.

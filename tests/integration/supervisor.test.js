@@ -10,7 +10,7 @@ import { runFind } from "../../dist/app/find.js";
 import { applyFeedback } from "../../dist/memory/feedback.js";
 import { buildMemoryPack, matchIssueHistory } from "../../dist/memory/retrieval.js";
 import { buildIdentity } from "../../dist/findings/identity.js";
-import { createTempGitRepo } from "../fixtures/helpers.js";
+import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 
 /**
  * Scripted session factory: plays the role of the model by invoking the very
@@ -119,7 +119,7 @@ test("findIssues: reviewer candidate -> verifier confirmed -> persisted finding"
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "confirmed",
         rationale: "traced the path: consumeQuota runs before the gateway call",
         confidence: 0.9,
@@ -175,7 +175,7 @@ test("findIssues: trusted prior decision verified still-applicable suppresses re
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool, promptText) => {
       assert.ok(promptText.includes("PRIOR DECISIONS"), "verifier must receive prior decisions");
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "rejected",
         rationale: "prior decision covers this exact claim",
         priorDecisionStillApplies: true,
@@ -230,7 +230,7 @@ test("findIssues: accepted-risk suppresses even when the verifier confirms the p
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "confirmed",
         rationale: "the bug is real — and the team's accepted-risk decision still covers it",
         priorDecisionStillApplies: true,
@@ -276,7 +276,7 @@ test("findIssues: prior decision that no longer applies does NOT suppress", asyn
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "confirmed",
         rationale: "the code now uses retry_count for account lockout; old decision outdated",
         priorDecisionStillApplies: false,
@@ -397,7 +397,7 @@ test("findIssues: maxFindings caps reported findings and stops the loop", async 
       await tool("finish_round").execute({ summary: "found several issues", nextFocus: [], needsMoreRounds: true });
     },
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
     },
   });
   try {
@@ -448,7 +448,7 @@ test("findIssues: maxFindings null (#57 unlimited) reports every candidate past 
       await tool("finish_round").execute({ summary: "found a dozen issues", nextFocus: [], needsMoreRounds: false });
     },
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
     },
   });
   try {
@@ -497,7 +497,7 @@ test("findIssues: rejected findings do not consume the maxFindings budget", asyn
     verifierScript: async (tool, promptText) => {
       // Round 1's candidate is rejected; round 2's is confirmed.
       const verdict = promptText.includes("claim 1:") ? "rejected" : "confirmed";
-      await tool("submit_verdict").execute({ verdict, rationale: "checked the code", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict, rationale: "checked the code", confidence: 0.9 });
     },
   });
   try {
@@ -533,7 +533,7 @@ test("findIssues: PIR_TRANSCRIPTS=1 dumps one transcript per session under the s
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced", confidence: 0.9 });
     },
   });
   const savedTranscripts = process.env.PIR_TRANSCRIPTS;
@@ -598,7 +598,7 @@ test("findIssues: transcripts survive worktree cleanup in serve mode (issue #7)"
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced", confidence: 0.9 });
     },
   });
   try {
@@ -640,7 +640,7 @@ test("findIssues: no transcript files without PIR_TRANSCRIPTS", async () => {
   const factory = new FakeSessionFactory({
     reviewerScript: reviewerRecordsCandidate,
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({ verdict: "confirmed", rationale: "traced", confidence: 0.9 });
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced", confidence: 0.9 });
     },
   });
   const savedTranscripts = process.env.PIR_TRANSCRIPTS;
@@ -693,7 +693,7 @@ test("verifyFix: rejected verdict (trigger gone) marks the resolution verified",
 
   const factory = new FakeSessionFactory({
     verifierScript: async (tool) => {
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "rejected",
         rationale: "consumeQuota is now called after the gateway succeeds",
         confidence: 0.9,
@@ -720,7 +720,7 @@ test("runFind service layer returns a renderable outcome", async () => {
     factory: new FakeSessionFactory({
       reviewerScript: reviewerRecordsCandidate,
       verifierScript: async (tool) => {
-        await tool("submit_verdict").execute({ verdict: "uncertain", rationale: "cannot trace", confidence: 0.3 });
+        await submitVerdictWithEvidence(tool, { verdict: "uncertain", rationale: "cannot trace", confidence: 0.3 });
       },
     }),
   });
@@ -782,7 +782,7 @@ test("findIssues: candidates beyond the verification cap are drained from the pe
       for (const c of [ALPHA, BETA]) {
         if (text.includes(c.title)) verifiedTitles.push(c.title);
       }
-      await tool("submit_verdict").execute({
+      await submitVerdictWithEvidence(tool, {
         verdict: "confirmed",
         rationale: "traced the path in the test double",
         confidence: 0.9,

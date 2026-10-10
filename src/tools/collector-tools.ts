@@ -160,7 +160,43 @@ export function createFinishRoundTool(outcome: RoundOutcome): ReviewTool {
 
 export interface VerdictCollector { verdict?: VerifierResult }
 
-export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[]): ReviewTool {
+/**
+ * Session-local evidence snapshot, taken when submit_verdict executes. A
+ * session with zero pinned reads and zero code-evidence calls has not
+ * examined anything — a second opinion without new evidence is exactly the
+ * hallucination pattern the evidence gate exists to stop.
+ */
+export interface VerifierEvidence {
+  /** Distinct paths pinned-read at head this session. */
+  readPaths: ReadonlySet<string>;
+  /** Code-evidence calls this session (searches, structural lookups, get_change). */
+  evidenceCalls: number;
+}
+
+/**
+ * Whether the rationale cites the pinned-read path verbatim. A read path may
+ * have no token grammar at all — Dockerfile/Makefile (no dot), .gitignore
+ * (leading dot), paths with spaces — so this is a substring search, guarded
+ * on both edges against matching inside a longer path-like token (reading
+ * "a.ts" must not be satisfied by "meta.tsconfig" before it, nor "src/pay.ts"
+ * by "src/pay.ts.orig" after it). A single trailing dot is ambiguous —
+ * sentence period versus the start of an extension — and only continues the
+ * rejection when the character after it would extend the token further.
+ */
+function citesReadPath(rationale: string, readPath: string): boolean {
+  const inPathToken = /[A-Za-z0-9._\-/]/;
+  let idx = rationale.indexOf(readPath);
+  while (idx !== -1) {
+    const before = idx === 0 ? "" : rationale[idx - 1]!;
+    const after = rationale[idx + readPath.length] ?? "";
+    const afterEffective = after === "." ? rationale[idx + readPath.length + 1] ?? "" : after;
+    if (!inPathToken.test(before) && !inPathToken.test(afterEffective)) return true;
+    idx = rationale.indexOf(readPath, idx + 1);
+  }
+  return false;
+}
+
+export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
   const known = new Set(matchedIds ?? []);
   return {
     name: "submit_verdict",
@@ -179,6 +215,19 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         if (collector.verdict) throw new Error("submit_verdict was already submitted.");
         const verdict = member(params.verdict, VERDICTS, "verdict");
         const rationale = text(params.rationale, "rationale");
+        const evidenceSeen = evidence?.();
+        if (evidenceSeen && evidenceSeen.readPaths.size === 0 && evidenceSeen.evidenceCalls === 0) {
+          throw new Error("No evidence gathered in this session: read the candidate's code (read_code/get_change) or run a search before submitting a verdict.");
+        }
+        if (evidenceSeen && evidenceSeen.readPaths.size === 0) {
+          throw new Error("No pinned read in this session: read the candidate's code with read_code, then mention the read path in the rationale.");
+        }
+        if (evidenceSeen) {
+          const cited = [...evidenceSeen.readPaths].some((readPath) => citesReadPath(rationale, readPath));
+          if (!cited) {
+            throw new Error("The rationale cites no pinned-read path: read the relevant code with read_code and mention the read path in the rationale.");
+          }
+        }
         const confidence = params.confidence === undefined ? 0.7 : params.confidence;
         if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error("confidence must be a finite number from 0 to 1.");
         const codeFeedback = params.codeFeedback === undefined ? undefined : text(params.codeFeedback, "codeFeedback", 2000);
