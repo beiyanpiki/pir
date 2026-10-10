@@ -580,6 +580,15 @@ serve workspace is not a checkout; use bundles or a registered `--repo`.
 | `PIR_KEEP_WORKTREE=1` | retain materialized review worktrees for debugging |
 | `PIR_WEB_UI=1`, `PIR_WEB_UI_TOKEN` | read-only explorer and separate viewer auth |
 
+The change-mode run manifest (and each round record in it) carries a
+coverage ledger (C1): `changeCoverage` with `hunksTotal`/`hunksCovered`,
+`filesTotal`/`filesCovered`, and a per-file `files` list (capped at 200). A
+hunk counts as covered when raw diff lines were paged from `get_change`
+(`path` + `hunkIndex`) or a head-revision `read_code` window intersected its
+new-side interval; overview/hunk-index listings and mechanically collected
+candidate evidence never count as reads. Observational only — coverage does
+not gate, suppress, or reroute anything.
+
 `PIR_REMOTE_TIMEOUT` covers execution/bundle requests and job status requests;
 it is not an overall asynchronous job deadline. Memory sync instead uses its
 own 120-second request timeout.
