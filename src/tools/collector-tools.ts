@@ -177,14 +177,20 @@ export interface VerifierEvidence {
  * Whether the rationale cites the pinned-read path verbatim. A read path may
  * have no token grammar at all — Dockerfile/Makefile (no dot), .gitignore
  * (leading dot), paths with spaces — so this is a substring search, guarded
- * only against matching inside a longer path-like token (reading "a.ts" must
- * not be satisfied by the rationale mentioning "meta.tsconfig").
+ * on both edges against matching inside a longer path-like token (reading
+ * "a.ts" must not be satisfied by "meta.tsconfig" before it, nor "src/pay.ts"
+ * by "src/pay.ts.orig" after it). A single trailing dot is ambiguous —
+ * sentence period versus the start of an extension — and only continues the
+ * rejection when the character after it would extend the token further.
  */
 function citesReadPath(rationale: string, readPath: string): boolean {
+  const inPathToken = /[A-Za-z0-9._\-/]/;
   let idx = rationale.indexOf(readPath);
   while (idx !== -1) {
     const before = idx === 0 ? "" : rationale[idx - 1]!;
-    if (!/[A-Za-z0-9._\-/]/.test(before)) return true;
+    const after = rationale[idx + readPath.length] ?? "";
+    const afterEffective = after === "." ? rationale[idx + readPath.length + 1] ?? "" : after;
+    if (!inPathToken.test(before) && !inPathToken.test(afterEffective)) return true;
     idx = rationale.indexOf(readPath, idx + 1);
   }
   return false;

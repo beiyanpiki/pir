@@ -195,6 +195,29 @@ test("evidence gate stage 2: a rationale citing an unread path is rejected until
   }
 });
 
+test("evidence gate stage 2: a read path consumed by a longer unread token is not a citation (dogfood F-117)", async () => {
+  const fx = await fixture();
+  const factory = scriptedFactory(async ({ tools }) => {
+    await tools("read_code").execute({ path: "src/pay.ts" });
+    // "src/pay.ts" as a proper prefix of the unread "src/pay.ts.orig": not a citation.
+    const prefixRejected = await tools("submit_verdict").execute({
+      verdict: "confirmed", rationale: "the failure is obvious in src/pay.ts.orig backups", confidence: 0.9,
+    });
+    assert.match(prefixRejected.text, /cites no pinned-read path/);
+    // A trailing sentence period is punctuation, not an extension.
+    const periodAccepted = await tools("submit_verdict").execute({
+      verdict: "confirmed", rationale: "quota is charged at src/pay.ts. The gateway call follows it.", confidence: 0.9,
+    });
+    assert.equal(periodAccepted.terminate, true);
+  });
+  try {
+    const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
+    assert.equal(result.verdict, "confirmed");
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("evidence gate stage 2: extension-less, root-dotfile, and spaced read paths are citable (dogfood F-116)", async () => {
   const repo = createTempGitRepo("pir-evidence-gate-paths-");
   repo.write("Makefile", "build:\n\tnode build.js\n");
