@@ -11,13 +11,15 @@ Decision record: [ADR 0003](../adr/0003-findings-quality-roadmap.md).
 This document is the implementation plan for that decision: the PR series,
 per-slice designs down to signatures and edge cases, tests, live QA,
 acceptance criteria, and the benchmark protocol that judges them.
+Progress is tracked in issue #73; this file is re-synced to reality as
+slices land.
 
-**This PR is plan-only.** No code in this series is implemented here. It is
-the **stack root**: every implementation PR below is created on top of it
-as a GitHub stacked PR (`gh stack link`, see "PR stack convention"), so the
-whole series merges bottom-up in review order. This PR must not be merged
-without the maintainer's explicit decision, and the series must not be
-merged out from under it.
+**Status (post-Q1).** D1 (this plan + ADR 0003) merged via #74; B1 merged
+via #76; Q1 merged via #78. The original D1-rooted stacked-PR convention
+was retired when D1 merged — every landed slice branched off `dev`
+directly and later slices do the same (see "PR convention"; ADR 0003's
+process paragraph is amended to match). **Next slice: Q2 — parallel
+verification drain.**
 
 ## Goals
 
@@ -25,9 +27,11 @@ merged out from under it.
    a diff get found — measured, not felt.
 2. **Precision:** fewer false positives reach the report — targeting the
    measured root cause (context failures, ~87% of rejected findings).
-3. **Measurability:** every behavioral change in the series lands with a
-   benchmark delta row; changes that cannot justify themselves are reverted
-   or stay behind default-off flags.
+3. **Measurability:** every behavioral change in the series is measured
+   (scenario harness per PR; ReviewBench delta rows — waived for
+   pre-baseline slices by the deferral decision, active from the baseline
+   onward — see the benchmark protocol); changes that cannot justify
+   themselves are reverted or stay behind default-off flags.
 
 ## Non-goals
 
@@ -57,61 +61,36 @@ merged out from under it.
 
 ## PR series overview
 
-| PR | Slice | Type | Stack position | Depends on | Cost | Risk |
-|----|-------|------|----------------|-----------|------|------|
-| D1 | This plan + ADR 0003 (docs, stack root) | docs | root (base: dev) | — | — | — |
-| B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | 1 | — | M | L |
-| Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | 2 | B1 (for delta rows) | S | L |
-| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | 3 | — | M | M |
-| Q3 | Verifier evidence gate on `submit_verdict` | feat | 4 | — | S–M | M |
-| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | 5 | — | M | L |
-| Q5 | Separate verifier model option | feat | 6 | — | S | L |
-| C1 | Change-mode diff coverage ledger | feat | 7 | — | M | M |
-| M1 | Memory denoising, observational (similar-dismissed context) | feat | 8 | — | M | M |
-| F1 | Multi-angle finder fan-out (default-off) | feat | 9 | B1, Q2 | L | H |
+| PR | Slice | Type | Status | Depends on | Cost | Risk |
+|----|-------|------|--------|-----------|------|------|
+| D1 | This plan + ADR 0003 (docs) | docs | merged #74 | — | — | — |
+| B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | merged #76 | — | M | L |
+| B1-baseline | 2× test-25 baseline on dev | bench | deferred (maintainer decision; lands before F1 — reference for F1+ rows; pre-baseline slices' rows waived) | B1 | S | — |
+| Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | merged #78 (ReviewBench row waived by the baseline deferral) | B1 (for delta rows) | S | L |
+| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | **next** | — | M | M |
+| Q3 | Verifier evidence gate on `submit_verdict` | feat | pending | — | S–M | M |
+| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | pending | — | M | L |
+| Q5 | Separate verifier model option | feat | pending | Q2 preferred (design carries a no-Q2 fallback) | S | L |
+| C1 | Change-mode diff coverage ledger | feat | pending | — | M | M |
+| M1 | Memory denoising, observational (similar-dismissed context) | feat | pending | — | M | M |
+| F1 | Multi-angle finder fan-out (default-off) | feat | pending | B1 numbers, Q2 pool | L | H |
 
-### PR stack convention
+### PR convention
 
-Every implementation PR is a **GitHub stacked PR on top of D1**, created
-with the `gh stack` extension (github/gh-stack):
+The original plan stacked every implementation PR on D1 via the `gh stack`
+extension. That convention was retired when D1 merged: **every slice
+branches off `dev` directly** and follows the plain work-with-pr lifecycle
+(isolated worktree, model-free tests + live QA, dogfood gate before each
+push, CI green, merge on explicit approval). Consequences:
 
-```sh
-# once, after D1's PR exists — establishes the stack rooted at D1:
-gh stack link <D1-PR-number> <implementation-branch>
-
-# growing the stack afterwards (stack number shown in the GitHub stack UI):
-gh stack link <stack-number> <next-implementation-branch>
-```
-
-`gh stack link` pushes the branch if needed, creates the PR with the
-correct base-branch chaining, and never removes existing stack members.
-Consequences for this series:
-
-- Each implementation branch is cut from the **current stack top**, not
-  from `dev` — the git base of PR N is the branch of PR N−1.
-- Merge order is stack order, bottom-up: D1 first, then B1, Q1, …, F1.
-- Independent slices may still be *developed* concurrently in separate
-  worktrees, but they are linked into the stack in the listed order and
-  rebased onto the new top before linking.
-- The stack ordering above is dependency-consistent: B1 before the PRs
-  that cite its delta rows, Q2 before F1 (worker-pool reuse).
-
-Landing order: **B1 first** (it measures everything else), then
-Q1/Q2/Q3 (logically independent, stacked in listed order), then
-Q4/Q5/C1/M1, F1 last. Every PR still follows the full work-with-pr
-lifecycle: isolated worktree, model-free tests + live QA, dogfood gate
-before each push, CI green, merge only on explicit approval.
-
-```
-D1 (this PR, WIP)
- └─ B1 benchmark ──┬─ Q1 prompts        (delta rows vs B1 baseline)
-                   ├─ Q2 parallel drain ── F1 fan-out (needs pool + benchmark)
-                   ├─ Q3 evidence gate   │
-                   ├─ Q4 confidence/verdict │
-                   ├─ Q5 verifier model │
-                   ├─ C1 coverage ledger│
-                   └─ M1 memory denoise │
-```
+- Merge order is only dependency-ordered, not stack-ordered: B1 before any
+  PR that cites its delta rows, Q2 before F1 (worker-pool reuse). Q5 may
+  land before or after Q2 — its design section carries an explicit
+  no-Q2 fallback. Everything else may land in any convenient order.
+- Independent slices may be developed concurrently in separate worktrees;
+  rebase onto `dev` before linking if another slice landed in between.
+- The tracking issue (#73) is the live status; this file is re-synced as
+  slices land.
 
 ### Benchmark protocol (applies to Q*/C1/M1/F1)
 
@@ -125,13 +104,40 @@ Two measurement surfaces, one per cost tier:
   It directly measures blacklist behavior (Q1) and evidence-gate behavior
   (Q3) on its negative scenarios.
 - **ReviewBench (added by B1).** Real-world PRs with human golden findings.
-  The real-world gate: baseline recorded after B1 lands (test-25, two
-  runs), delta rows appended by each behavioral PR.
+  The real-world gate: the 2× test-25 baseline on dev plus delta rows
+  appended by each behavioral PR — currently deferred, see below.
+
+Standing rules for both surfaces and the post-baseline delta-row era:
 
 - **Variance discipline:** any "no regression" claim on recall/precision
   requires both runs not worse than baseline's worse run.
 - **Cost:** ReviewBench subset-10 is the iteration surface; full test-25
   only for baseline and release-ish claims.
+
+**B1-baseline deferral (maintainer decision, recorded in #73):** the 2×
+test-25 baseline on dev is deferred until development completes. Until it
+lands, behavioral PRs are gated by the scenario harness alone. The
+consequences, stated honestly rather than pretended away:
+
+- The baseline lands **before F1** — F1's gate cites B1 numbers, so
+  "until development completes" means before the closeout gates, not
+  after them. From the baseline onward the delta-row regime resumes
+  (F1's A/B rows and later).
+- Per-PR ReviewBench attribution for slices merged before the baseline
+  (Q1–M1) is **waived, not deferred**: the baseline's dev build already
+  contains every one of them, so no later comparison can isolate a
+  single slice's effect — backfilling individual rows is explicitly not
+  attempted. Their measurable gate is the scenario-harness variance bar.
+- ADR 0003 acceptance is amended to what is measurable under the
+  deferral (see the ADR's Status section): Q1–Q3 merged under the
+  scenario-harness gate, the baseline era opened, F1's A/B rows
+  non-regressing.
+- Blanket rule for the per-slice sections below: where an acceptance or
+  QA clause cites a ReviewBench delta row and the slice lands
+  pre-baseline (Q2–M1), the scenario-harness variance bar substitutes
+  for that half; F1's clauses stand (it merges post-baseline).
+- `tests/eval/reviewbench/RESULTS.md` and the harness README carry the
+  same notice so a contributor opening either sees it.
 
 ---
 
@@ -400,12 +406,18 @@ baseline/candidate builds — its negative expectations
 (`preexisting-bug-unchanged`, `guarded-negative`, clean refactors) are the
 direct measurement of this change; (b) dogfood gate on this diff itself.
 Plus, since B1 has landed: ReviewBench subset-10 delta row before/after.
+*(Recorded outcome: (a) and (b) ran — runs 5–6 passed the variance bar;
+the subset-10 row was waived by the B1-baseline deferral, not skipped by
+choice.)*
 
 ### Acceptance
 
 - Tests green; benchmark delta row shows precision not worse and recall not
   worse beyond the variance rule; if either regresses, the offending item
   is removed in the same PR rather than argued for.
+  *(Superseded by the B1-baseline deferral for the ReviewBench half: the
+  row is waived, the scenario-harness variance bar was the gate that
+  applied — and passed.)*
 
 ### Out of scope
 
@@ -590,7 +602,9 @@ negligible).
 
 Tests green; live transcripts show the gate never silently passing; no
 increase in `uncertain`/`missing-verdict` rates beyond noise in the
-benchmark delta row.
+benchmark delta row. (Pre-baseline slice — the ReviewBench half is
+waived per the deferral note; the scenario-harness variance bar
+substitutes.)
 
 ---
 
@@ -791,7 +805,9 @@ uncovered hunks and (stage 2) a forced follow-up round in the round log.
 ### Acceptance
 
 Tests green; live QA recorded; benchmark delta row (expected: recall trend
-up on `diff-only` golden findings; precision unchanged).
+up on `diff-only` golden findings; precision unchanged). (Pre-baseline
+slice — the ReviewBench half is waived per the deferral note; the
+scenario-harness variance bar substitutes.)
 
 ---
 
@@ -864,7 +880,8 @@ no-op there — expected and asserted in tests).
 Tests green; live QA recorded; benchmark delta row (cold-memory tasks
 expected unchanged — the row documents the no-op, the mechanism's value is
 for warm-memory production use and later benchmarking on pir's own
-history).
+history). (Pre-baseline slice — the ReviewBench half is waived per the
+deferral note; the scenario-harness variance bar substitutes.)
 
 ---
 
@@ -949,20 +966,29 @@ re-evaluation after model upgrades.
 
 ## Sequencing summary
 
-1. **D1** (this PR): plan + ADR; stack root; awaiting maintainer merge
-   decision — never auto-merged.
-2. **B1** linked on top of D1; ReviewBench baseline recorded (2× test-25)
-   in RESULTS.md. The scenario harness baseline already exists
+1. **D1** — merged (#74). The stacked-PR convention retired with it; all
+   later slices branch off `dev` directly (see "PR convention").
+2. **B1** — merged (#76). The scenario-harness baseline already exists
    (`tests/eval/results/2026-09-29-dev-vs-review-loop-glm-5.3-run1.json`)
-   and keeps accumulating dated runs per its own convention.
-3. **Q1 → Q2 → Q3** stacked in order (developed concurrently where
-   convenient, linked sequentially); each appends its delta row.
-4. **Q4 → Q5 → C1 → M1** stacked next (Q4/Q5 touch options plumbing —
+   and keeps accumulating dated runs per its own convention. The
+   ReviewBench 2× test-25 baseline is deferred by maintainer decision
+   until development completes (see "Benchmark protocol").
+3. **Q1** — merged (#78): scenario-harness runs 5–6 passed the variance
+   bar; its ReviewBench delta row is waived by the baseline deferral.
+4. **Q2 next** (`feat/parallel-verify-drain`), then Q3 — logically
+   independent; Q2 first is preferred (F1 needs its worker pool; Q5 works
+   without it via its documented fallback).
+5. **Q4 → Q5 → C1 → M1** after that (Q4/Q5 touch options plumbing —
    landing before C1/F1 reduces conflicts; no semantic dependency).
-5. **F1** last, gated on B1 numbers + Q2 pool.
-6. ADR 0003 status → Accepted once the first three behavioral PRs (Q1–Q3)
-   land with non-regressing delta rows; any reverted item amends the ADR.
-7. When every task in the tracking issue is complete, **delete this plan
+6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
+   lands before F1 (see the deferral note under "Benchmark protocol").
+7. ADR 0003 status → Accepted once Q1–Q3 have landed under the
+   scenario-harness variance gate and the pre-F1 baseline era has opened
+   with F1's A/B rows non-regressing (per-PR ReviewBench rows for
+   pre-baseline slices are waived by the deferral; the ADR's Status
+   section carries the amended acceptance clause). Any reverted item
+   amends the ADR.
+8. When every task in the tracking issue is complete, **delete this plan
    file** (top-of-file note) — ADR 0003 and the landed design docs are the
    durable record.
 

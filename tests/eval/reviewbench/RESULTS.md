@@ -9,9 +9,14 @@ comparisons — every row records provider/model/SHA.
 
 ## Status
 
-**No baseline yet.** After this harness lands on dev, record 2× full
-test-25 runs on current dev as the baseline rows; behavior PRs (Q1–Q5, C1,
-M1, F1) then append delta rows here.
+**No baseline yet — deferred by maintainer decision** (tracking issue #73;
+see the "B1-baseline deferral" note in
+[docs/plans/findings-quality-roadmap.md](../../../docs/plans/findings-quality-roadmap.md)).
+The 2× full test-25 baseline runs on dev are recorded before F1's gate —
+from then on, behavior PRs append delta rows here. Per-PR rows for slices
+merged before the baseline (Q1–M1) are **waived**: the baseline's dev
+build already contains them, so their individual effect is not isolable
+after the fact; their gate was the scenario harness.
 
 ## Round registry
 
