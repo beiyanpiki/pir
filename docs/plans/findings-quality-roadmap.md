@@ -14,12 +14,13 @@ acceptance criteria, and the benchmark protocol that judges them.
 Progress is tracked in issue #73; this file is re-synced to reality as
 slices land.
 
-**Status (post-Q1).** D1 (this plan + ADR 0003) merged via #74; B1 merged
-via #76; Q1 merged via #78. The original D1-rooted stacked-PR convention
-was retired when D1 merged — every landed slice branched off `dev`
-directly and later slices do the same (see "PR convention"; ADR 0003's
-process paragraph is amended to match). **Next slice: Q2 — parallel
-verification drain.**
+**Status (post-Q3).** D1 (this plan + ADR 0003) merged via #74; B1 merged
+via #76; Q1 merged via #78; Q2 merged via #80; Q3 merged via #81. The
+original D1-rooted stacked-PR convention was retired when D1 merged —
+every landed slice branched off `dev` directly and later slices do the
+same (see "PR convention"; ADR 0003's process paragraph is amended to
+match). **Next slice: Q4 — persisted confidence, `--min-confidence`
+split, run-level verdict.**
 
 ## Goals
 
@@ -67,9 +68,9 @@ verification drain.**
 | B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | merged #76 | — | M | L |
 | B1-baseline | 2× test-25 baseline on dev | bench | deferred (maintainer decision; lands before F1 — reference for F1+ rows; pre-baseline slices' rows waived) | B1 | S | — |
 | Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | merged #78 (ReviewBench row waived by the baseline deferral) | B1 (for delta rows) | S | L |
-| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | **next** | — | M | M |
-| Q3 | Verifier evidence gate on `submit_verdict` | feat | pending | — | S–M | M |
-| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | pending | — | M | L |
+| Q2 | Parallel verification drain (`verifyConcurrency`) | feat | merged #80 (live A/B 1.56x wall-clock, identical fingerprint sets) | — | M | M |
+| Q3 | Verifier evidence gate on `submit_verdict` | feat | merged #81 (dogfood fixed two citation gaps, F-116/F-117) | — | S–M | M |
+| Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | **next** | — | M | L |
 | Q5 | Separate verifier model option | feat | pending | Q2 preferred (design carries a no-Q2 fallback) | S | L |
 | C1 | Change-mode diff coverage ledger | feat | pending | — | M | M |
 | M1 | Memory denoising, observational (similar-dismissed context) | feat | pending | — | M | M |
@@ -975,11 +976,14 @@ re-evaluation after model upgrades.
    until development completes (see "Benchmark protocol").
 3. **Q1** — merged (#78): scenario-harness runs 5–6 passed the variance
    bar; its ReviewBench delta row is waived by the baseline deferral.
-4. **Q2 next** (`feat/parallel-verify-drain`), then Q3 — logically
-   independent; Q2 first is preferred (F1 needs its worker pool; Q5 works
-   without it via its documented fallback).
-5. **Q4 → Q5 → C1 → M1** after that (Q4/Q5 touch options plumbing —
-   landing before C1/F1 reduces conflicts; no semantic dependency).
+4. **Q2** — merged (#80): peak concurrency ≤ C, C=4 output identical to
+   serial, live A/B 1.56x wall-clock with identical fingerprint sets.
+   **Q3** — merged (#81): verifier evidence gate on `submit_verdict`;
+   the dogfood loop found and fixed two citation-matching gaps
+   (F-116/F-117).
+5. **Q4 next** (`feat/confidence-and-run-verdict`), then Q5 → C1 → M1
+   (Q4/Q5 touch options plumbing — landing before C1/F1 reduces
+   conflicts; no semantic dependency).
 6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
    lands before F1 (see the deferral note under "Benchmark protocol").
 7. ADR 0003 status → Accepted once Q1–Q3 have landed under the
