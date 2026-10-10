@@ -85,6 +85,12 @@ Usage:
                       parallel verifier sessions during each verification
                       drain (1-8, default 1; PIR_VERIFY_CONCURRENCY env
                       applies when the flag is absent)
+  --min-confidence <x>
+                      bucket confirmed findings whose verifier confidence is
+                      below this 0-1 threshold into a separate low-confidence
+                      section (default 0 = off; PIR_MIN_CONFIDENCE env applies
+                      when the flag is absent). Bucketing only: nothing is
+                      deleted or dropped from the findings list
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
   --model <id>        model override for sub-sessions: <provider>/<model> or
@@ -114,6 +120,12 @@ Usage:
                       parallel verifier sessions during each verification
                       drain (1-8, default 1; PIR_VERIFY_CONCURRENCY env
                       applies when the flag is absent)
+  --min-confidence <x>
+                      bucket confirmed findings whose verifier confidence is
+                      below this 0-1 threshold into a separate low-confidence
+                      section (default 0 = off; PIR_MIN_CONFIDENCE env applies
+                      when the flag is absent). Bucketing only: nothing is
+                      deleted or dropped from the findings list
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
   --dry-run           preview the scope a real audit of the same tree and
                       options would take (#56): head/tree ids, selection and
@@ -350,6 +362,7 @@ export const VALUE_FLAGS = new Set([
   "--max-tokens",
   "--max-findings",
   "--verify-concurrency",
+  "--min-confidence",
   "--fail-on",
   "--model",
   "--provider",
@@ -858,6 +871,29 @@ export function verifyConcurrencyFlag(
 }
 
 /**
+ * --min-confidence (Q4): bucket confirmed findings whose verifier confidence
+ * falls below this 0–1 threshold into a separate low-confidence section.
+ * Precedence: flag > PIR_MIN_CONFIDENCE env > undefined (the supervisor
+ * applies the default of 0 = off). Bucketing never deletes: reported set,
+ * maxFindings accounting, and the exit-code contract are unchanged.
+ */
+export function minConfidenceFlag(
+  flags: Map<string, string | boolean>,
+  env: NodeJS.ProcessEnv = process.env,
+): number | undefined {
+  const raw = flags.get("--min-confidence") ?? env.PIR_MIN_CONFIDENCE;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new UsageError(`invalid --min-confidence: a value is required (number between 0 and 1)`);
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new UsageError(`invalid --min-confidence: ${raw} (number between 0 and 1 required)`);
+  }
+  return value;
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -937,11 +973,13 @@ async function cmdFind(
     maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
     verifyConcurrency: verifyConcurrencyFlag(flags),
+    minConfidence: minConfidenceFlag(flags),
     model: flags.get("--model") as string | undefined,
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
   });
   const findings = result.findings.map((row) => toFindingView(ctx, row));
+  const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
   if (json) {
     emit(
@@ -975,6 +1013,9 @@ async function cmdFind(
           pendingFindings: result.pendingFindings.map((row) => toFindingView(ctx, row)),
           verificationErrors: result.verificationErrors,
           uncertaintyReasons: result.uncertaintyReasons,
+          runVerdict: result.runVerdict,
+          minConfidence: result.minConfidence,
+          lowConfidenceFindings,
           findings,
         },
         { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
@@ -993,6 +1034,9 @@ async function cmdFind(
         pendingCandidates: result.pendingCandidates,
         transcriptDir: result.transcriptDir,
         runId: result.runId,
+        runVerdict: result.runVerdict,
+        minConfidence: result.minConfidence,
+        lowConfidenceFindings,
       })}\n`,
     );
   }
@@ -1037,7 +1081,7 @@ async function cmdAudit(
   // no model, no writes. Run-shaping flags cannot affect a preview, so they
   // are rejected instead of silently ignored.
   if (flags.get("--dry-run") === true) {
-    for (const shaping of ["--max-tokens", "--max-findings", "--verify-concurrency", "--fail-on"]) {
+    for (const shaping of ["--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on"]) {
       if (flags.has(shaping)) {
         throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
       }
@@ -1059,6 +1103,7 @@ async function cmdAudit(
     maxTokens: positiveIntFlag(flags, "--max-tokens"),
     maxFindings,
     verifyConcurrency: verifyConcurrencyFlag(flags),
+    minConfidence: minConfidenceFlag(flags),
     model: flags.get("--model") as string | undefined,
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
@@ -1067,6 +1112,7 @@ async function cmdAudit(
     throw error;
   });
   const findings = result.findings.map((row) => toFindingView(ctx, row));
+  const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
   if (json) {
     emit(
@@ -1103,6 +1149,9 @@ async function cmdAudit(
           suspectedDuplicates: result.suspectedDuplicates,
           verificationErrors: result.verificationErrors,
           uncertaintyReasons: result.uncertaintyReasons,
+          runVerdict: result.runVerdict,
+          minConfidence: result.minConfidence,
+          lowConfidenceFindings,
           findings,
         },
         { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
@@ -1124,6 +1173,9 @@ async function cmdAudit(
         transcriptDir: result.transcriptDir,
         suspectedDuplicates: result.suspectedDuplicates,
         runId: result.runId,
+        runVerdict: result.runVerdict,
+        minConfidence: result.minConfidence,
+        lowConfidenceFindings,
       })}\n`,
     );
   }

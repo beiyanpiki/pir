@@ -1,5 +1,6 @@
 import { SEVERITY_ORDER, type Severity } from "../findings/types.js";
 import type { ActivePack } from "../plugins/types.js";
+import type { RunVerdict } from "../core/review-state.js";
 import type { FindingView } from "./find.js";
 
 export const SCHEMA_VERSION = 1;
@@ -57,6 +58,29 @@ export function renderFindingsText(findings: FindingView[]): string {
   return findings.map(renderFinding).join("\n\n");
 }
 
+/**
+ * Low-confidence reporting split (Q4). Callers without the option render
+ * exactly as before. Bucketing only — the low-confidence rows stay inside
+ * `findings` (reported set, maxFindings accounting, exit-code contract all
+ * unchanged); this only decides which section renders them.
+ */
+function splitReported(findings: FindingView[], lowConfidenceFindings?: FindingView[]): {
+  main: FindingView[];
+  low: FindingView[];
+} {
+  if (!lowConfidenceFindings?.length) return { main: findings.filter(isReported), low: [] };
+  const low = lowConfidenceFindings.filter(isReported);
+  const lowIds = new Set(low.map((f) => f.displayId));
+  return { main: findings.filter((f) => isReported(f) && !lowIds.has(f.displayId)), low };
+}
+
+function pushLowConfidenceSection(lines: string[], low: FindingView[], minConfidence?: number): void {
+  if (low.length === 0) return;
+  lines.push("");
+  lines.push(`Low-confidence (verifier confidence below ${minConfidence ?? 0}) (${low.length}):`);
+  lines.push(renderFindingsText(low));
+}
+
 export function renderFindResultText(input: {
   degraded: boolean;
   plugins?: ActivePack[];
@@ -68,6 +92,11 @@ export function renderFindResultText(input: {
   transcriptDir?: string;
   /** Stable run identifier — quoted by receipts and `pir runs status` (#52). */
   runId?: string;
+  /** Q4: deterministic run-level verdict, shown next to the stop reason. */
+  runVerdict?: RunVerdict;
+  /** Q4: effective --min-confidence threshold with `lowConfidenceFindings`. */
+  minConfidence?: number;
+  lowConfidenceFindings?: FindingView[];
 }): string {
   const lines: string[] = [];
   if (input.degraded) {
@@ -82,6 +111,7 @@ export function renderFindResultText(input: {
     );
   }
   lines.push(`stopped: ${input.stoppedBecause}`);
+  if (input.runVerdict) lines.push(`run verdict: ${input.runVerdict}`);
   if (input.incomplete) lines.push("review incomplete: remaining work or verification errors; this is not a clean review");
   if (input.pendingCandidates) {
     lines.push(`pending: ${input.pendingCandidates} candidates were not verified; inspect with findings list --status candidate`);
@@ -90,14 +120,15 @@ export function renderFindResultText(input: {
   if (input.transcriptDir) {
     lines.push(`transcripts: ${input.transcriptDir}`);
   }
-  const reported = input.findings.filter(isReported);
+  const { main, low } = splitReported(input.findings, input.lowConfidenceFindings);
   lines.push("");
-  if (reported.length > 0) {
-    lines.push(`Findings (${reported.length}):`);
-    lines.push(renderFindingsText(reported));
-  } else {
+  if (main.length > 0) {
+    lines.push(`Findings (${main.length}):`);
+    lines.push(renderFindingsText(main));
+  } else if (low.length === 0) {
     lines.push("No confirmed findings.");
   }
+  pushLowConfidenceSection(lines, low, input.minConfidence);
   const suppressed = input.findings.filter((f) => !isReported(f));
   if (suppressed.length > 0) {
     lines.push("");
@@ -136,6 +167,11 @@ export function renderAuditResultText(input: {
   runId?: string;
   /** Advisory: reported findings that may describe the same defect. */
   suspectedDuplicates?: Array<{ representative: string; members: string[]; reason: string }>;
+  /** Q4: deterministic run-level verdict, shown next to the stop reason. */
+  runVerdict?: RunVerdict;
+  /** Q4: effective --min-confidence threshold with `lowConfidenceFindings`. */
+  minConfidence?: number;
+  lowConfidenceFindings?: FindingView[];
 }): string {
   const lines: string[] = [];
   if (input.degraded) {
@@ -154,6 +190,7 @@ export function renderAuditResultText(input: {
     `units ${c.batchesCompleted}/${c.batchesTotal} completed`,
   );
   lines.push(`stopped: ${input.stoppedBecause}`);
+  if (input.runVerdict) lines.push(`run verdict: ${input.runVerdict}`);
   if (input.incomplete) {
     lines.push(`audit incomplete: ${input.incompleteReasons.join("; ")}`);
     lines.push('coverage is process accounting — "reviewed" means the allotted review sessions completed, not a guarantee that every defect was found');
@@ -165,14 +202,15 @@ export function renderAuditResultText(input: {
   if (input.transcriptDir) {
     lines.push(`transcripts: ${input.transcriptDir}`);
   }
-  const reported = input.findings.filter(isReported);
+  const { main, low } = splitReported(input.findings, input.lowConfidenceFindings);
   lines.push("");
-  if (reported.length > 0) {
-    lines.push(`Findings (${reported.length}):`);
-    lines.push(renderFindingsText(reported));
-  } else {
+  if (main.length > 0) {
+    lines.push(`Findings (${main.length}):`);
+    lines.push(renderFindingsText(main));
+  } else if (low.length === 0) {
     lines.push("No confirmed findings.");
   }
+  pushLowConfidenceSection(lines, low, input.minConfidence);
   const suppressed = input.findings.filter((f) => !isReported(f));
   if (suppressed.length > 0) {
     lines.push("");
