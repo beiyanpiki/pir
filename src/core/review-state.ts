@@ -1,6 +1,7 @@
 import { SEVERITY_ORDER } from "../findings/types.js";
 import type { CandidateFinding, MemoryMatch, VerifiedFinding, VerifierResult } from "../findings/types.js";
 import type { IssueDecision } from "../memory/issue-memory.js";
+import type { ChangeCoverageCounts } from "./change-coverage.js";
 
 export interface RoundInfo {
   round: number;
@@ -12,6 +13,8 @@ export interface RoundInfo {
   suppressed?: number;
   pending?: number;
   reviewerRan?: boolean;
+  /** C1: cumulative change-mode diff coverage snapshot at round end. */
+  coverage?: ChangeCoverageCounts;
   summary: string;
 }
 

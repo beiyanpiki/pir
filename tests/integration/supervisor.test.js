@@ -1019,3 +1019,80 @@ test("findIssues: without --verify-model verifier sessions use the reviewer mode
     repo.cleanup();
   }
 });
+
+test("findIssues: coverage ledger accumulates hunk pages and read windows across the run (C1)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      // Deliberate reads: page the raw hunk, then read the head file.
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      await tool("record_candidate").execute({
+        title: "issue 1",
+        claim: "claim 1: the quota path 1 skips its guard",
+        trigger: "trigger 1",
+        category: "correctness",
+        severity: "P1",
+        anchors: [{ path: "src/pay.ts", startLine: 1 }],
+        evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+      });
+      await tool("finish_round").execute({ summary: "read the diff", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: {},
+    });
+    assert.equal(outcome.rounds.length, 1);
+    const coverage = outcome.rounds[0].coverage;
+    assert.ok(coverage, "round info carries the coverage snapshot");
+    assert.equal(coverage.hunksTotal, 1);
+    assert.equal(coverage.hunksCovered, 1);
+    assert.equal(coverage.filesTotal, 1);
+    assert.equal(coverage.filesCovered, 1);
+    // The run manifest carries the detailed per-file ledger.
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+    assert.ok(manifest.changeCoverage.files.some((f) => f.path === "src/pay.ts" && f.covered === 1 && f.total === 1));
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a reviewer that never reads the diff reports zero coverage (C1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("finish_round").execute({ summary: "guessed", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: {},
+    });
+    assert.deepEqual(outcome.rounds[0].coverage, { hunksTotal: 1, hunksCovered: 0, filesTotal: 1, filesCovered: 0 });
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
