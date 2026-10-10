@@ -1128,3 +1128,51 @@ test("findIssues: a failed run's manifest still carries the coverage ledger (dog
     repo.cleanup();
   }
 });
+
+test("findIssues: reviewer reads survive a failure thrown after the reviewer round (dogfood F-122)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  // Any memory.findings.touchRun call explodes: the first one lands after the
+  // reviewer round succeeded, simulating a drain/persistence crash that loses
+  // the round — the reviewer's reads must already be in the ledger.
+  const memory = new Proxy(ctx.memory, {
+    get(target, prop) {
+      if (prop === "findings") {
+        return new Proxy(target.findings, {
+          get(t, key) {
+            if (key === "touchRun") return () => { throw new Error("touchRun exploded"); };
+            const value = t[key];
+            return typeof value === "function" ? value.bind(t) : value;
+          },
+        });
+      }
+      const value = target[prop];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      await tool("read_code").execute({ path: "src/pay.ts", revision: "head" });
+      await tool("finish_round").execute({ summary: "read it", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory, codeMap: ctx.codeMap, factory, options: {} }),
+      /touchRun exploded/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    assert.equal(manifest.changeCoverage.hunksCovered, 1);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});

@@ -476,6 +476,11 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round }),
         });
+        // Replay the round's coverage evidence the moment it exists: anything
+        // throwing later in the round (drain, budget, persistence) must not
+        // discard the reviewer's deliberate reads from the ledger (F-122).
+        for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
+        for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
         budget.chargeSession(result.usage, memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
@@ -500,10 +505,6 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         state, budget, { maxVerifications, maxFindings }, errors,
       );
 
-      // Replay this round's reviewer coverage evidence into the run ledger;
-      // hunk pages and read windows accumulate across rounds.
-      for (const hunk of result?.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
-      for (const read of result?.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
       state.rounds.push({
         round: state.round, candidates: result?.candidates.length ?? 0, fresh: freshCount,
         confirmed: drained.confirmed, rejected: drained.rejected, uncertain: drained.uncertain, suppressed: drained.suppressed,
