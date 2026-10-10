@@ -1,4 +1,21 @@
 import type { CandidateFinding, MemoryMatch } from "../findings/types.js";
+import type { SimilarDismissedResult } from "../memory/issue-memory.js";
+
+/**
+ * Cross-entity dismissal context (M1, observational) — absent on cold
+ * memory. Background signal only: it can never suppress by itself;
+ * applyVerdict's trusted-decision + explicit endorsement path is the sole
+ * suppression route (ADR 0003 §2).
+ */
+function similarDismissedBlock(similarDismissed?: SimilarDismissedResult): string[] {
+  if (!similarDismissed || similarDismissed.count === 0) return [];
+  const decisions = [...new Set(similarDismissed.samples.map((sample) => sample.decision))].join(", ");
+  return [
+    `SIMILAR DISMISSED HISTORY (background signal, not a decision): ${similarDismissed.count} earlier findings judged ${decisions} resemble this candidate.`,
+    bounded(similarDismissed.samples, 4000),
+    "Weigh as prior team signal and revalidate against the code; suppression still requires your explicit stillApplies endorsement of a matched decision.",
+  ];
+}
 
 /** The FINDINGS BUDGET paragraph shared by change and audit prompts (#57):
  *  a numeric ceiling, or the explicit no-cap wording for unlimited runs. */
@@ -100,6 +117,8 @@ export function verifierPrompt(input: {
   base?: string; head: string; mergeBase?: string; structuralQueries?: boolean;
   priorDecisions: Array<Pick<MemoryMatch, "memoryId" | "decision" | "claim" | "trigger" | "rationale" | "scope" | "source" | "stale">>;
   fixHistory: Array<{ originalClaim: string; afterCommit: string | null; verified: boolean }>;
+  /** Cross-entity dismissal signal (M1); absent or zero-count on cold memory. */
+  similarDismissed?: SimilarDismissedResult;
   /** Rendered built-in language-pack playbooks; empty when no pack is active. */
   languageGuidance?: string;
 }): string {
@@ -114,6 +133,7 @@ export function verifierPrompt(input: {
     "PRIOR DECISIONS (historical acceptance, separate from technical realness and change attribution)", bounded(input.priorDecisions, 12000),
     "Assess each supplied memoryId separately against its actual trigger, scope and stale flag. Emit decisionAssessments entries {memoryId, stillApplies, rationale}; never transfer one decision's conclusion to another. Staleness prompts revalidation, not automatic rejection. Additional decisions found through lookup are context only, not eligible IDs for this submission.",
     "A team accepting a risk does not make a real defect false. Do not reject merely because it was historically accepted or suppress a defect in the technical verdict. Evidence that the claim is technically wrong or behavior genuinely satisfies the contract can reject it independently.",
+    ...similarDismissedBlock(input.similarDismissed),
     "FIX HISTORY (leads, not proof of regression)", bounded(input.fixHistory, 6000),
     "VERDICT RULES",
     "confirmed: both a concrete current failure and changed cause are established. rejected: concrete counter-evidence disproves realness or change attribution. uncertain: identify missing evidence or a tool limit instead of guessing. Confidence is finite 0..1 and measures evidence strength, not severity.",
@@ -193,6 +213,8 @@ export function auditVerifierPrompt(input: {
   structuralQueries?: boolean;
   priorDecisions: Array<Pick<MemoryMatch, "memoryId" | "decision" | "claim" | "trigger" | "rationale" | "scope" | "source" | "stale">>;
   fixHistory: Array<{ originalClaim: string; afterCommit: string | null; verified: boolean }>;
+  /** Cross-entity dismissal signal (M1); absent or zero-count on cold memory. */
+  similarDismissed?: SimilarDismissedResult;
   languageGuidance?: string;
 }): string {
   const lines = [
@@ -206,6 +228,7 @@ export function auditVerifierPrompt(input: {
     "PRIOR DECISIONS (historical acceptance, separate from technical realness)", bounded(input.priorDecisions, 12000),
     "Assess each supplied memoryId separately against its actual trigger, scope and stale flag. Emit decisionAssessments entries {memoryId, stillApplies, rationale}; never transfer one decision's conclusion to another. stillApplies=true requires the current code and its callers/contracts to be materially equivalent to what the decision accepted — code drift, changed callers or changed configuration mean the decision no longer covers this occurrence. Staleness prompts revalidation, not automatic rejection.",
     "A team accepting a risk does not make a real defect false. Do not reject merely because it was historically accepted or suppress a defect in the technical verdict.",
+    ...similarDismissedBlock(input.similarDismissed),
     "FIX HISTORY (leads, not proof of regression)", bounded(input.fixHistory, 6000),
     "VERDICT RULES",
     "confirmed: a concrete failure is reachable at the snapshot. rejected: concrete counter-evidence disproves realness. uncertain: identify missing evidence or a tool limit instead of guessing. Confidence is finite 0..1 and measures evidence strength, not severity.",

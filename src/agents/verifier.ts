@@ -2,6 +2,7 @@ import type { AgentHandle, AgentSessionFactory, ReviewTool, SessionUsage } from 
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
 import { auditVerifierPrompt, verifierPrompt } from "./prompts.js";
 import type { CandidateFinding, MemoryMatch, VerifierResult } from "../findings/types.js";
+import type { SimilarDismissedResult } from "../memory/issue-memory.js";
 import type { ToolContext } from "../tools/context.js";
 import type { SessionEventEmitter } from "../observability/run-events.js";
 import {
@@ -16,6 +17,8 @@ export interface VerifierDeps {
   candidate: CandidateFinding;
   /** Only these matched IDs are eligible for decision assessments. */
   priorDecisions: MemoryMatch[];
+  /** Cross-entity dismissal signal (M1, observational); computed once per candidate. */
+  similarDismissed?: SimilarDismissedResult;
   model?: string;
   transcriptFile?: string;
   /** Rendered built-in language-pack playbooks for this session's prompt. */
@@ -93,6 +96,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
           structuralQueries: deps.ctx.codeMap.structuralQueries,
           priorDecisions,
           fixHistory: fixHistoryView,
+          similarDismissed: deps.similarDismissed,
           languageGuidance: deps.languageGuidance,
         })
       : verifierPrompt({
@@ -103,6 +107,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
           structuralQueries: deps.ctx.codeMap.structuralQueries,
           priorDecisions,
           fixHistory: fixHistoryView,
+          similarDismissed: deps.similarDismissed,
           languageGuidance: deps.languageGuidance,
         });
     deps.onSessionEvent?.sessionStarted(prompt);
