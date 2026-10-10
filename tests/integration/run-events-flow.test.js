@@ -107,6 +107,8 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.ok(phases.includes("round-end"), "round-end progress emitted");
     const roundEnd = events.find((event) => event.kind === "progress" && event.phase === "round-end");
     assert.ok(roundEnd.roundInfo, "round-end carries the round record");
+    // C1: the fixture reviewer reads nothing — the diff's single hunk stays uncovered.
+    assert.deepEqual(roundEnd.roundInfo.coverage, { hunksTotal: 1, hunksCovered: 0, filesTotal: 1, filesCovered: 0 });
     const runEnd = events.find((event) => event.kind === "run-end");
     assert.equal(runEnd.status, "completed");
     assert.equal(runEnd.counts.confirmed, 1);
@@ -146,6 +148,11 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.equal(manifest.runVerdict, "incorrect");
     // Q5: no separate verifier model requested — verifiers used the reviewer model.
     assert.equal(manifest.verifierModel, null);
+    // C1: change-mode manifest carries the per-file coverage ledger.
+    assert.deepEqual(manifest.changeCoverage, {
+      hunksTotal: 1, hunksCovered: 0, filesTotal: 1, filesCovered: 0,
+      files: [{ path: "src/pay.ts", covered: 0, total: 1 }],
+    });
     assert.equal(manifest.sessions.length, 2);
     assert.deepEqual(
       manifest.sessions.map((session) => session.sessionKind).sort(),
