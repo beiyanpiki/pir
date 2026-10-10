@@ -9,9 +9,13 @@ comparisons — every row records provider/model/SHA.
 
 ## Status
 
-**No baseline yet.** After this harness lands on dev, record 2× full
-test-25 runs on current dev as the baseline rows; behavior PRs (Q1–Q5, C1,
-M1, F1) then append delta rows here.
+**No baseline yet — deferred by maintainer decision** (tracking issue #73;
+see the "B1-baseline deferral" note in
+[docs/plans/findings-quality-roadmap.md](../../../docs/plans/findings-quality-roadmap.md)).
+The 2× full test-25 baseline runs on dev are recorded when the baseline
+era resumes — before F1's gate and the ADR 0003 acceptance gates. Behavior
+PRs then append delta rows here (Q1's row is recorded retroactively at
+that point).
 
 ## Round registry
 

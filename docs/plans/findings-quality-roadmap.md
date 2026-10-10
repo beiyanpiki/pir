@@ -27,8 +27,9 @@ slice: Q2 — parallel verification drain.**
 2. **Precision:** fewer false positives reach the report — targeting the
    measured root cause (context failures, ~87% of rejected findings).
 3. **Measurability:** every behavioral change in the series lands with a
-   benchmark delta row; changes that cannot justify themselves are reverted
-   or stay behind default-off flags.
+   benchmark delta row (rows deferred to the B1-baseline era during the
+   deferral window — see the benchmark protocol); changes that cannot
+   justify themselves are reverted or stay behind default-off flags.
 
 ## Non-goals
 
@@ -62,7 +63,7 @@ slice: Q2 — parallel verification drain.**
 |----|-------|------|--------|-----------|------|------|
 | D1 | This plan + ADR 0003 (docs) | docs | merged #74 | — | — | — |
 | B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | merged #76 | — | M | L |
-| B1-baseline | 2× test-25 baseline on dev | bench | deferred (maintainer decision; delta-row acceptance clauses for Q1+ resume after it lands) | B1 | S | — |
+| B1-baseline | 2× test-25 baseline on dev | bench | deferred (maintainer decision; lands before F1 and the ADR acceptance gates — see Benchmark protocol) | B1 | S | — |
 | Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | merged #78 (ReviewBench delta row deferred to the B1-baseline era) | B1 (for delta rows) | S | L |
 | Q2 | Parallel verification drain (`verifyConcurrency`) | feat | **next** | — | M | M |
 | Q3 | Verifier evidence gate on `submit_verdict` | feat | pending | — | S–M | M |
@@ -100,15 +101,26 @@ Two measurement surfaces, one per cost tier:
   It directly measures blacklist behavior (Q1) and evidence-gate behavior
   (Q3) on its negative scenarios.
 - **ReviewBench (added by B1).** Real-world PRs with human golden findings.
-  The real-world gate: baseline recorded after B1 lands (test-25, two
-  runs), delta rows appended by each behavioral PR.
+  The real-world gate: the 2× test-25 baseline on dev plus delta rows
+  appended by each behavioral PR — currently deferred, see below.
 
 **B1-baseline deferral (maintainer decision, recorded in #73):** the 2×
 test-25 baseline on dev is deferred until development completes. Until it
 lands, behavioral PRs are gated by the scenario harness alone, and their
 ReviewBench delta rows are recorded when the baseline era resumes — Q1's
-row is the first deferred one. The delta-row acceptance clauses below
-resume for Q2+ once the baseline exists.
+row is the first deferred one. To keep the contract satisfiable, the
+deferral suspends rather than waives the delta-row clauses:
+
+- The baseline lands **before F1 and before the ADR 0003 acceptance
+  gates** — F1's gate cites B1 numbers, so "until development completes"
+  means before the closeout gates, not after them.
+- ADR 0003 acceptance ("Q1–Q3 land with non-regressing delta rows") is
+  evaluated once those rows exist in the baseline era; until then the ADR
+  stays Proposed with Q1–Q3 merged, not blocked retroactively.
+- Deferred delta rows are recorded against the baseline when the era
+  resumes (backfilled per PR, same judge/protocol as the baseline rows).
+- `tests/eval/reviewbench/RESULTS.md` carries the same deferral notice so
+  a contributor opening the row registry sees it.
 
 - **Variance discipline:** any "no regression" claim on recall/precision
   requires both runs not worse than baseline's worse run.
@@ -945,9 +957,12 @@ re-evaluation after model upgrades.
    its worker pool.
 5. **Q4 → Q5 → C1 → M1** after that (Q4/Q5 touch options plumbing —
    landing before C1/F1 reduces conflicts; no semantic dependency).
-6. **F1** last, gated on B1 numbers + Q2 pool.
+6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
+   lands before F1 (see the deferral note under "Benchmark protocol").
 7. ADR 0003 status → Accepted once the first three behavioral PRs (Q1–Q3)
-   land with non-regressing delta rows; any reverted item amends the ADR.
+   land with non-regressing delta rows; under the baseline deferral those
+   rows are recorded in the baseline era and acceptance is evaluated then.
+   Any reverted item amends the ADR.
 8. When every task in the tracking issue is complete, **delete this plan
    file** (top-of-file note) — ADR 0003 and the landed design docs are the
    durable record.
