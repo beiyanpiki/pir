@@ -96,6 +96,11 @@ Usage:
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
+  --verify-model <id> separate verifier model (Q5): reviewer sessions keep
+                      --model, verifier sessions resolve this id
+                      (<provider>/<model> or fuzzy; PIR_VERIFIER_MODEL env
+                      applies when the flag is absent). An unresolvable id is
+                      a hard session error, never a silent fallback
   --plugins <list>    language packs injecting language-specific review
                       directions (golang and typescript ship today; more
                       packs follow): comma-separated names, "none" to
@@ -126,6 +131,11 @@ Usage:
                       section (default 0 = off; PIR_MIN_CONFIDENCE env applies
                       when the flag is absent). Bucketing only: nothing is
                       deleted or dropped from the findings list
+  --verify-model <id> separate verifier model (Q5): reviewer sessions keep
+                      --model, verifier sessions resolve this id
+                      (<provider>/<model> or fuzzy; PIR_VERIFIER_MODEL env
+                      applies when the flag is absent). An unresolvable id is
+                      a hard session error, never a silent fallback
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
   --dry-run           preview the scope a real audit of the same tree and
                       options would take (#56): head/tree ids, selection and
@@ -365,6 +375,7 @@ export const VALUE_FLAGS = new Set([
   "--min-confidence",
   "--fail-on",
   "--model",
+  "--verify-model",
   "--provider",
   "--cwd",
   "--status",
@@ -894,6 +905,26 @@ export function minConfidenceFlag(
 }
 
 /**
+ * --verify-model (Q5): separate model id for verifier sessions; reviewer
+ * sessions keep --model. Precedence: flag > PIR_VERIFIER_MODEL env >
+ * undefined (the supervisor falls back to the reviewer model). Only
+ * non-emptiness is checked here — id resolution reuses the standard
+ * model-resolution error path (an unresolvable id is a hard session error,
+ * never a silent fallback).
+ */
+export function verifierModelFlag(
+  flags: Map<string, string | boolean>,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const raw = flags.get("--verify-model") ?? env.PIR_VERIFIER_MODEL;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new UsageError("invalid --verify-model: a value is required (model id, see `pir models`)");
+  }
+  return raw.trim();
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -975,6 +1006,7 @@ async function cmdFind(
     verifyConcurrency: verifyConcurrencyFlag(flags),
     minConfidence: minConfidenceFlag(flags),
     model: flags.get("--model") as string | undefined,
+    verifierModel: verifierModelFlag(flags),
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
   });
@@ -1105,6 +1137,7 @@ async function cmdAudit(
     verifyConcurrency: verifyConcurrencyFlag(flags),
     minConfidence: minConfidenceFlag(flags),
     model: flags.get("--model") as string | undefined,
+    verifierModel: verifierModelFlag(flags),
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
   }).catch((error: unknown) => {
