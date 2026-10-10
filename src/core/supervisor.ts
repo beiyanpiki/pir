@@ -54,6 +54,14 @@ export interface FindOptions {
    * and still count toward maxFindings.
    */
   minConfidence?: number;
+  /**
+   * Separate verifier model (roadmap Q5): `<provider>/<model>` or a fuzzy id
+   * (see `pir models`). Reviewer sessions keep `model`; verifier sessions
+   * resolve this one through the standard model-resolution path (an
+   * unresolvable id is a hard session error, never a silent fallback).
+   * Defaults to `model` when unset.
+   */
+  verifierModel?: string;
   /** Language-pack activation: auto-detect at head (default), manual list, or off. */
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
@@ -482,6 +490,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
 
       const drained = await drainVerifications(
         { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
+          verifierModel: options.verifierModel,
           verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round,
           verifyConcurrency, sink, sessionFiles },
         state, budget, { maxVerifications, maxFindings }, errors,
@@ -525,7 +534,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     });
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change", status: "failed",
-      base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+      base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
       stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
       maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
@@ -561,7 +570,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   writeRunManifest(transcriptDir, {
     schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change",
     status: incomplete ? "incomplete" : "completed",
-    base, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+    base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
     stoppedBecause: state.stoppedBecause ?? "completed", incomplete, runVerdict,
     maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
@@ -614,6 +623,8 @@ export interface AuditOptions {
    * and still count toward maxFindings.
    */
   minConfidence?: number;
+  /** Separate verifier model (roadmap Q5); defaults to `model` when unset. */
+  verifierModel?: string;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];
 }
@@ -829,6 +840,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
         const verifiedBefore = state.verified.length;
         const drained = await drainVerifications(
           { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
+            verifierModel: options.verifierModel,
             verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round, audit: true,
             verifyConcurrency, sink, sessionFiles },
           state, budget, { maxVerifications, maxFindings }, errors,
@@ -963,7 +975,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     });
     writeRunManifest(transcriptDir, {
       schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit", status: "failed",
-      base: null, head, model: options.model ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
+      base: null, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
       stoppedBecause: failureMessage, incomplete: true, runVerdict: computeRunVerdict(state),
       maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
       plugins: languagePacks.active, sessions: sessionFiles,
@@ -1026,7 +1038,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   writeRunManifest(transcriptDir, {
     schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "audit",
     status: incomplete ? "incomplete" : "completed",
-    base: null, head: snapshot.commit, model: options.model ?? null,
+    base: null, head: snapshot.commit, model: options.model ?? null, verifierModel: options.verifierModel ?? null,
     startedAt: startedAtMs, finishedAt: Date.now(),
     stoppedBecause, incomplete, runVerdict,
     maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,

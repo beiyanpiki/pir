@@ -144,6 +144,8 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.equal(manifest.model, "fake/model");
     // Q4: the deterministic verdict lands on the manifest — one confirmed P1 ⇒ incorrect.
     assert.equal(manifest.runVerdict, "incorrect");
+    // Q5: no separate verifier model requested — verifiers used the reviewer model.
+    assert.equal(manifest.verifierModel, null);
     assert.equal(manifest.sessions.length, 2);
     assert.deepEqual(
       manifest.sessions.map((session) => session.sessionKind).sort(),

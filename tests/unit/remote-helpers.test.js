@@ -18,7 +18,7 @@ import {
   resolveRemoteTimeoutSeconds,
 } from "../../dist/cli/remote-fetch.js";
 import { jobStatusReporter } from "../../dist/cli/jobs.js";
-import { maxFindingsFlag, minConfidenceFlag } from "../../dist/cli/executor.js";
+import { maxFindingsFlag, minConfidenceFlag, verifierModelFlag } from "../../dist/cli/executor.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HEAD = "9999999999999999999999999999999999999999";
@@ -564,6 +564,18 @@ test("minConfidenceFlag: flag > PIR_MIN_CONFIDENCE env, bounded 0-1 (Q4)", () =>
   assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", "1.1"]])), UsageError);
   assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", "high"]])), UsageError);
   assert.throws(() => minConfidenceFlag(new Map([["--min-confidence", true]])), UsageError);
+});
+
+test("verifierModelFlag: flag > PIR_VERIFIER_MODEL env, non-empty id (Q5)", () => {
+  assert.equal(verifierModelFlag(new Map()), undefined);
+  assert.equal(verifierModelFlag(new Map([["--verify-model", "prov/model:max"]])), "prov/model:max");
+  assert.equal(verifierModelFlag(new Map(), { PIR_VERIFIER_MODEL: "prov/other" }), "prov/other");
+  assert.equal(verifierModelFlag(new Map([["--verify-model", " a/b "]])), "a/b");
+  // flag wins over env
+  assert.equal(verifierModelFlag(new Map([["--verify-model", "a/b"]]), { PIR_VERIFIER_MODEL: "c/d" }), "a/b");
+  assert.throws(() => verifierModelFlag(new Map([["--verify-model", true]])), UsageError);
+  assert.throws(() => verifierModelFlag(new Map([["--verify-model", "   "]])), UsageError);
+  assert.throws(() => verifierModelFlag(new Map(), { PIR_VERIFIER_MODEL: "" }), UsageError);
 });
 
 test("stripClientFlags removes --detach and --remote-timeout before forwarding (#53/#54)", () => {

@@ -123,7 +123,7 @@ test("writeRunManifest writes run.json next to transcripts and is a no-op withou
     const dir = path.join(root, "transcripts", "run-9");
     writeRunManifest(dir, {
       schemaVersion: 1, runId: "run-9", projectId: "project-1", mode: "change", status: "completed",
-      base: "b", head: "h", model: null, startedAt: 1, finishedAt: 2, stoppedBecause: "done",
+      base: "b", head: "h", model: null, verifierModel: null, startedAt: 1, finishedAt: 2, stoppedBecause: "done",
       incomplete: false, runVerdict: "correct", maxFindings: 10, rounds: [], plugins: [], sessions: [],
       durationMs: 1, estimatedTokens: 0,
     });

@@ -215,6 +215,17 @@ contract is unchanged. Every review also computes a deterministic
 `correct-with-findings`, `needs-review` (uncertain, nothing confirmed), or
 `correct` — on the JSON result and the run manifest.
 
+Verifier sessions can use a different model than the reviewer:
+`--verify-model <id>` (`PIR_VERIFIER_MODEL` env when the flag is absent)
+gives verifier sessions their own `<provider>/<model>` or fuzzy id while
+reviewer sessions keep `--model`; when unset, verifiers use the reviewer
+model. Cross-family verification (a different model family checking the
+reviewer's work) is the point — models share blind spots with their own
+output class. The id resolves through the standard model path: an
+unresolvable id fails the verifier sessions as `provider-error` uncertainty
+(the run reports incomplete), never a silent fallback. The run manifest
+records both models as `model` and `verifierModel`.
+
 Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.
