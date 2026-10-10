@@ -46,6 +46,8 @@ export interface FindOptions {
    * evidence supports is reported; rounds/token budgets still bound the run.
    */
   maxFindings?: number | null;
+  /** Parallel verifier sessions during each verification drain (1–8, default 1). */
+  verifyConcurrency?: number;
   /** Language-pack activation: auto-detect at head (default), manual list, or off. */
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
@@ -96,10 +98,22 @@ const DEFAULT_MAX_VERIFICATIONS = 8;
 const DEFAULT_MAX_FINDINGS = 10;
 /** Audit: discovery attempts per work unit before it settles as reviewed/blocked. */
 const DEFAULT_MAX_UNIT_ATTEMPTS = 2;
+const DEFAULT_VERIFY_CONCURRENCY = 1;
+/** Hard ceiling on parallel verifier sessions during one verification drain. */
+export const MAX_VERIFY_CONCURRENCY = 8;
 
 function positiveInteger(value: number, name: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
   return value;
+}
+
+function verifyConcurrencyOption(value: number | undefined, name: string): number {
+  if (value === undefined) return DEFAULT_VERIFY_CONCURRENCY;
+  const concurrency = positiveInteger(value, name);
+  if (concurrency > MAX_VERIFY_CONCURRENCY) {
+    throw new Error(`${name} must be between 1 and ${MAX_VERIFY_CONCURRENCY}`);
+  }
+  return concurrency;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,6 +164,10 @@ interface DrainDeps {
   ctx: ToolContext;
   memory: Memory;
   model?: string;
+  /** Verifier model override seam (Q5 groundwork): defaults to `model`. */
+  verifierModel?: string;
+  /** Parallel verifier sessions during the drain (1–MAX_VERIFY_CONCURRENCY, default 1). */
+  verifyConcurrency?: number;
   verifierGuidance?: string;
   transcriptDir?: string;
   onProgress?: (event: FindEvent) => void;
@@ -161,6 +179,64 @@ interface DrainDeps {
   sessionFiles: RunSessionRef[];
 }
 
+/** Everything one candidate's verification produces. No shared state is touched. */
+interface VerifyOneOutcome {
+  candidate: CandidateFinding;
+  verdict: VerifierResult;
+  memoryMatches: MemoryMatch[];
+  transcriptRef?: RunSessionRef;
+}
+
+async function verifyOne(deps: DrainDeps, candidate: CandidateFinding): Promise<VerifyOneOutcome> {
+  deps.onProgress?.({ type: "verify", round: deps.round, message: `verifying ${candidate.displayId}: ${candidate.title}` });
+  const matches = matchIssueHistory(deps.memory, {
+    fingerprint: candidate.identity.fingerprint, featureKey: candidate.identity.featureKey || undefined,
+    entityKey: candidate.identity.entityKey || undefined, normalizedClaim: candidate.identity.normalizedClaim,
+    category: candidate.category, anchorPaths: [...new Set(candidate.anchors.map((a) => a.path))],
+  });
+  const memoryMatches: MemoryMatch[] = matches.map((m) => ({
+    memoryId: m.id, decision: m.decision, scope: m.scope, source: m.source, claim: m.claim,
+    rationale: m.rationale, trigger: m.trigger, stale: m.stale,
+  }));
+  const transcriptName = `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`;
+  const model = deps.verifierModel ?? deps.model;
+  const verdict = await runVerifier({
+    factory: deps.factory, ctx: deps.ctx, candidate, priorDecisions: memoryMatches, model,
+    ...(deps.audit ? { audit: true } : {}),
+    languageGuidance: deps.verifierGuidance,
+    transcriptFile: deps.transcriptDir ? path.join(deps.transcriptDir, transcriptName) : undefined,
+    onSessionEvent: deps.sink.session({
+      sessionKind: "verifier", role: "finding verifier", model, round: deps.round,
+      ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
+    }),
+  });
+  return {
+    candidate,
+    verdict,
+    memoryMatches,
+    ...(deps.transcriptDir
+      ? {
+          transcriptRef: {
+            file: transcriptName, sessionKind: "verifier", round: deps.round,
+            ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Verify the pending queue with up to `verifyConcurrency` parallel verifier
+ * sessions. Admissions come off `state.pending` by index and stay in the queue
+ * until their verdict lands, so an interrupted drain leaves every unverified
+ * candidate recoverable. Results land strictly in admission order — buffered
+ * when an earlier candidate is still in flight — which keeps `state.verified`
+ * order, feedback order, and (change mode) displayId assignment identical to
+ * the serial drain. In-flight candidates reserve a maxFindings slot each, so
+ * reported findings never overshoot the cap however verdicts land; a token or
+ * wall-clock budget exhaustion stops new dispatches but in-flight results
+ * still land.
+ */
 async function drainVerifications(
   deps: DrainDeps,
   state: ReturnType<typeof createReviewState>,
@@ -169,58 +245,109 @@ async function drainVerifications(
   errors: { verificationErrors: number; uncertaintyReasons: Partial<Record<UncertaintyReason, number>> },
 ): Promise<VerificationCounters> {
   const counters: VerificationCounters = { confirmed: 0, rejected: 0, uncertain: 0, suppressed: 0, verified: 0, feedbackVerdicts: [] };
-  const findingsAllowed = (): boolean => limits.maxFindings === null || reportedCount(state) < limits.maxFindings;
-  while (state.pending.length > 0 && counters.verified < limits.maxVerifications && findingsAllowed() && !budget.exhausted()) {
-    const candidate = state.pending[0]!;
-    deps.onProgress?.({ type: "verify", round: deps.round, message: `verifying ${candidate.displayId}: ${candidate.title}` });
-    const matches = matchIssueHistory(deps.memory, {
-      fingerprint: candidate.identity.fingerprint, featureKey: candidate.identity.featureKey || undefined,
-      entityKey: candidate.identity.entityKey || undefined, normalizedClaim: candidate.identity.normalizedClaim,
-      category: candidate.category, anchorPaths: [...new Set(candidate.anchors.map((a) => a.path))],
-    });
-    const memoryMatches: MemoryMatch[] = matches.map((m) => ({
-      memoryId: m.id, decision: m.decision, scope: m.scope, source: m.source, claim: m.claim,
-      rationale: m.rationale, trigger: m.trigger, stale: m.stale,
-    }));
-    const verdict = await runVerifier({
-      factory: deps.factory, ctx: deps.ctx, candidate, priorDecisions: memoryMatches, model: deps.model,
-      ...(deps.audit ? { audit: true } : {}),
-      languageGuidance: deps.verifierGuidance,
-      transcriptFile: deps.transcriptDir
-        ? path.join(deps.transcriptDir, `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`)
-        : undefined,
-      onSessionEvent: deps.sink.session({
-        sessionKind: "verifier", role: "finding verifier", model: deps.model, round: deps.round,
-        ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
-      }),
-    });
-    if (deps.transcriptDir) {
-      deps.sessionFiles.push({
-        file: `verifier-r${deps.round}-${candidate.displayId ?? candidate.identity.fingerprint.slice(0, 8)}.json`,
-        sessionKind: "verifier", round: deps.round,
-        ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
-      });
-    }
-    budget.chargeSession(verdict.usage, deps.verifierGuidance, verdict.rationale);
-    state.pending.shift();
+  const concurrency = Math.min(Math.max(1, deps.verifyConcurrency ?? 1), MAX_VERIFY_CONCURRENCY);
+
+  let admitted = 0;
+  let inFlight = 0;
+  let failure: { error: unknown } | undefined;
+
+  const land = (outcome: VerifyOneOutcome): void => {
+    if (outcome.transcriptRef) deps.sessionFiles.push(outcome.transcriptRef);
+    budget.chargeSession(outcome.verdict.usage, deps.verifierGuidance, outcome.verdict.rationale);
+    const idx = state.pending.indexOf(outcome.candidate);
+    if (idx !== -1) state.pending.splice(idx, 1);
+    inFlight -= 1;
     counters.verified += 1;
-    if (verdict.verdict === "uncertain") {
-      const reason = verdict.uncertaintyReason ?? "missing-evidence";
+    if (outcome.verdict.verdict === "uncertain") {
+      const reason = outcome.verdict.uncertaintyReason ?? "missing-evidence";
       errors.uncertaintyReasons[reason] = (errors.uncertaintyReasons[reason] ?? 0) + 1;
       if (reason === "provider-error" || reason === "missing-verdict") errors.verificationErrors += 1;
     }
-    const verified = applyVerdict(state, candidate, verdict, memoryMatches);
+    const verified = applyVerdict(state, outcome.candidate, outcome.verdict, outcome.memoryMatches);
     if (verified.status === "confirmed") counters.confirmed += 1;
     else if (verified.status === "rejected") counters.rejected += 1;
     else if (verified.status === "uncertain") counters.uncertain += 1;
     else counters.suppressed += 1;
     // Historical decisions remain verifier-only, including their rationale.
-    if (memoryMatches.length === 0 && verdict.codeFeedback) {
-      const feedback = `${candidate.displayId}: ${verdict.codeFeedback.slice(0, 1000)}`;
+    if (outcome.memoryMatches.length === 0 && outcome.verdict.codeFeedback) {
+      const feedback = `${outcome.candidate.displayId}: ${outcome.verdict.codeFeedback.slice(0, 1000)}`;
       state.investigationFeedback = [...state.investigationFeedback, feedback].slice(-12);
-      counters.feedbackVerdicts.push({ ...verdict, codeFeedback: feedback });
+      counters.feedbackVerdicts.push({ ...outcome.verdict, codeFeedback: feedback });
     }
-  }
+  };
+
+  // Completed verdicts wait here until every earlier-admitted candidate has
+  // landed; a failure stops landing entirely, so the failed candidate and any
+  // buffered in-flight results stay in the pending queue exactly as the
+  // run-failure persistence path expects them.
+  const completed = new Map<number, VerifyOneOutcome>();
+  let nextToLand = 0;
+
+  // Workers stalled on the maxFindings reservation sleep until the next
+  // landing frees a slot; spurious wakeups just re-run the admission checks.
+  const admissionWaiters = new Set<() => void>();
+  const wakeAdmission = (): void => {
+    for (const wake of [...admissionWaiters]) {
+      admissionWaiters.delete(wake);
+      wake();
+    }
+  };
+  const waitForAdmission = (): Promise<void> =>
+    new Promise<void>((resolve) => { admissionWaiters.add(resolve); });
+
+  const tryLand = (): void => {
+    while (completed.has(nextToLand)) {
+      const outcome = completed.get(nextToLand)!;
+      completed.delete(nextToLand);
+      nextToLand += 1;
+      land(outcome);
+      wakeAdmission();
+    }
+  };
+
+  const admit = (): { candidate: CandidateFinding; seq: number } | "wait" | null => {
+    if (failure) return null;
+    // The first `inFlight` pending entries are exactly the admitted candidates
+    // still awaiting landing (landing removes in admission order), so the
+    // first unadmitted candidate sits at index `inFlight`.
+    if (state.pending.length <= inFlight) return null;
+    if (admitted >= limits.maxVerifications) return null;
+    if (limits.maxFindings !== null && reportedCount(state) >= limits.maxFindings) return null;
+    if (budget.exhausted()) return null;
+    // No oversubscription: every in-flight candidate holds a findings slot.
+    if (limits.maxFindings !== null && reportedCount(state) + inFlight >= limits.maxFindings) return "wait";
+    const candidate = state.pending[inFlight]!;
+    const seq = admitted;
+    admitted += 1;
+    inFlight += 1;
+    return { candidate, seq };
+  };
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const slot = admit();
+      if (slot === null) return;
+      if (slot === "wait") {
+        await waitForAdmission();
+        continue;
+      }
+      let outcome: VerifyOneOutcome;
+      try {
+        outcome = await verifyOne(deps, slot.candidate);
+      } catch (error) {
+        // Stop the drain: nothing further is admitted or landed, and the
+        // failed candidate stays pending for the run-failure path to persist.
+        failure ??= { error };
+        wakeAdmission();
+        return;
+      }
+      completed.set(slot.seq, outcome);
+      tryLand();
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  if (failure) throw failure.error;
   return counters;
 }
 
@@ -229,6 +356,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxRounds = positiveInteger(options.maxRounds ?? DEFAULT_MAX_ROUNDS, "maxRounds");
   const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
+  const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const budget = new Budget({
     maxRounds,
     maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
@@ -330,7 +458,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       const drained = await drainVerifications(
         { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
           verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round,
-          sink, sessionFiles },
+          verifyConcurrency, sink, sessionFiles },
         state, budget, { maxVerifications, maxFindings }, errors,
       );
 
@@ -448,6 +576,8 @@ export interface AuditOptions {
   /** `null` (#57): no whole-run cap on reported findings. */
   maxFindings?: number | null;
   maxVerificationsPerRound?: number;
+  /** Parallel verifier sessions during each verification drain (1–8, default 1). */
+  verifyConcurrency?: number;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];
 }
@@ -521,6 +651,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const options = deps.options ?? {};
   const maxFindings = options.maxFindings === null ? null : positiveInteger(options.maxFindings ?? DEFAULT_MAX_FINDINGS, "maxFindings");
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
+  const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
   const budget = new Budget({
     maxRounds: Number.MAX_SAFE_INTEGER,
@@ -657,7 +788,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
         const drained = await drainVerifications(
           { factory: deps.factory, ctx: toolCtx, memory: deps.memory, model: options.model,
             verifierGuidance: languagePacks.verifierGuidance, transcriptDir, onProgress, round: state.round, audit: true,
-            sink, sessionFiles },
+            verifyConcurrency, sink, sessionFiles },
           state, budget, { maxVerifications, maxFindings }, errors,
         );
         for (const finding of state.verified.slice(verifiedBefore)) persistVerified(finding);

@@ -141,6 +141,25 @@ test("pir find rejects invalid numeric budgets as usage errors", async () => {
   }
 });
 
+test("pir find/audit reject out-of-range --verify-concurrency before any run starts", async () => {
+  const repo = createTempGitRepo("pir-cli-verifyconc-");
+  try {
+    for (const command of ["find", "audit"]) {
+      for (const bad of ["0", "9", "abc"]) {
+        const usage = await pirExpectFail([command, "--verify-concurrency", bad, "--cwd", repo.dir]);
+        assert.equal(usage.code, 2, `${command} --verify-concurrency ${bad} must be a usage error`);
+        assert.match(usage.stderr, /invalid --verify-concurrency/);
+      }
+    }
+    // The env fallback obeys the same bound, and the flag wins over it.
+    const envBad = await pirExpectFail(["find", "--cwd", repo.dir], { env: { PIR_VERIFY_CONCURRENCY: "12" } });
+    assert.equal(envBad.code, 2);
+    assert.match(envBad.stderr, /invalid --verify-concurrency: 12/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("pir models lists the full pi catalog with --all", async () => {
   const json = await pir(["models", "--json", "--all"]);
   const parsed = JSON.parse(json.stdout);

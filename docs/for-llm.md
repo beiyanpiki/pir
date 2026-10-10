@@ -209,6 +209,7 @@ Limits:
 | `--max-findings N` | `10`; confirmed plus uncertain reports; ceiling, not target |
 | `--max-rounds N` | `2` for `find`; includes verification-only rounds |
 | `--max-tokens N` | unlimited unless set; checked between sessions |
+| `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |

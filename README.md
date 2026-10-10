@@ -198,6 +198,12 @@ change reviews; audits are bounded by work units and the optional
 list of built-in packs to override detection. The shipped Go and TypeScript
 packs support both modes.
 
+Verification is serial by default. `--verify-concurrency <n>` (1–8, default
+1; `PIR_VERIFY_CONCURRENCY` env when the flag is absent) runs that many
+verifier sessions in parallel during each verification drain, for both find
+and audit. Reported findings never exceed `--max-findings` even when
+verifications race, and finding order stays deterministic.
+
 Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.
