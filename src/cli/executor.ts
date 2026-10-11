@@ -20,6 +20,7 @@ import { createAppContext } from "../app/context.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
+import { FINDER_ANGLES } from "../agents/prompts.js";
 import {
   feedback,
   feedbackPriority,
@@ -101,6 +102,11 @@ Usage:
                       (<provider>/<model> or fuzzy; PIR_VERIFIER_MODEL env
                       applies when the flag is absent). An unresolvable id is
                       a hard session error, never a silent fallback
+  --angles <list>     experimental (F1): round 1 fans out one specialized
+                      reviewer session per angle (default off). Built-ins:
+                      correctness, concurrency, security, contracts,
+                      performance — or "all". Capped at 4 parallel sessions,
+                      budget-guarded; later rounds stay general
   --plugins <list>    language packs injecting language-specific review
                       directions (golang and typescript ship today; more
                       packs follow): comma-separated names, "none" to
@@ -376,6 +382,7 @@ export const VALUE_FLAGS = new Set([
   "--fail-on",
   "--model",
   "--verify-model",
+  "--angles",
   "--provider",
   "--cwd",
   "--status",
@@ -925,6 +932,31 @@ export function verifierModelFlag(
 }
 
 /**
+ * --angles <a,b|all> (F1, experimental): round 1 fans out one specialized
+ * reviewer session per listed angle instead of one general session. "all"
+ * expands to every built-in angle; unknown ids fail here with the available
+ * list. Default off; find-only.
+ */
+export function anglesFlag(flags: Map<string, string | boolean>): string[] | undefined {
+  const raw = flags.get("--angles");
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new UsageError(`invalid --angles: a value is required (comma-separated ids or "all"; available: ${FINDER_ANGLES.map((a) => a.id).join(", ")})`);
+  }
+  const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) {
+    throw new UsageError(`invalid --angles: ${raw} (comma-separated ids or "all" required)`);
+  }
+  if (ids.length === 1 && ids[0]!.toLowerCase() === "all") return FINDER_ANGLES.map((a) => a.id);
+  const known = new Set(FINDER_ANGLES.map((a) => a.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length > 0) {
+    throw new UsageError(`invalid --angles: ${unknown.join(", ")} (available: ${FINDER_ANGLES.map((a) => a.id).join(", ")}, or "all")`);
+  }
+  return [...new Set(ids)];
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -1007,6 +1039,7 @@ async function cmdFind(
     minConfidence: minConfidenceFlag(flags),
     model: flags.get("--model") as string | undefined,
     verifierModel: verifierModelFlag(flags),
+    angles: anglesFlag(flags),
     ...(await parsePluginsFlag(flags)),
     onProgress: (event) => log(`• ${event.message}`),
   });
@@ -1088,6 +1121,7 @@ async function cmdAudit(
   // Audit has no comparison semantics: reject flags that would imply one.
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
+  if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
   // --detach is remote-only (#53): a local run cannot detach, and a server
   // receiving the flag unstripped (old client) must fail instead of ignoring.
