@@ -14,13 +14,18 @@ acceptance criteria, and the benchmark protocol that judges them.
 Progress is tracked in issue #73; this file is re-synced to reality as
 slices land.
 
-**Status (post-Q5).** D1 (this plan + ADR 0003) merged via #74; B1 merged
+**Status (post-C1/M1).** D1 (this plan + ADR 0003) merged via #74; B1 merged
 via #76; Q1 merged via #78; Q2 merged via #80; Q3 merged via #81; Q4
-merged via #83; Q5 merged via #84. The original D1-rooted stacked-PR
+merged via #83; Q5 merged via #84; C1 merged via #86 (stage 1) + #88
+(stage 2); M1 merged via #87. The original D1-rooted stacked-PR
 convention was retired when D1 merged — every landed slice branched off
 `dev` directly and later slices do the same (see "PR convention"; ADR
-0003's process paragraph is amended to match). **Next slice: C1 —
-change-mode diff coverage ledger.**
+0003's process paragraph is amended to match). **Next slice:
+B1-baseline — the 2× test-25 baseline on dev (F1's gate).** The planned
+`opencode-go/deepseek-v4.1-flash` provider is not configured on this
+machine; the baseline uses `baseten/deepseek-ai/DeepSeek-V4.1-Flash`
+(same underlying model, different provider), recorded in #73 and
+RESULTS.md.
 
 ## Goals
 
@@ -72,8 +77,8 @@ change-mode diff coverage ledger.**
 | Q3 | Verifier evidence gate on `submit_verdict` | feat | merged #81 (dogfood fixed two citation gaps, F-116/F-117) | — | S–M | M |
 | Q4 | Persisted confidence, `--min-confidence` split, run-level verdict | feat | merged #83 (bucketing-only split; live QA bucketed a real P1 at confidence 0.97 under `--min-confidence 0.99`; `runVerdict` on outcome/envelope/run.json) | — | M | L |
 | Q5 | Separate verifier model option | feat | merged #84 (Q2 drain seam populated; live QA: verifier transcript effective model = the override id, manifest records both models) | Q2 preferred (design carries a no-Q2 fallback) | S | L |
-| C1 | Change-mode diff coverage ledger | feat | **next** | — | M | M |
-| M1 | Memory denoising, observational (similar-dismissed context) | feat | pending | — | M | M |
+| C1 | Change-mode diff coverage ledger | feat | merged #86 (stage 1) + #88 (stage 2; dogfood F-123/F-124/F-125 fixed; live: forced round fired exactly once at 7/11 hunks, no loop) | — | M | M |
+| M1 | Memory denoising, observational (similar-dismissed context) | feat | merged #87 (live: real feedback dismissal surfaced in the next run's verifier prompt; suppression contract untouched) | — | M | M |
 | F1 | Multi-angle finder fan-out (default-off) | feat | pending | B1 numbers, Q2 pool | L | H |
 
 ### PR convention
@@ -986,7 +991,14 @@ re-evaluation after model upgrades.
    lands on the outcome, envelope and run.json. **Q5** — merged (#84):
    `--verify-model` / `PIR_VERIFIER_MODEL` populates the Q2 drain seam;
    manifest records both models. The options-plumbing conflict window the
-   sequencing note flagged is closed — **C1 next**, then M1.
+   sequencing note flagged is closed.
+6. **C1** — merged (#86 stage 1: ChangeCoverage ledger + observers +
+   RoundInfo/manifest fields, dogfood F-120/F-121/F-122 fixed; #88 stage 2:
+   the single forced coverage round with backlog/budget/convergence guards,
+   dogfood F-123/F-124/F-125 fixed). **M1** — merged (#87):
+   `similarDismissed` + the SIMILAR DISMISSED HISTORY prompt block,
+   observational only. **B1-baseline next** (model substitution recorded
+   above), then F1.
 6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
    lands before F1 (see the deferral note under "Benchmark protocol").
 7. ADR 0003 status → Accepted once Q1–Q3 have landed under the
