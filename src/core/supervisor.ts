@@ -531,16 +531,18 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
       // C1 stage 2 (interventional, once per run): the reviewer signaled
       // completion while diff hunks remain unread — spend one forced
-      // follow-up round pointing at them. Only when the next iteration would
-      // actually run a reviewer: no verification backlog (drain-only rounds
-      // would burn the budget first, F-124) and no shouldStop condition
-      // (rounds, budget, convergence — evaluated after this round's
-      // information gain) about to end the run, so the event and the
-      // once-per-run flag are never spent on a round that cannot happen
-      // (F-123). A reviewer that still refuses cannot loop; the audit loop
-      // is untouched.
+      // follow-up round pointing at them. needsReview=false means a reviewer
+      // completed somewhere this run, so this also evaluates at the end of
+      // the drain-only rounds that empty a completion round's backlog (the
+      // trigger must not die with the round that produced it, F-125). Only
+      // when the next iteration would actually run a reviewer: no pending
+      // queue (F-124) and no shouldStop condition — rounds, budget,
+      // convergence, evaluated after this round's information gain — about
+      // to end the run, so the event and the once-per-run flag are never
+      // spent on a round that cannot happen (F-123). A reviewer that still
+      // refuses cannot loop; the audit loop is untouched.
       if (
-        result && !needsReview && !state.forcedCoverageRoundUsed &&
+        !needsReview && !state.forcedCoverageRoundUsed &&
         state.pending.length === 0 &&
         (maxFindings === null || reportedCount(state) < maxFindings) &&
         !shouldStop(state, budget).stop

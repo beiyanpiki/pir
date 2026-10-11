@@ -1510,3 +1510,60 @@ test("findIssues: no forced coverage round when the token budget is exhausted (d
     repo.cleanup();
   }
 });
+
+test("findIssues: forced coverage round fires once the backlog drains (dogfood F-125)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const events = [];
+  let reviewerRound = 0;
+  const reviewerPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerRound += 1;
+      reviewerPrompts.push(promptText);
+      if (reviewerRound === 1) {
+        for (let i = 1; i <= 3; i++) {
+          await tool("record_candidate").execute({
+            title: `issue ${i}`,
+            claim: `claim ${i}: the quota path ${i} skips its guard`,
+            trigger: `trigger ${i}`,
+            category: "correctness",
+            severity: "P1",
+            anchors: [{ path: "src/pay.ts", startLine: 1 }],
+            evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+          });
+        }
+        await tool("finish_round").execute({ summary: "found several, did not read", nextFocus: [], needsMoreRounds: false });
+      } else {
+        await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+        await tool("finish_round").execute({ summary: "read it now", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 4, maxVerificationsPerRound: 1 },
+      onProgress: (event) => events.push(event),
+    });
+    // Round 1 reviews and leaves a 3-candidate backlog (drain caps at 1);
+    // rounds 2-3 drain it; the trigger fires at round 3's end — the queue
+    // emptied in a drain-only round, after the completion round itself.
+    assert.ok(events.some((e) => e.type === "info" && /forced coverage round/.test(e.message)), "forced round scheduled after backlog drained");
+    assert.equal(reviewerPrompts.length, 2);
+    assert.match(reviewerPrompts[1] ?? "", /Unread diff hunks: src\/pay\.ts:0/);
+    assert.equal(outcome.rounds.length, 4);
+    assert.equal(outcome.rounds[3].coverage?.hunksCovered, 1);
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+    assert.equal(outcome.incomplete, false);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
