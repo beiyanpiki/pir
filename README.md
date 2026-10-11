@@ -226,6 +226,15 @@ unresolvable id fails the verifier sessions as `provider-error` uncertainty
 (the run reports incomplete), never a silent fallback. The run manifest
 records both models as `model` and `verifierModel`.
 
+`--angles <list|all>` (experimental, find-only, default off) fans out round 1
+into one specialized reviewer session per angle — `correctness`,
+`concurrency`, `security`, `contracts`, `performance` — instead of one
+general session. At most 4 run in parallel, shrunk by the remaining
+token/wall-clock budget; later rounds stay general with the merged focus.
+Cross-angle duplicates collapse through the normal dedup, finding ids are
+reassigned uniquely after the merge, and each angle transcript records its
+id map. v1 keeps the same memory pack across angles.
+
 Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.

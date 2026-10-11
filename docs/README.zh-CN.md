@@ -151,6 +151,8 @@ pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 
 verifier 会话可以使用与 reviewer 不同的模型：`--verify-model <id>`（未传 flag 时读 `PIR_VERIFIER_MODEL` 环境变量）为 verifier 会话指定独立的 `<provider>/<model>` 或模糊 id，reviewer 会话仍用 `--model`；未设置时 verifier 沿用 reviewer 模型。跨家族验证（用不同模型家族检查 reviewer 的工作）正是此功能的意义——模型对自身输出类别的盲区是重叠的。id 走标准模型解析路径：无法解析的 id 会让 verifier 会话以 `provider-error` 不确定项失败（run 报告 incomplete），绝不静默回退。run manifest 以 `model` 与 `verifierModel` 两个字段记录两个模型。
 
+`--angles <列表|all>`(实验性,仅 find,默认关闭)把第 1 轮拆成每个角度一个专门的 reviewer 会话——`correctness`、`concurrency`、`security`、`contracts`、`performance`——替代单一通用会话。最多 4 个并行,并按剩余 token/墙钟预算收缩;后续轮次保持通用会话并使用合并后的 focus。跨角度的重复候选走常规去重,合并后 finding id 重新唯一分配,各角度 transcript 记录其 id 映射。v1 各角度共用同一份 memory pack。
+
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。
 
 ## 输出协议

@@ -216,6 +216,7 @@ Limits:
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
 | `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |
+| `--angles a,b\|all` | experimental (F1, default off, find-only): round 1 fans out one specialized reviewer session per angle (correctness, concurrency, security, contracts, performance) instead of one general session; capped at 4 parallel sessions and shrunk by remaining token/wall-clock budget; later rounds stay general with the merged focus; cross-angle duplicates collapse and finding ids are reassigned uniquely |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |
