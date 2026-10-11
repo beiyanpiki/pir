@@ -118,3 +118,15 @@ index 1111111..2222222 100644
   assert.equal(summary.hunksTotal, 250);
   assert.equal(summary.files.length, 200);
 });
+
+test("unreadHunks enumerates uncovered hunks in file order up to the limit (C1 stage 2)", () => {
+  const c = coverage();
+  c.recordHunk("gone.ts", 0);
+  c.recordRead("src/a.ts", { startLine: 1, endLine: 4 });
+  assert.deepEqual(c.unreadHunks(10), [
+    { path: "src/a.ts", hunkIndex: 1 },
+    { path: "new2.ts", hunkIndex: 0 },
+  ]);
+  assert.deepEqual(c.unreadHunks(1), [{ path: "src/a.ts", hunkIndex: 1 }]);
+  assert.deepEqual(c.unreadHunks(0), []);
+});

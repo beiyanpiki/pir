@@ -110,6 +110,22 @@ export class ChangeCoverage {
     return { ...this.counts(), files };
   }
 
+  /**
+   * Uncovered hunks in file order, up to `limit` — the focus-list source for
+   * the forced coverage round (stage 2).
+   */
+  unreadHunks(limit: number): Array<{ path: string; hunkIndex: number }> {
+    const out: Array<{ path: string; hunkIndex: number }> = [];
+    for (const [path, regions] of this.regions) {
+      for (let index = 0; index < regions.length; index++) {
+        if (this.isCovered(path, index)) continue;
+        if (out.length >= limit) return out;
+        out.push({ path, hunkIndex: index });
+      }
+    }
+    return out;
+  }
+
   private isCovered(path: string, index: number): boolean {
     if (this.paged.has(`${path}\u0000${index}`)) return true;
     const region = this.regions.get(path)![index];

@@ -34,6 +34,8 @@ export interface ReviewState {
   dryRounds: number;
   estimatedTokens: number;
   stoppedBecause: string | null;
+  /** C1 stage 2: the single forced coverage round has been spent. */
+  forcedCoverageRoundUsed: boolean;
 }
 
 export function createReviewState(base: string, head: string, maxRounds: number): ReviewState {
@@ -51,6 +53,7 @@ export function createReviewState(base: string, head: string, maxRounds: number)
     dryRounds: 0,
     estimatedTokens: 0,
     stoppedBecause: null,
+    forcedCoverageRoundUsed: false,
   };
 }
 
