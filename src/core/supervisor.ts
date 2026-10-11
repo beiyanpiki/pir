@@ -544,32 +544,52 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
             ...oks.flatMap(({ ok }) => ok.candidates),
             ...errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.candidates : [])),
           ];
+          // Reassign unique runtime displayIds to EVERY merged candidate
+          // before any failure can throw or any persistence/transcript
+          // reference exists (parallel sessions collide on F-<round><seq> by
+          // construction, and the failure path must not publish colliding
+          // ids either, F-134).
+          const oldIds = new Map(allCandidates.filter((c) => c.displayId).map((c) => [c, c.displayId!]));
+          [...allCandidates]
+            .sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
+            .forEach((candidate, index) => {
+              candidate.displayId = `F-${state.round}${String(index + 1).padStart(2, "0")}`;
+            });
           if (errs.length > 0) {
             // Single-session failure semantics: one ReviewerRoundError carries
             // every angle's recovered candidates plus the failed angles'
-            // evidence for the catch-block replay. Usage stays undefined —
-            // the successful sessions were already charged above, and the
-            // catch block would charge `usage` again (F-128). Every failed
-            // angle is named in the message, not just the first (F-131).
+            // evidence for the catch-block replay. Usage carries ONLY the
+            // failed angles' measured usage — successful sessions were
+            // already charged above, and the catch block charges the error's
+            // usage once (F-128, F-133). Every failed angle is named in the
+            // message, not just the first (F-131).
             const evidence = {
               hunks: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.hunks ?? [] : [])),
               reads: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.reads ?? [] : [])),
             };
+            const failedUsage = errs
+              .map(({ err }) => (err instanceof ReviewerRoundError ? err.usage : undefined))
+              .filter((usage): usage is NonNullable<typeof usage> => usage !== undefined);
+            const mergedUsage = failedUsage.length === 0 ? undefined : failedUsage.reduce((sum, usage) => ({
+              inputTokens: sum.inputTokens + usage.inputTokens,
+              outputTokens: sum.outputTokens + usage.outputTokens,
+              cacheReadTokens: (sum.cacheReadTokens ?? 0) + (usage.cacheReadTokens ?? 0),
+              cacheWriteTokens: (sum.cacheWriteTokens ?? 0) + (usage.cacheWriteTokens ?? 0),
+              totalTokens: sum.totalTokens + usage.totalTokens,
+              cost: sum.cost + usage.cost,
+              durationMs: sum.durationMs + usage.durationMs,
+              toolCalls: (sum.toolCalls ?? 0) + (usage.toolCalls ?? 0),
+              repeatedToolCalls: (sum.repeatedToolCalls ?? 0) + (usage.repeatedToolCalls ?? 0),
+            }));
             const cause = errs.length === 1
               ? errs[0]!.err
               : new Error(`angle fan-out failures: ${errs.map(({ angleId, err }) => `[${angleId}] ${err instanceof Error ? err.message : String(err)}`).join("; ")}`);
-            throw new ReviewerRoundError(cause, allCandidates, undefined, evidence);
+            throw new ReviewerRoundError(cause, allCandidates, mergedUsage, evidence);
           }
-          // Merge across angles: the existing dedup collapses cross-angle
-          // duplicates; unique displayIds are reassigned to the fresh set
-          // BEFORE any persistence or transcript-index reference (parallel
-          // sessions collide on F-<round><seq> by construction).
-          const dedup = deduplicateCandidates(allCandidates, state.known);
-          const oldIds = new Map(allCandidates.filter((c) => c.displayId).map((c) => [c, c.displayId!]));
-          const ordered = [...dedup.fresh].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
-          ordered.forEach((candidate, index) => {
-            candidate.displayId = `F-${state.round}${String(index + 1).padStart(2, "0")}`;
-          });
+          // Merge across angles: the dedup collapses near-duplicates across
+          // category labels between parallel angle sessions (F-132) while
+          // staying strict against prior-round knowledge.
+          const dedup = deduplicateCandidates(allCandidates, state.known, { crossAngle: true });
           for (const { angleId, ok } of oks) {
             const ref = refs.find((entry) => entry.angle === angleId);
             const idMap = ok.candidates

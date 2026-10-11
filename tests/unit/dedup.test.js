@@ -57,3 +57,21 @@ test("known findings from previous rounds dedup against new ones", () => {
   assert.equal(result.duplicates.length, 1);
   assert.equal(result.duplicates[0].of, known[0]);
 });
+
+test("cross-angle near-duplicates collapse across category labels; knowledge stays strict (dogfood F-132)", () => {
+  const base = { title: "t", claim: "quota consumed without attempt", trigger: "gateway exception", anchors: [], evidence: [], round: 1 };
+  const a = { ...base, category: "concurrency", severity: "P1", entityKey: "Pay.retry", identity: buildIdentity({ featureKey: "pay", entityKey: "Pay.retry", category: "concurrency", claim: base.claim, trigger: base.trigger }) };
+  const b = { ...base, category: "performance", severity: "P2", entityKey: "Pay.retry", identity: buildIdentity({ featureKey: "pay", entityKey: "Pay.retry", category: "performance", claim: base.claim, trigger: base.trigger }) };
+  // Default (single-session) semantics: different categories are different findings.
+  const strict = deduplicateCandidates([a, b]);
+  assert.equal(strict.fresh.length, 2);
+  // Cross-angle fan-out: parallel sessions label the same defect with their
+  // own category — same entity + near-identical claim collapses.
+  const relaxed = deduplicateCandidates([a, b], [], { crossAngle: true });
+  assert.equal(relaxed.fresh.length, 1);
+  assert.equal(relaxed.duplicates.length, 1);
+  // Against prior-round knowledge the gate stays strict even in fan-out mode.
+  const prior = deduplicateCandidates([a], [], { crossAngle: true });
+  const against = deduplicateCandidates([b], prior.fresh, { crossAngle: true });
+  assert.equal(against.fresh.length, 1);
+});

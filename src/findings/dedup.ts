@@ -18,20 +18,25 @@ const NEAR_DUP_THRESHOLD = 0.82;
 export function deduplicateCandidates(
   candidates: CandidateFinding[],
   known: CandidateFinding[] = [],
+  opts?: { crossAngle?: boolean },
 ): DedupResult {
   const seen = [...known];
   const fresh: CandidateFinding[] = [];
   const duplicates: DedupResult["duplicates"] = [];
 
   for (const candidate of candidates) {
-    const dup = seen.find(
-      (s) =>
-        s.identity.fingerprint === candidate.identity.fingerprint ||
-        (s.category === candidate.category &&
-          (!!s.entityKey || !!candidate.entityKey) &&
-          (s.entityKey ?? "") === (candidate.entityKey ?? "") &&
-          claimSimilarity(s.identity.normalizedClaim, candidate.identity.normalizedClaim) >= NEAR_DUP_THRESHOLD),
-    );
+    const dup = seen.find((s) => {
+      if (s.identity.fingerprint === candidate.identity.fingerprint) return true;
+      if (!(!!s.entityKey || !!candidate.entityKey)) return false;
+      if ((s.entityKey ?? "") !== (candidate.entityKey ?? "")) return false;
+      // Cross-angle fan-out (F1): parallel specialized sessions label the
+      // same defect with their own category, so the category gate is dropped
+      // between batch candidates; matching against prior-round knowledge
+      // stays strict.
+      const batchPeer = opts?.crossAngle === true && !known.includes(s);
+      if (!batchPeer && s.category !== candidate.category) return false;
+      return claimSimilarity(s.identity.normalizedClaim, candidate.identity.normalizedClaim) >= NEAR_DUP_THRESHOLD;
+    });
     if (dup) {
       duplicates.push({ candidate, of: dup });
     } else {

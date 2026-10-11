@@ -1584,7 +1584,7 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
         await new Promise((resolve) => setTimeout(resolve, 25));
         await tool("record_candidate").execute({
           title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
-          category: "correctness", severity: "P1",
+          category: "correctness", severity: "P1", entityKey: "Pay.retry",
           anchors: [{ path: "src/pay.ts", startLine: 1 }],
           evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
         });
@@ -1595,13 +1595,13 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
         await new Promise((resolve) => setTimeout(resolve, 25));
         await tool("record_candidate").execute({
           title: "same defect seen from security", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
-          category: "correctness", severity: "P1",
+          category: "security", severity: "P1", entityKey: "Pay.retry",
           anchors: [{ path: "src/pay.ts", startLine: 1 }],
           evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
         });
         await tool("record_candidate").execute({
           title: "tainted input", claim: "claim B: user input reaches the gateway unchecked", trigger: "retry request",
-          category: "security", severity: "P0",
+          category: "security", severity: "P0", entityKey: "Pay.retry",
           anchors: [{ path: "src/pay.ts", startLine: 1 }],
           evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "gateway(input)" }],
         });
@@ -1709,7 +1709,7 @@ test("findIssues: an angle session failure recovers every angle's candidates (F1
       if (promptText.includes('angle "correctness"')) {
         await tool("record_candidate").execute({
           title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
-          category: "correctness", severity: "P1",
+          category: "correctness", severity: "P1", entityKey: "Pay.retry",
           anchors: [{ path: "src/pay.ts", startLine: 1 }],
           evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
         });
@@ -1774,6 +1774,7 @@ test("findIssues: a failed fan-out charges successful angles' usage exactly once
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const factory = {
     async createSession(config) {
+      let sessionUsage = 550;
       return {
         config,
         async prompt(text) {
@@ -1781,17 +1782,29 @@ test("findIssues: a failed fan-out charges successful angles' usage exactly once
             const tool = (name) => config.tools.find((t) => t.name === name);
             if (text.includes('angle "correctness"')) {
               await tool("finish_round").execute({ summary: "ok angle", nextFocus: [], needsMoreRounds: false });
+            } else {
+              sessionUsage = 300;
+              // security angle: records a candidate, then never calls
+              // finish_round → fails with measured usage on its error.
+              await tool("record_candidate").execute({
+                title: "tainted input", claim: "claim B: user input reaches the gateway unchecked", trigger: "retry request",
+                category: "security", severity: "P0",
+                anchors: [{ path: "src/pay.ts", startLine: 1 }],
+                evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "gateway(input)" }],
+              });
             }
-            // security angle: no finish_round → fails; reports no usage.
           }
         },
         getLastAssistantText: () => "fake",
         getLastAssistantError: () => undefined,
-        getUsage: () => ({ inputTokens: 300, outputTokens: 250, totalTokens: 550, cost: 0.001, durationMs: 5 }),
+        getUsage: () => ({ inputTokens: sessionUsage - 50, outputTokens: 50, totalTokens: sessionUsage, cost: 0.001, durationMs: 5 }),
         dispose() {},
       };
     },
   };
+  const events = [];
+  const { onRunEvent } = await import("../../dist/observability/run-events.js");
+  const unsubscribe = onRunEvent((event) => events.push(event));
   try {
     await assert.rejects(
       findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
@@ -1800,10 +1813,18 @@ test("findIssues: a failed fan-out charges successful angles' usage exactly once
     const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
     const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
     assert.equal(manifest.status, "failed");
-    // One successful angle session at 550 tokens, charged once — a double
-    // charge through the merged error would report ~1100.
-    assert.equal(manifest.usage.totalTokens, 550);
+    // Successful angle (550) + failed angle's measured usage (300), each
+    // charged exactly once — a double charge would report ~1700, a dropped
+    // one ~550 (dogfood F-128, F-133).
+    assert.equal(manifest.usage.totalTokens, 850);
+    // Recovered candidates publish unique runtime ids even on the failure
+    // path (dogfood F-134): the run-end summaries carry the reassigned ids.
+    const runEnd = events.find((event) => event.kind === "run-end");
+    const ids = runEnd.findings.map((f) => f.displayId).filter(Boolean);
+    assert.ok(ids.length >= 1, "recovered candidates summarized");
+    assert.equal(new Set(ids).size, ids.length, "runtime ids unique across parallel angles");
   } finally {
+    unsubscribe();
     process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();
     repo.cleanup();
