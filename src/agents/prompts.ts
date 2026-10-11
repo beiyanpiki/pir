@@ -67,11 +67,11 @@ export const FINDER_ANGLES: readonly AngleDef[] = [
   },
 ];
 
-/** Stable lookup + validation for --angles ids. */
+/** Stable lookup + validation for --angles ids; repeats collapse in order. */
 export function resolveAngleIds(ids: readonly string[]): AngleDef[] {
   const byId = new Map(FINDER_ANGLES.map((angle) => [angle.id, angle]));
   const resolved: AngleDef[] = [];
-  for (const id of ids) {
+  for (const id of new Set(ids)) {
     const angle = byId.get(id);
     if (!angle) throw new Error(`unknown angle "${id}" (available: ${FINDER_ANGLES.map((a) => a.id).join(", ")}, or "all")`);
     resolved.push(angle);

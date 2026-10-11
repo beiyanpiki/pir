@@ -1595,7 +1595,7 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
         await new Promise((resolve) => setTimeout(resolve, 25));
         await tool("record_candidate").execute({
           title: "same defect seen from security", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
-          category: "security", severity: "P1", entityKey: "Pay.retry",
+          category: "security", severity: "P0", entityKey: "Pay.retry",
           anchors: [{ path: "src/pay.ts", startLine: 1 }],
           evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
         });
@@ -1651,11 +1651,24 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
     assert.ok(files.includes("reviewer-r1-security.json"));
     assert.ok(files.includes("reviewer-r2.json"));
     assert.ok(files.some((f) => /^verifier-r1-F-10[12]\.json$/.test(f)), "verifier transcripts use reassigned ids");
+    // The P0 cross-angle duplicate outranks the correctness angle's P1 —
+    // the more severe occurrence survives the collapse (dogfood F-135).
+    const survivor = outcome.findings.find((f) => f.claim.includes("claim A"));
+    assert.equal(survivor.severity, "P0");
     const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
     const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
     assert.equal(mapped.length, 2, "both angle sessions record their id maps");
     const targets = mapped.flatMap((entry) => entry.idMap.map((m) => m.to)).sort();
-    assert.deepEqual(targets, ["F-101", "F-102"], "reassigned runtime ids are unique across parallel sessions");
+    // F-101 twice is correct: the survivor maps to itself from its own
+    // session, and the collapsed duplicate's session folds onto it.
+    assert.deepEqual(targets, ["F-101", "F-101", "F-102"], "every candidate maps; duplicates fold onto their survivor");
+    // The collapsed duplicate's map points at the SURVIVOR, keeping its
+    // transcript traceable (dogfood F-137).
+    const correctnessRef = manifest.sessions.find((entry) => entry.angle === "correctness");
+    assert.ok(correctnessRef.idMap.length >= 1);
+    for (const entry of correctnessRef.idMap) {
+      assert.ok(["F-101", "F-102"].includes(entry.to), `dropped candidate maps to a surviving id (got ${entry.to})`);
+    }
   } finally {
     process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();

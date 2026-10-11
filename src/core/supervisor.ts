@@ -555,6 +555,17 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
             .forEach((candidate, index) => {
               candidate.displayId = `F-${state.round}${String(index + 1).padStart(2, "0")}`;
             });
+          // Base id map per session: every candidate maps to its reassigned
+          // id. Attached before any failure can throw, so the failure path
+          // publishes complete maps too (F-137); the survivor rewrite below
+          // then folds duplicate entries onto the surviving finding.
+          for (const { angleId, ok } of oks) {
+            const ref = refs.find((entry) => entry.angle === angleId);
+            const idMap = ok.candidates
+              .filter((candidate) => oldIds.has(candidate))
+              .map((candidate) => ({ from: oldIds.get(candidate)!, to: candidate.displayId! }));
+            if (ref && idMap.length > 0) ref.idMap = idMap;
+          }
           if (errs.length > 0) {
             // Single-session failure semantics: one ReviewerRoundError carries
             // every angle's recovered candidates plus the failed angles'
@@ -587,15 +598,21 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
             throw new ReviewerRoundError(cause, allCandidates, mergedUsage, evidence);
           }
           // Merge across angles: the dedup collapses near-duplicates across
-          // category labels between parallel angle sessions (F-132) while
-          // staying strict against prior-round knowledge.
+          // category labels between parallel angle sessions (F-132, the more
+          // severe occurrence surviving, F-135) while staying strict against
+          // prior-round knowledge. Collapsed candidates keep their transcript
+          // traceability: their session's map entry points at the survivor
+          // (F-137).
           const dedup = deduplicateCandidates(allCandidates, state.known, { crossAngle: true });
+          const survivorId = new Map(dedup.duplicates.map(({ candidate, of }) => [candidate, of.displayId!]));
           for (const { angleId, ok } of oks) {
             const ref = refs.find((entry) => entry.angle === angleId);
-            const idMap = ok.candidates
-              .filter((candidate) => dedup.fresh.includes(candidate) && oldIds.has(candidate))
-              .map((candidate) => ({ from: oldIds.get(candidate)!, to: candidate.displayId! }));
-            if (ref && idMap.length > 0) ref.idMap = idMap;
+            if (!ref?.idMap) continue;
+            for (const entry of ref.idMap) {
+              const owner = ok.candidates.find((candidate) => oldIds.get(candidate) === entry.from);
+              const survivor = owner !== undefined ? survivorId.get(owner) : undefined;
+              if (survivor !== undefined) entry.to = survivor;
+            }
           }
           freshCount = dedup.fresh.length;
           state.known.push(...dedup.fresh);

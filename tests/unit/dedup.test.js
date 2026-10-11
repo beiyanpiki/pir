@@ -75,3 +75,18 @@ test("cross-angle near-duplicates collapse across category labels; knowledge sta
   const against = deduplicateCandidates([b], prior.fresh, { crossAngle: true });
   assert.equal(against.fresh.length, 1);
 });
+
+test("cross-angle collapse keeps the more severe occurrence (dogfood F-135)", () => {
+  const make = (category, severity) => ({
+    title: "t", claim: "quota consumed without attempt", trigger: "gateway exception",
+    category, severity, entityKey: "Pay.retry", anchors: [], evidence: [], round: 1,
+    identity: buildIdentity({ featureKey: "pay", entityKey: "Pay.retry", category, claim: "quota consumed without attempt", trigger: "gateway exception" }),
+  });
+  const p2 = make("concurrency", "P2");
+  const p0 = make("performance", "P0");
+  const result = deduplicateCandidates([p2, p0], [], { crossAngle: true });
+  assert.equal(result.fresh.length, 1);
+  assert.equal(result.fresh[0].severity, "P0", "the more severe occurrence survives");
+  assert.equal(result.duplicates.length, 1);
+  assert.equal(result.duplicates[0].candidate.severity, "P2");
+});

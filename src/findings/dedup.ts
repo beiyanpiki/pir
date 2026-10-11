@@ -1,4 +1,5 @@
 import { claimSimilarity } from "./identity.js";
+import { SEVERITY_ORDER } from "./types.js";
 import type { CandidateFinding } from "./types.js";
 
 export interface DedupResult {
@@ -38,7 +39,17 @@ export function deduplicateCandidates(
       return claimSimilarity(s.identity.normalizedClaim, candidate.identity.normalizedClaim) >= NEAR_DUP_THRESHOLD;
     });
     if (dup) {
-      duplicates.push({ candidate, of: dup });
+      // Cross-angle fan-out: parallel sessions file the same defect with
+      // their own severity; the MORE SEVERE occurrence survives, not the
+      // first-seen one (a dropped P0 filed by the second angle would
+      // silently downgrade the run's output).
+      if (opts?.crossAngle === true && SEVERITY_ORDER[candidate.severity] < SEVERITY_ORDER[dup.severity]) {
+        duplicates.push({ candidate: dup, of: candidate });
+        fresh[fresh.indexOf(dup)] = candidate;
+        seen[seen.indexOf(dup)] = candidate;
+      } else {
+        duplicates.push({ candidate, of: dup });
+      }
     } else {
       fresh.push(candidate);
       seen.push(candidate);
