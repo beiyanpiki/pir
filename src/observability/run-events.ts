@@ -277,6 +277,7 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
             ...(meta.unitId !== undefined ? { unitId: meta.unitId } : {}),
             ...(meta.attempt !== undefined ? { attempt: meta.attempt } : {}),
             ...(meta.displayId !== undefined ? { displayId: meta.displayId } : {}),
+            ...(meta.angle !== undefined ? { angle: meta.angle } : {}),
             prompt,
           });
         },
@@ -355,6 +356,7 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
               ...(meta.unitId !== undefined ? { unitId: meta.unitId } : {}),
               ...(meta.attempt !== undefined ? { attempt: meta.attempt } : {}),
               ...(meta.displayId !== undefined ? { displayId: meta.displayId } : {}),
+              ...(meta.angle !== undefined ? { angle: meta.angle } : {}),
               prompt: "",
             });
           }

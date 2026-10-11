@@ -97,6 +97,8 @@ export interface ReviewerDeps {
   model?: string;
   /** F1: specialized finder angle — restricts this session's categories. */
   angle?: AngleDef;
+  /** F1: parallel angle sessions sharing this round (prompt budget honesty). */
+  fanoutSize?: number;
   /** Opt-in transcript dump location for this round's session. */
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
@@ -197,6 +199,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           memoryPack: deps.memoryPack,
           structuralQueries: sessionCtx.codeMap.structuralQueries,
           angle: deps.angle,
+          fanoutSize: deps.fanoutSize,
           languageGuidance: deps.languageGuidance,
         });
     deps.onSessionEvent?.sessionStarted(prompt);

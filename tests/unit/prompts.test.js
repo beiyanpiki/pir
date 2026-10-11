@@ -320,3 +320,11 @@ test("reviewer prompt: SPECIALIZED FOCUS renders per angle and is absent otherwi
   assert.throws(() => resolveAngleIds(["nope"]), /unknown angle "nope"/);
   assert.deepEqual(resolveAngleIds(["security", "correctness"]).map((a) => a.id), ["security", "correctness"]);
 });
+
+test("angle prompt states the shared reporting cap across parallel sessions (dogfood F-127)", () => {
+  const base = { base: "b", head: "h", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack: "pack", structuralQueries: false, angle: FINDER_ANGLES[0] };
+  const solo = reviewerPrompt({ ...base, fanoutSize: 1 });
+  assert.ok(!solo.includes("parallel specialized sessions"));
+  const shared = reviewerPrompt({ ...base, fanoutSize: 3 });
+  assert.match(shared, /You are one of 3 parallel specialized sessions; the reporting cap is shared across all of them/);
+});

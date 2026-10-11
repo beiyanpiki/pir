@@ -503,6 +503,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         const roundAngles = state.round === 1 && angles.length > 0
           ? angles.slice(0, angleFanoutCount(angles.length, budget, options))
           : [];
+        if (roundAngles.length > 0 && roundAngles.length < angles.length) {
+          const dropped = angles.slice(roundAngles.length).map((a) => a.id);
+          onProgress({ type: "info", message: `angle fan-out reduced by budget: running ${roundAngles.length} of ${angles.length}, dropped ${dropped.join(", ")}` });
+        }
         if (roundAngles.length > 0) {
           const refs: RunSessionRef[] = [];
           const settled = await Promise.all(roundAngles.map(async (angle) => {
@@ -516,6 +520,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
                 maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
                 verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
                 investigationFeedback: state.investigationFeedback, model: options.model, angle,
+                fanoutSize: roundAngles.length,
                 languageGuidance: languagePacks.reviewerGuidance,
                 transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
                 onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id }),
@@ -542,12 +547,18 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           if (errs.length > 0) {
             // Single-session failure semantics: one ReviewerRoundError carries
             // every angle's recovered candidates plus the failed angles'
-            // evidence for the catch-block replay.
+            // evidence for the catch-block replay. Usage stays undefined —
+            // the successful sessions were already charged above, and the
+            // catch block would charge `usage` again (F-128). Every failed
+            // angle is named in the message, not just the first (F-131).
             const evidence = {
               hunks: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.hunks ?? [] : [])),
               reads: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.reads ?? [] : [])),
             };
-            throw new ReviewerRoundError(errs[0]!.err, allCandidates, budget.usage, evidence);
+            const cause = errs.length === 1
+              ? errs[0]!.err
+              : new Error(`angle fan-out failures: ${errs.map(({ angleId, err }) => `[${angleId}] ${err instanceof Error ? err.message : String(err)}`).join("; ")}`);
+            throw new ReviewerRoundError(cause, allCandidates, undefined, evidence);
           }
           // Merge across angles: the existing dedup collapses cross-angle
           // duplicates; unique displayIds are reassigned to the fresh set

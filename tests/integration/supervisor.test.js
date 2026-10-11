@@ -1681,14 +1681,20 @@ test("findIssues: angle fan-out shrinks deterministically under a token budget (
   try {
     // Five angles requested; 300k tokens remaining allows only K=2
     // (2 x 150k allowance) — trailing angles drop in stable order.
+    const events = [];
     const outcome = await findIssues({
       repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
       options: { angles: ["correctness", "concurrency", "security", "contracts", "performance"], maxTokens: 300000 },
+      onProgress: (event) => events.push(event),
     });
     assert.equal(outcome.rounds.length, 1);
     assert.equal(anglePrompts.length, 2);
     assert.match(anglePrompts[0], /angle "correctness"/);
     assert.match(anglePrompts[1], /angle "concurrency"/);
+    // The shrink is logged with the dropped angle ids (dogfood F-130).
+    const shrink = events.find((e) => e.type === "info" && /angle fan-out reduced by budget/.test(e.message));
+    assert.ok(shrink, "shrink event emitted");
+    assert.match(shrink.message, /running 2 of 5, dropped security, contracts, performance/);
   } finally {
     ctx.memory.close();
     repo.cleanup();
@@ -1725,6 +1731,80 @@ test("findIssues: an angle session failure recovers every angle's candidates (F1
     const rows = ctx.memory.findings.list();
     assert.equal(rows.filter((row) => row.status === "candidate").length, 1);
   } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: multiple angle failures are all named in the cause (dogfood F-131)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (_tool, promptText) => {
+      // Neither angle calls finish_round; distinct failure contexts.
+      if (promptText.includes('angle "correctness"')) {
+        throw new Error("correctness provider exploded");
+      }
+      // security angle: session ends without the terminal tool.
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      (error) => {
+        assert.match(error.message, /angle fan-out failures: /);
+        assert.match(error.message, /\[correctness\] correctness provider exploded/);
+        assert.match(error.message, /\[security\]/);
+        return true;
+      },
+    );
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed fan-out charges successful angles' usage exactly once (dogfood F-128)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = {
+    async createSession(config) {
+      return {
+        config,
+        async prompt(text) {
+          if (config.systemRole === "code reviewer") {
+            const tool = (name) => config.tools.find((t) => t.name === name);
+            if (text.includes('angle "correctness"')) {
+              await tool("finish_round").execute({ summary: "ok angle", nextFocus: [], needsMoreRounds: false });
+            }
+            // security angle: no finish_round → fails; reports no usage.
+          }
+        },
+        getLastAssistantText: () => "fake",
+        getLastAssistantError: () => undefined,
+        getUsage: () => ({ inputTokens: 300, outputTokens: 250, totalTokens: 550, cost: 0.001, durationMs: 5 }),
+        dispose() {},
+      };
+    },
+  };
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    // One successful angle session at 550 tokens, charged once — a double
+    // charge through the merged error would report ~1100.
+    assert.equal(manifest.usage.totalTokens, 550);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();
     repo.cleanup();
   }
