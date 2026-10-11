@@ -586,8 +586,11 @@ coverage ledger (C1): `changeCoverage` with `hunksTotal`/`hunksCovered`,
 hunk counts as covered when raw diff lines were paged from `get_change`
 (`path` + `hunkIndex`) or a head-revision `read_code` window intersected its
 new-side interval; overview/hunk-index listings and mechanically collected
-candidate evidence never count as reads. Observational only — coverage does
-not gate, suppress, or reroute anything.
+candidate evidence never count as reads. Coverage never gates, suppresses, or
+drops findings; the one interventional behavior (C1 stage 2): when the
+reviewer signals completion while hunks remain unread, change mode spends at
+most one forced follow-up round with a focus entry listing the unread hunks —
+budget rounds and the findings cap permitting.
 
 `PIR_REMOTE_TIMEOUT` covers execution/bundle requests and job status requests;
 it is not an overall asynchronous job deadline. Memory sync instead uses its
