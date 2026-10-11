@@ -1,6 +1,6 @@
 import type { AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
-import { auditReviewerPrompt, reviewerPrompt } from "./prompts.js";
+import { auditReviewerPrompt, reviewerPrompt, type AngleDef } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
 import type { ReviewWorkUnit } from "../core/audit-planner.js";
@@ -95,6 +95,8 @@ export interface ReviewerDeps {
   mergeBase?: string;
   verificationCapacity?: number;
   model?: string;
+  /** F1: specialized finder angle — restricts this session's categories. */
+  angle?: AngleDef;
   /** Opt-in transcript dump location for this round's session. */
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
@@ -194,6 +196,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           investigationFeedback: deps.investigationFeedback,
           memoryPack: deps.memoryPack,
           structuralQueries: sessionCtx.codeMap.structuralQueries,
+          angle: deps.angle,
           languageGuidance: deps.languageGuidance,
         });
     deps.onSessionEvent?.sessionStarted(prompt);

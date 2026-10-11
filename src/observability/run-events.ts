@@ -203,6 +203,8 @@ export interface SessionMeta {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  /** F1: the specialized finder angle this reviewer session runs as. */
+  angle?: string;
 }
 
 /** Per-session handle handed to reviewer/verifier rounds by the supervisor. */
@@ -386,6 +388,14 @@ export interface RunSessionRef {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  /** F1: the angle this reviewer session ran as. */
+  angle?: string;
+  /**
+   * F1: collector-assigned displayIds inside this session's transcript → the
+   * supervisor-reassigned unique ids (parallel angle sessions collide on
+   * F-<round><seq> by construction).
+   */
+  idMap?: Array<{ from: string; to: string }>;
 }
 
 export interface RunManifest {
