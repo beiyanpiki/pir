@@ -525,15 +525,25 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       else if (drained.feedbackVerdicts.length) {
         state.focus = [...new Set([...drained.feedbackVerdicts.filter((v) => v.verdict === "uncertain").map((v) => v.codeFeedback!), ...state.focus])].slice(0, 16);
       }
+      // Information gain counts non-rejected verdicts; drained.verified
+      // includes rejections, which are dry by definition.
+      calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
+      onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
       // C1 stage 2 (interventional, once per run): the reviewer signaled
       // completion while diff hunks remain unread — spend one forced
-      // follow-up round pointing at them, when the budget and the findings
-      // cap leave room. A reviewer that still refuses cannot loop, and the
-      // audit loop is untouched.
+      // follow-up round pointing at them. Only when the next iteration would
+      // actually run a reviewer: no verification backlog (drain-only rounds
+      // would burn the budget first, F-124) and no shouldStop condition
+      // (rounds, budget, convergence — evaluated after this round's
+      // information gain) about to end the run, so the event and the
+      // once-per-run flag are never spent on a round that cannot happen
+      // (F-123). A reviewer that still refuses cannot loop; the audit loop
+      // is untouched.
       if (
         result && !needsReview && !state.forcedCoverageRoundUsed &&
-        state.round < maxRounds &&
-        (maxFindings === null || reportedCount(state) < maxFindings)
+        state.pending.length === 0 &&
+        (maxFindings === null || reportedCount(state) < maxFindings) &&
+        !shouldStop(state, budget).stop
       ) {
         const unread = changeCoverage.unreadHunks(12);
         if (unread.length > 0) {
@@ -543,10 +553,6 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           onProgress({ type: "info", message: `forced coverage round: reviewer signaled completion with ${unread.length} unread diff hunk(s)` });
         }
       }
-      // Information gain counts non-rejected verdicts; drained.verified
-      // includes rejections, which are dry by definition.
-      calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
-      onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
     }
   } catch (error) {
     if (error instanceof ReviewerRoundError) {
