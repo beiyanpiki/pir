@@ -943,6 +943,8 @@ test("findIssues: --verify-model routes verifier sessions to a separate model an
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const factory = new FakeSessionFactory({
     reviewerScript: async (tool) => {
+      // Reads the diff: a competent pass keeps C1 stage 2 out of this fixture.
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
       await tool("record_candidate").execute({
         title: "issue 1",
         claim: "claim 1: the quota path 1 skips its guard",
@@ -1258,6 +1260,308 @@ test("findIssues: warm memory surfaces cross-entity dismissals in the verifier p
     // Observational: the finding still verifies and reports normally.
     assert.equal(outcome.findings.length, 1);
     assert.equal(outcome.findings[0].status, "confirmed");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+const FORCED_ROUND_CANDIDATE = {
+  title: "issue 1",
+  claim: "claim 1: the quota path 1 skips its guard",
+  trigger: "trigger 1",
+  category: "correctness",
+  severity: "P1",
+  anchors: [{ path: "src/pay.ts", startLine: 1 }],
+  evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
+};
+
+test("findIssues: one forced coverage round points the reviewer at unread hunks (C1 stage 2)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  let reviewerRound = 0;
+  const reviewerPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerRound += 1;
+      reviewerPrompts.push(promptText);
+      if (reviewerRound === 1) {
+        // Signals completion without reading anything: coverage incomplete.
+        await tool("record_candidate").execute(FORCED_ROUND_CANDIDATE);
+        await tool("finish_round").execute({ summary: "done, did not read", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // The forced round reads the hunk the focus entry points at.
+        await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+        await tool("finish_round").execute({ summary: "read it now", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} });
+    assert.equal(outcome.rounds.length, 2);
+    assert.match(reviewerPrompts[1] ?? "", /Unread diff hunks: src\/pay\.ts:0/);
+    assert.equal(outcome.rounds[1].coverage?.hunksCovered, 1);
+    // A completed forced round is a completed review, not an incomplete one.
+    assert.equal(outcome.incomplete, false);
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: no forced coverage round when coverage is complete (C1 stage 2)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const reviewerPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerPrompts.push(promptText);
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("record_candidate").execute(FORCED_ROUND_CANDIDATE);
+      await tool("finish_round").execute({ summary: "read and reported", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: {} });
+    assert.equal(outcome.rounds.length, 1);
+    assert.ok(!reviewerPrompts[0].includes("Unread diff hunks"));
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: no forced coverage round when the budget or cap is exhausted (C1 stage 2)", async () => {
+  // Budget: maxRounds 1 leaves no room for a forced round.
+  {
+    const repo = setupRepo();
+    const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+    const reviewerPrompts = [];
+    const factory = new FakeSessionFactory({
+      reviewerScript: async (tool, promptText) => {
+        reviewerPrompts.push(promptText);
+        await tool("finish_round").execute({ summary: "done, did not read", nextFocus: [], needsMoreRounds: false });
+      },
+      verifierScript: async (tool) => {
+        await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      },
+    });
+    try {
+      const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { maxRounds: 1 } });
+      assert.equal(outcome.rounds.length, 1);
+      assert.ok(!reviewerPrompts[0].includes("Unread diff hunks"));
+    } finally {
+      ctx.memory.close();
+      repo.cleanup();
+    }
+  }
+  // Cap: the findings ceiling is already reached, so no extra round.
+  {
+    const repo = setupRepo();
+    const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m2.sqlite") });
+    const reviewerPrompts = [];
+    const factory = new FakeSessionFactory({
+      reviewerScript: async (tool, promptText) => {
+        reviewerPrompts.push(promptText);
+        await tool("record_candidate").execute(FORCED_ROUND_CANDIDATE);
+        await tool("finish_round").execute({ summary: "done, did not read", nextFocus: [], needsMoreRounds: false });
+      },
+      verifierScript: async (tool) => {
+        await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+      },
+    });
+    try {
+      const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { maxFindings: 1 } });
+      assert.equal(outcome.rounds.length, 1);
+      assert.ok(!reviewerPrompts[0].includes("Unread diff hunks"));
+      assert.equal(outcome.stoppedBecause, "max findings reached (1)");
+    } finally {
+      ctx.memory.close();
+      repo.cleanup();
+    }
+  }
+});
+
+test("findIssues: a reviewer that still refuses cannot loop the forced round (C1 stage 2)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  let reviewerRound = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      reviewerRound += 1;
+      await tool("finish_round").execute({ summary: `still not reading (round ${reviewerRound})`, nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { maxRounds: 5 } });
+    // Round 1 completes, round 2 is the single forced round, then it stops.
+    assert.equal(reviewerRound, 2);
+    assert.equal(outcome.rounds.length, 2);
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: no forced coverage round while a verification backlog drains (dogfood F-124)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const events = [];
+  const reviewerPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerPrompts.push(promptText);
+      // Three candidates against a one-per-round drain cap: the completion
+      // round leaves a verification backlog that consumes the remaining
+      // rounds before any reviewer round could run.
+      for (let i = 1; i <= 3; i++) {
+        await tool("record_candidate").execute({
+          title: `issue ${i}`,
+          claim: `claim ${i}: the quota path ${i} skips its guard`,
+          trigger: `trigger ${i}`,
+          category: "correctness",
+          severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+        });
+      }
+      await tool("finish_round").execute({ summary: "found several, did not read", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxVerificationsPerRound: 1 },
+      onProgress: (event) => events.push(event),
+    });
+    assert.equal(reviewerPrompts.length, 1);
+    assert.ok(reviewerPrompts.every((p) => !p.includes("Unread diff hunks")), "no focus entry is injected");
+    assert.ok(!events.some((e) => e.type === "info" && /forced coverage round/.test(e.message)), "no forced-round event");
+    assert.equal(outcome.rounds.length, 2);
+    assert.equal(outcome.stoppedBecause, "max rounds reached (2)");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: no forced coverage round when the token budget is exhausted (dogfood F-123)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const events = [];
+  const reviewerPrompts = [];
+  // Inline factory: the reviewer session reports usage above maxTokens, so
+  // the budget trips during the very round that would schedule the forced
+  // round — the once-per-run flag and the event must never be spent.
+  const factory = {
+    async createSession(config) {
+      return {
+        config,
+        async prompt(text) {
+          if (config.systemRole === "code reviewer") {
+            reviewerPrompts.push(text);
+            const tool = (name) => config.tools.find((t) => t.name === name);
+            await tool("finish_round").execute({ summary: "done, did not read", nextFocus: [], needsMoreRounds: false });
+          }
+        },
+        getLastAssistantText: () => "fake assistant text",
+        getLastAssistantError: () => undefined,
+        getUsage: () => ({ inputTokens: 300, outputTokens: 250, totalTokens: 550, cost: 0.001, durationMs: 5 }),
+        dispose() {},
+      };
+    },
+  };
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 3, maxTokens: 400 },
+      onProgress: (event) => events.push(event),
+    });
+    assert.equal(reviewerPrompts.length, 1);
+    assert.ok(!reviewerPrompts[0].includes("Unread diff hunks"), "no focus entry is injected");
+    assert.ok(!events.some((e) => e.type === "info" && /forced coverage round/.test(e.message)), "no forced-round event");
+    assert.equal(outcome.rounds.length, 1);
+    // The completion check precedes the budget check in the loop, so the run
+    // reports reviewer completion; the budget guard is proven by the absence
+    // of a second reviewer session above (old code would have run one).
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: forced coverage round fires once the backlog drains (dogfood F-125)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const events = [];
+  let reviewerRound = 0;
+  const reviewerPrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerRound += 1;
+      reviewerPrompts.push(promptText);
+      if (reviewerRound === 1) {
+        for (let i = 1; i <= 3; i++) {
+          await tool("record_candidate").execute({
+            title: `issue ${i}`,
+            claim: `claim ${i}: the quota path ${i} skips its guard`,
+            trigger: `trigger ${i}`,
+            category: "correctness",
+            severity: "P1",
+            anchors: [{ path: "src/pay.ts", startLine: 1 }],
+            evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: `consumeQuota(${i})` }],
+          });
+        }
+        await tool("finish_round").execute({ summary: "found several, did not read", nextFocus: [], needsMoreRounds: false });
+      } else {
+        await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+        await tool("finish_round").execute({ summary: "read it now", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 4, maxVerificationsPerRound: 1 },
+      onProgress: (event) => events.push(event),
+    });
+    // Round 1 reviews and leaves a 3-candidate backlog (drain caps at 1);
+    // rounds 2-3 drain it; the trigger fires at round 3's end — the queue
+    // emptied in a drain-only round, after the completion round itself.
+    assert.ok(events.some((e) => e.type === "info" && /forced coverage round/.test(e.message)), "forced round scheduled after backlog drained");
+    assert.equal(reviewerPrompts.length, 2);
+    assert.match(reviewerPrompts[1] ?? "", /Unread diff hunks: src\/pay\.ts:0/);
+    assert.equal(outcome.rounds.length, 4);
+    assert.equal(outcome.rounds[3].coverage?.hunksCovered, 1);
+    assert.equal(outcome.stoppedBecause, "reviewer signaled completion");
+    assert.equal(outcome.incomplete, false);
   } finally {
     ctx.memory.close();
     repo.cleanup();

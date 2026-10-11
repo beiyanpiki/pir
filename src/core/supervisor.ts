@@ -529,6 +529,32 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       // includes rejections, which are dry by definition.
       calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
       onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
+      // C1 stage 2 (interventional, once per run): the reviewer signaled
+      // completion while diff hunks remain unread — spend one forced
+      // follow-up round pointing at them. needsReview=false means a reviewer
+      // completed somewhere this run, so this also evaluates at the end of
+      // the drain-only rounds that empty a completion round's backlog (the
+      // trigger must not die with the round that produced it, F-125). Only
+      // when the next iteration would actually run a reviewer: no pending
+      // queue (F-124) and no shouldStop condition — rounds, budget,
+      // convergence, evaluated after this round's information gain — about
+      // to end the run, so the event and the once-per-run flag are never
+      // spent on a round that cannot happen (F-123). A reviewer that still
+      // refuses cannot loop; the audit loop is untouched.
+      if (
+        !needsReview && !state.forcedCoverageRoundUsed &&
+        state.pending.length === 0 &&
+        (maxFindings === null || reportedCount(state) < maxFindings) &&
+        !shouldStop(state, budget).stop
+      ) {
+        const unread = changeCoverage.unreadHunks(12);
+        if (unread.length > 0) {
+          state.forcedCoverageRoundUsed = true;
+          state.focus = [`Unread diff hunks: ${unread.map((u) => `${u.path}:${u.hunkIndex}`).join(", ")}`, ...state.focus].slice(0, 16);
+          needsReview = true;
+          onProgress({ type: "info", message: `forced coverage round: reviewer signaled completion with ${unread.length} unread diff hunk(s)` });
+        }
+      }
     }
   } catch (error) {
     if (error instanceof ReviewerRoundError) {
