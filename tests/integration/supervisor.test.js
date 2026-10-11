@@ -1567,3 +1567,165 @@ test("findIssues: forced coverage round fires once the backlog drains (dogfood F
     repo.cleanup();
   }
 });
+
+test("findIssues: --angles fans out round 1, merges candidates, reassigns displayIds, aggregates (F1)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const reviewerPrompts = [];
+  let active = 0;
+  let peak = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerPrompts.push(promptText);
+      if (promptText.includes('angle "correctness"')) {
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await tool("record_candidate").execute({
+          title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "correctness", severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("finish_round").execute({ summary: "correctness done", nextFocus: ["recheck quota"], needsMoreRounds: true });
+        active -= 1;
+      } else if (promptText.includes('angle "security"')) {
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await tool("record_candidate").execute({
+          title: "same defect seen from security", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "correctness", severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("record_candidate").execute({
+          title: "tainted input", claim: "claim B: user input reaches the gateway unchecked", trigger: "retry request",
+          category: "security", severity: "P0",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "gateway(input)" }],
+        });
+        await tool("finish_round").execute({ summary: "security done", nextFocus: ["audit input"], needsMoreRounds: false });
+        active -= 1;
+      } else {
+        // Round 2 general session with the merged focus.
+        await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+        await tool("finish_round").execute({ summary: "general wrap-up", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "security"], maxRounds: 3 },
+    });
+    // Round 1: two angle sessions concurrently; round 2: one general session.
+    assert.equal(peak, 2, "angle sessions run in parallel");
+    assert.equal(reviewerPrompts.length, 3);
+    assert.match(reviewerPrompts[0], /SPECIALIZED FOCUS \(angle "(correctness|security)"/);
+    assert.match(reviewerPrompts[1], /SPECIALIZED FOCUS \(angle "(correctness|security)"/);
+    assert.ok(!reviewerPrompts[2].includes("SPECIALIZED FOCUS"), "later rounds stay general");
+    // needsReview = any(needsMoreRounds): correctness asked for more.
+    assert.equal(outcome.rounds.length, 2);
+    // Cross-angle duplicate collapses: 3 recorded, 2 fresh.
+    assert.equal(outcome.rounds[0].candidates, 3);
+    assert.equal(outcome.rounds[0].fresh, 2);
+    assert.equal(outcome.findings.length, 2);
+    // Store rows carry store ids (severity-ordered, P0 first); the
+    // supervisor-reassigned runtime ids (F-1xx) are unique and observable in
+    // the verifier transcript names and the manifest's per-angle id maps.
+    assert.deepEqual(outcome.findings.map((f) => f.displayId), ["F-1", "F-2"]);
+    assert.equal(outcome.findings[0].severity, "P0");
+    // Aggregation: angle-labelled summaries and the focus union reach round 2.
+    const round2Prompt = reviewerPrompts[2];
+    assert.ok(round2Prompt.includes("[correctness] correctness done"));
+    assert.ok(round2Prompt.includes("[security] security done"));
+    assert.ok(round2Prompt.includes("recheck quota") && round2Prompt.includes("audit input"));
+    // Transcripts: per-angle reviewer files with the id map; verifier files
+    // named by the reassigned ids.
+    const files = readdirSync(outcome.transcriptDir);
+    assert.ok(files.includes("reviewer-r1-correctness.json"));
+    assert.ok(files.includes("reviewer-r1-security.json"));
+    assert.ok(files.includes("reviewer-r2.json"));
+    assert.ok(files.some((f) => /^verifier-r1-F-10[12]\.json$/.test(f)), "verifier transcripts use reassigned ids");
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
+    assert.equal(mapped.length, 2, "both angle sessions record their id maps");
+    const targets = mapped.flatMap((entry) => entry.idMap.map((m) => m.to)).sort();
+    assert.deepEqual(targets, ["F-101", "F-102"], "reassigned runtime ids are unique across parallel sessions");
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: angle fan-out shrinks deterministically under a token budget (F1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const anglePrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes("SPECIALIZED FOCUS")) anglePrompts.push(promptText);
+      // Read the diff: keeps C1 stage 2's forced round out of this fixture.
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("finish_round").execute({ summary: "nothing found", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    // Five angles requested; 300k tokens remaining allows only K=2
+    // (2 x 150k allowance) — trailing angles drop in stable order.
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "concurrency", "security", "contracts", "performance"], maxTokens: 300000 },
+    });
+    assert.equal(outcome.rounds.length, 1);
+    assert.equal(anglePrompts.length, 2);
+    assert.match(anglePrompts[0], /angle "correctness"/);
+    assert.match(anglePrompts[1], /angle "concurrency"/);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: an angle session failure recovers every angle's candidates (F1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute({
+          title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "correctness", severity: "P1",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // security angle never calls finish_round → ReviewerRoundError.
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    // The healthy angle's candidate survives as a recoverable pending row.
+    const rows = ctx.memory.findings.list();
+    assert.equal(rows.filter((row) => row.status === "candidate").length, 1);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});

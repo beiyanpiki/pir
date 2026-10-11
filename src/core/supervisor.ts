@@ -10,6 +10,7 @@ import { buildMemoryPack, matchIssueHistory } from "../memory/retrieval.js";
 import { runTranscriptDir, transcriptsEnabled } from "../agents/transcripts.js";
 import type { AgentSessionFactory, SessionUsage } from "../agents/types.js";
 import { ReviewerRoundError, runReviewerRound, type ReviewerRoundResult } from "../agents/reviewer.js";
+import { resolveAngleIds, type AngleDef } from "../agents/prompts.js";
 import { runVerifier } from "../agents/verifier.js";
 import { loadBuiltInPacks, resolveLanguagePacks, type ActivePack } from "../plugins/index.js";
 import type { ToolContext } from "../tools/context.js";
@@ -55,6 +56,12 @@ export interface FindOptions {
    * and still count toward maxFindings.
    */
   minConfidence?: number;
+  /**
+   * Specialized finder angles (roadmap F1, default off): round 1 fans out
+   * one reviewer session per angle (capped at 4, budget-guarded) instead of
+   * one general session. Later rounds stay single general-session.
+   */
+  angles?: string[];
   /**
    * Separate verifier model (roadmap Q5): `<provider>/<model>` or a fuzzy id
    * (see `pir models`). Reviewer sessions keep `model`; verifier sessions
@@ -134,6 +141,21 @@ function verifyConcurrencyOption(value: number | undefined, name: string): numbe
     throw new Error(`${name} must be between 1 and ${MAX_VERIFY_CONCURRENCY}`);
   }
   return concurrency;
+}
+
+/** F1: hard cap on parallel finder angles — the plan's K = min(angles, 4). */
+const MAX_FANOUT_ANGLES = 4;
+/** F1 budget guard: per-angle token/time allowance before the fan-out shrinks. */
+const ANGLE_TOKEN_ALLOWANCE = 150_000;
+const ANGLE_WALL_CLOCK_ALLOWANCE_MS = 15 * 60_000;
+
+/** Keep only as many angles as the remaining budget can still pay for (trailing angles drop first, floor 1). */
+function angleFanoutCount(requested: number, budget: Budget, limits: { maxTokens?: number; maxWallClockMs?: number }): number {
+  let k = Math.min(requested, MAX_FANOUT_ANGLES);
+  const tokensLeft = limits.maxTokens === undefined ? Number.POSITIVE_INFINITY : limits.maxTokens - budget.tokenEstimate;
+  const timeLeft = limits.maxWallClockMs === undefined ? Number.POSITIVE_INFINITY : limits.maxWallClockMs - budget.elapsedMs;
+  while (k > 1 && (tokensLeft < k * ANGLE_TOKEN_ALLOWANCE || timeLeft < k * ANGLE_WALL_CLOCK_ALLOWANCE_MS)) k -= 1;
+  return k;
 }
 
 const DEFAULT_MIN_CONFIDENCE = 0;
@@ -399,6 +421,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
+  // Unknown angle ids are a hard error, never a silent drop (F1).
+  const angles = options.angles === undefined ? [] : resolveAngleIds(options.angles);
   const budget = new Budget({
     maxRounds,
     maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
@@ -473,6 +497,98 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       let freshCount = 0;
       // Drain existing work before paying for another discovery session.
       if (state.pending.length === 0 && needsReview) {
+        // F1: round 1 with --angles fans out one specialized reviewer session
+        // per angle instead of one general session (K capped and
+        // budget-guarded; later rounds stay general with the merged focus).
+        const roundAngles = state.round === 1 && angles.length > 0
+          ? angles.slice(0, angleFanoutCount(angles.length, budget, options))
+          : [];
+        if (roundAngles.length > 0) {
+          const refs: RunSessionRef[] = [];
+          const settled = await Promise.all(roundAngles.map(async (angle) => {
+            const file = `reviewer-r${state.round}-${angle.id}.json`;
+            const ref: RunSessionRef = { file, sessionKind: "reviewer", round: state.round, angle: angle.id };
+            refs.push(ref);
+            if (transcriptDir) sessionFiles.push(ref);
+            try {
+              const ok = await runReviewerRound({
+                factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
+                maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
+                verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
+                investigationFeedback: state.investigationFeedback, model: options.model, angle,
+                languageGuidance: languagePacks.reviewerGuidance,
+                transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
+                onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id }),
+              });
+              return { angleId: angle.id, ok };
+            } catch (err) {
+              return { angleId: angle.id, err };
+            }
+          }));
+          const oks = settled.filter((it): it is { angleId: string; ok: ReviewerRoundResult } => "ok" in it);
+          const errs = settled.filter((it): it is { angleId: string; err: unknown } => "err" in it);
+          // Charge and replay evidence for completed sessions the moment they
+          // exist (F-122 pattern); a sibling angle failing must not discard
+          // the reads that already landed.
+          for (const { ok } of oks) {
+            for (const hunk of ok.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
+            for (const read of ok.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
+            budget.chargeSession(ok.usage, memoryPack.text, languagePacks.reviewerGuidance, ok.assistantText, ok.summary);
+          }
+          const allCandidates = [
+            ...oks.flatMap(({ ok }) => ok.candidates),
+            ...errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.candidates : [])),
+          ];
+          if (errs.length > 0) {
+            // Single-session failure semantics: one ReviewerRoundError carries
+            // every angle's recovered candidates plus the failed angles'
+            // evidence for the catch-block replay.
+            const evidence = {
+              hunks: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.hunks ?? [] : [])),
+              reads: errs.flatMap(({ err }) => (err instanceof ReviewerRoundError ? err.coverageEvidence?.reads ?? [] : [])),
+            };
+            throw new ReviewerRoundError(errs[0]!.err, allCandidates, budget.usage, evidence);
+          }
+          // Merge across angles: the existing dedup collapses cross-angle
+          // duplicates; unique displayIds are reassigned to the fresh set
+          // BEFORE any persistence or transcript-index reference (parallel
+          // sessions collide on F-<round><seq> by construction).
+          const dedup = deduplicateCandidates(allCandidates, state.known);
+          const oldIds = new Map(allCandidates.filter((c) => c.displayId).map((c) => [c, c.displayId!]));
+          const ordered = [...dedup.fresh].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+          ordered.forEach((candidate, index) => {
+            candidate.displayId = `F-${state.round}${String(index + 1).padStart(2, "0")}`;
+          });
+          for (const { angleId, ok } of oks) {
+            const ref = refs.find((entry) => entry.angle === angleId);
+            const idMap = ok.candidates
+              .filter((candidate) => dedup.fresh.includes(candidate) && oldIds.has(candidate))
+              .map((candidate) => ({ from: oldIds.get(candidate)!, to: candidate.displayId! }));
+            if (ref && idMap.length > 0) ref.idMap = idMap;
+          }
+          freshCount = dedup.fresh.length;
+          state.known.push(...dedup.fresh);
+          state.pending.push(...dedup.fresh);
+          state.pending.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
+          needsReview = oks.some(({ ok }) => ok.needsMoreRounds);
+          state.priorSummary = oks
+            .map(({ angleId, ok }) => [`[${angleId}] ${ok.summary}`,
+              ...(ok.coverage ?? []).map((line) => `Covered: ${line}`),
+              ...(ok.unresolvedQuestions ?? []).map((line) => `Unresolved: ${line}`),
+              ...(ok.blockers ?? []).map((line) => `Blocked: ${line}`)].join("\n"))
+            .join("\n").slice(0, 6000);
+          result = {
+            candidates: allCandidates,
+            summary: oks.map(({ angleId, ok }) => `[${angleId}] ${ok.summary}`).join("\n"),
+            nextFocus: [...new Set(oks.flatMap(({ ok }) => ok.nextFocus))].slice(0, 16),
+            needsMoreRounds: needsReview,
+            assistantText: "",
+            submitted: true,
+            coverage: oks.flatMap(({ ok }) => ok.coverage ?? []),
+            unresolvedQuestions: oks.flatMap(({ ok }) => ok.unresolvedQuestions ?? []),
+            blockers: oks.flatMap(({ ok }) => ok.blockers ?? []),
+          };
+        } else {
         const reviewerFile = `reviewer-r${state.round}.json`;
         if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round });
         result = await runReviewerRound({
@@ -503,6 +619,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           ...(result.unresolvedQuestions ?? []).map((s) => `Unresolved: ${s}`),
           ...(result.blockers ?? []).map((s) => `Blocked: ${s}`),
         ].join("\n").slice(0, 6000);
+        }
       }
 
       const drained = await drainVerifications(
