@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reviewerPrompt, verifierPrompt, auditVerifierPrompt, doNotReportLines } from "../../dist/agents/prompts.js";
+import { reviewerPrompt, verifierPrompt, auditVerifierPrompt, doNotReportLines, FINDER_ANGLES, resolveAngleIds } from "../../dist/agents/prompts.js";
 import { runReviewerRound, ReviewerRoundError } from "../../dist/agents/reviewer.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { runVerifier } from "../../dist/agents/verifier.js";
@@ -299,3 +299,24 @@ test("audit verifier prompt: SIMILAR DISMISSED HISTORY renders the same block (M
   assert.match(warm, /suppression still requires your explicit stillApplies endorsement of a matched decision\./);
 });
 
+
+test("reviewer prompt: SPECIALIZED FOCUS renders per angle and is absent otherwise (F1)", () => {
+  const base = { base: "b", head: "h", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack: "pack", structuralQueries: false };
+  const general = reviewerPrompt(base);
+  assert.ok(!general.includes("SPECIALIZED FOCUS"));
+
+  assert.equal(FINDER_ANGLES.length, 5);
+  assert.deepEqual(FINDER_ANGLES.map((a) => a.id), ["correctness", "concurrency", "security", "contracts", "performance"]);
+  // maintainability/style get no angle — Q1's blacklist governs them
+  assert.ok(FINDER_ANGLES.every((a) => !a.categories.includes("style") && !a.categories.includes("maintainability")));
+
+  for (const angle of FINDER_ANGLES) {
+    const prompt = reviewerPrompt({ ...base, angle });
+    assert.match(prompt, new RegExp(`SPECIALIZED FOCUS \\(angle "${angle.id}"`));
+    assert.ok(prompt.includes(JSON.stringify(angle.categories)), "categories listed");
+    assert.ok(prompt.includes("Angle checklist:"), "checklist present");
+    assert.ok(prompt.includes("- Edge cases") === (angle.id === "correctness"), "checklist content is angle-specific");
+  }
+  assert.throws(() => resolveAngleIds(["nope"]), /unknown angle "nope"/);
+  assert.deepEqual(resolveAngleIds(["security", "correctness"]).map((a) => a.id), ["security", "correctness"]);
+});
