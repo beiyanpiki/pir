@@ -54,18 +54,22 @@ export class ReviewerRoundError extends Error {
   readonly usage?: SessionUsage;
   /** C1: the failed session's coverage evidence, so its reads still land. */
   readonly coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> };
+  /** F1: candidates were merged across parallel angles, so recovery must dedup with the same cross-angle relaxation (dogfood F-140). */
+  readonly crossAngle: boolean;
 
   constructor(
     cause: unknown,
     candidates: CandidateFinding[],
     usage?: SessionUsage,
     coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> },
+    options?: { crossAngle?: boolean },
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "ReviewerRoundError";
     this.candidates = [...candidates];
     this.usage = usage ? { ...usage } : undefined;
     this.coverageEvidence = coverageEvidence;
+    this.crossAngle = options?.crossAngle === true;
   }
 }
 

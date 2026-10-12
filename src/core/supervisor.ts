@@ -143,15 +143,15 @@ function verifyConcurrencyOption(value: number | undefined, name: string): numbe
   return concurrency;
 }
 
-/** F1: hard cap on parallel finder angles — the plan's K = min(angles, 4). */
-const MAX_FANOUT_ANGLES = 4;
+/** F1: cap on concurrent finder angle sessions — the plan's 4-way parallelism (a scheduling cap, not a selection cap: every budgeted angle runs, at most 4 at a time). */
+const MAX_FANOUT_CONCURRENCY = 4;
 /** F1 budget guard: per-angle token/time allowance before the fan-out shrinks. */
 const ANGLE_TOKEN_ALLOWANCE = 150_000;
 const ANGLE_WALL_CLOCK_ALLOWANCE_MS = 15 * 60_000;
 
 /** Keep only as many angles as the remaining budget can still pay for (trailing angles drop first, floor 1). */
 function angleFanoutCount(requested: number, budget: Budget, limits: { maxTokens?: number; maxWallClockMs?: number }): number {
-  let k = Math.min(requested, MAX_FANOUT_ANGLES);
+  let k = requested;
   const tokensLeft = limits.maxTokens === undefined ? Number.POSITIVE_INFINITY : limits.maxTokens - budget.tokenEstimate;
   const timeLeft = limits.maxWallClockMs === undefined ? Number.POSITIVE_INFINITY : limits.maxWallClockMs - budget.elapsedMs;
   while (k > 1 && (tokensLeft < k * ANGLE_TOKEN_ALLOWANCE || timeLeft < k * ANGLE_WALL_CLOCK_ALLOWANCE_MS)) k -= 1;
@@ -498,8 +498,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       // Drain existing work before paying for another discovery session.
       if (state.pending.length === 0 && needsReview) {
         // F1: round 1 with --angles fans out one specialized reviewer session
-        // per angle instead of one general session (K capped and
-        // budget-guarded; later rounds stay general with the merged focus).
+        // per angle instead of one general session (every budget-affordable
+        // angle runs, at most MAX_FANOUT_CONCURRENCY at a time; later rounds
+        // stay general with the merged focus).
         const roundAngles = state.round === 1 && angles.length > 0
           ? angles.slice(0, angleFanoutCount(angles.length, budget, options))
           : [];
@@ -508,28 +509,40 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           onProgress({ type: "info", message: `angle fan-out reduced by budget: running ${roundAngles.length} of ${angles.length}, dropped ${dropped.join(", ")}` });
         }
         if (roundAngles.length > 0) {
-          const refs: RunSessionRef[] = [];
-          const settled = await Promise.all(roundAngles.map(async (angle) => {
-            const file = `reviewer-r${state.round}-${angle.id}.json`;
-            const ref: RunSessionRef = { file, sessionKind: "reviewer", round: state.round, angle: angle.id };
-            refs.push(ref);
+          // Refs are pre-created in requested order so the session list stays
+          // deterministic under the concurrency pool (dogfood F-144 turned the
+          // former selection cap into a scheduling cap: every budgeted angle
+          // runs, at most 4 at a time — "--angles all" no longer drops the
+          // trailing built-in as a fake "budget" cut).
+          const refs = roundAngles.map((angle): RunSessionRef => {
+            const ref: RunSessionRef = { file: `reviewer-r${state.round}-${angle.id}.json`, sessionKind: "reviewer", round: state.round, angle: angle.id };
             if (transcriptDir) sessionFiles.push(ref);
-            try {
-              const ok = await runReviewerRound({
-                factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
-                maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
-                verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
-                investigationFeedback: state.investigationFeedback, model: options.model, angle,
-                fanoutSize: roundAngles.length,
-                languageGuidance: languagePacks.reviewerGuidance,
-                transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
-                onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id }),
-              });
-              return { angleId: angle.id, ok };
-            } catch (err) {
-              return { angleId: angle.id, err };
+            return ref;
+          });
+          const settled: Array<{ angleId: string; ok?: ReviewerRoundResult; err?: unknown }> = new Array(roundAngles.length);
+          let dispatched = 0;
+          const worker = async (): Promise<void> => {
+            while (dispatched < roundAngles.length) {
+              const index = dispatched++;
+              const angle = roundAngles[index]!;
+              const file = refs[index]!.file;
+              try {
+                settled[index] = { angleId: angle.id, ok: await runReviewerRound({
+                  factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
+                  maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
+                  verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
+                  investigationFeedback: state.investigationFeedback, model: options.model, angle,
+                  fanoutSize: roundAngles.length,
+                  languageGuidance: languagePacks.reviewerGuidance,
+                  transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
+                  onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id }),
+                }) };
+              } catch (err) {
+                settled[index] = { angleId: angle.id, err };
+              }
             }
-          }));
+          };
+          await Promise.all(Array.from({ length: Math.min(MAX_FANOUT_CONCURRENCY, roundAngles.length) }, worker));
           const oks = settled.filter((it): it is { angleId: string; ok: ReviewerRoundResult } => "ok" in it);
           const errs = settled.filter((it): it is { angleId: string; err: unknown } => "err" in it);
           // Charge and replay evidence for completed sessions the moment they
@@ -556,12 +569,16 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
               candidate.displayId = `F-${state.round}${String(index + 1).padStart(2, "0")}`;
             });
           // Base id map per session: every candidate maps to its reassigned
-          // id. Attached before any failure can throw, so the failure path
-          // publishes complete maps too (F-137); the survivor rewrite below
-          // then folds duplicate entries onto the surviving finding.
-          for (const { angleId, ok } of oks) {
-            const ref = refs.find((entry) => entry.angle === angleId);
-            const idMap = ok.candidates
+          // id — for FAILED angles too, whose recovered candidates joined the
+          // merge and the reassignment (dogfood F-138). Attached before any
+          // failure can throw, so the failure path publishes complete maps
+          // too (F-137); the survivor rewrite below then folds duplicate
+          // entries onto the surviving finding.
+          const angleCandidates = (it: { ok?: ReviewerRoundResult; err?: unknown }): CandidateFinding[] =>
+            it.ok ? it.ok.candidates : it.err instanceof ReviewerRoundError ? it.err.candidates : [];
+          for (const it of settled) {
+            const ref = refs.find((entry) => entry.angle === it.angleId);
+            const idMap = angleCandidates(it)
               .filter((candidate) => oldIds.has(candidate))
               .map((candidate) => ({ from: oldIds.get(candidate)!, to: candidate.displayId! }));
             if (ref && idMap.length > 0) ref.idMap = idMap;
@@ -595,23 +612,34 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
             const cause = errs.length === 1
               ? errs[0]!.err
               : new Error(`angle fan-out failures: ${errs.map(({ angleId, err }) => `[${angleId}] ${err instanceof Error ? err.message : String(err)}`).join("; ")}`);
-            throw new ReviewerRoundError(cause, allCandidates, mergedUsage, evidence);
+            throw new ReviewerRoundError(cause, allCandidates, mergedUsage, evidence, { crossAngle: true });
           }
           // Merge across angles: the dedup collapses near-duplicates across
           // category labels between parallel angle sessions (F-132, the more
           // severe occurrence surviving, F-135) while staying strict against
           // prior-round knowledge. Collapsed candidates keep their transcript
           // traceability: their session's map entry points at the survivor
-          // (F-137).
+          // (F-137) — resolved transitively, because a chain can pass through
+          // a representative that a later, more severe swap displaced in turn
+          // (dogfood F-139).
           const dedup = deduplicateCandidates(allCandidates, state.known, { crossAngle: true });
           const survivorId = new Map(dedup.duplicates.map(({ candidate, of }) => [candidate, of.displayId!]));
-          for (const { angleId, ok } of oks) {
-            const ref = refs.find((entry) => entry.angle === angleId);
+          const byDisplayId = new Map(allCandidates.map((candidate) => [candidate.displayId!, candidate]));
+          const resolveSurvivor = (dropped: CandidateFinding): string => {
+            let current = dropped;
+            const visited = new Set<CandidateFinding>();
+            while (survivorId.has(current) && !visited.has(current)) {
+              visited.add(current);
+              current = byDisplayId.get(survivorId.get(current)!) ?? current;
+            }
+            return current.displayId!;
+          };
+          for (const it of settled) {
+            const ref = refs.find((entry) => entry.angle === it.angleId);
             if (!ref?.idMap) continue;
             for (const entry of ref.idMap) {
-              const owner = ok.candidates.find((candidate) => oldIds.get(candidate) === entry.from);
-              const survivor = owner !== undefined ? survivorId.get(owner) : undefined;
-              if (survivor !== undefined) entry.to = survivor;
+              const owner = angleCandidates(it).find((candidate) => oldIds.get(candidate) === entry.from);
+              if (owner !== undefined && survivorId.has(owner)) entry.to = resolveSurvivor(owner);
             }
           }
           freshCount = dedup.fresh.length;
@@ -723,7 +751,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     }
   } catch (error) {
     if (error instanceof ReviewerRoundError) {
-      const recovered = deduplicateCandidates(error.candidates, state.known).fresh;
+      // A fan-out failure carries candidates merged across angles, so
+      // recovery dedups with the same cross-angle relaxation the success
+      // path used (dogfood F-140); single-session errors keep strict dedup.
+      const recovered = deduplicateCandidates(error.candidates, state.known, { crossAngle: error.crossAngle }).fresh;
       state.known.push(...recovered);
       state.pending.push(...recovered);
       budget.chargeSession(error.usage, error.message);
