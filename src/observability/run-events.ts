@@ -61,6 +61,7 @@ export type RunEvent =
       unitId?: string;
       attempt?: number;
       displayId?: string;
+      angle?: string;
       prompt: string;
     }
   | {
