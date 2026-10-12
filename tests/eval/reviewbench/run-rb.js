@@ -101,6 +101,7 @@ export function parseOptions(argv = [], env = process.env) {
     limit: env.PIR_EVAL_RB_LIMIT,
     only: env.PIR_EVAL_RB_ONLY ? env.PIR_EVAL_RB_ONLY.split(",").map((s) => s.trim()).filter(Boolean) : [],
     manifest: env.PIR_EVAL_RB_MANIFEST ?? path.join(RB_DIR, "fixtures/test-set.json"),
+    taskConcurrency: env.PIR_EVAL_TASK_CONCURRENCY ?? "1",
     json: env.PIR_EVAL_JSON === "1",
   };
   const flags = {
@@ -121,11 +122,21 @@ export function parseOptions(argv = [], env = process.env) {
     if (!key || !argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
     values[key] = argv[++i];
   }
-  for (const key of ["repeats", "maxRounds", "maxTokens", "taskTimeoutMs", "fetchTimeoutMs"]) {
+  for (const key of ["repeats", "maxRounds", "taskTimeoutMs", "fetchTimeoutMs", "taskConcurrency"]) {
     if (!/^\d+$/.test(String(values[key])) || !Number.isSafeInteger(Number(values[key])) || Number(values[key]) < 1) {
       throw new Error(`${key} must be a positive integer`);
     }
     values[key] = Number(values[key]);
+  }
+  // "unlimited" omits --max-tokens entirely: the CLI only accepts a positive
+  // integer, and pir runs unbounded by default (rounds still cap).
+  if (String(values.maxTokens).toLowerCase() === "unlimited") {
+    values.maxTokens = "unlimited";
+  } else {
+    if (!/^\d+$/.test(String(values.maxTokens)) || !Number.isSafeInteger(Number(values.maxTokens)) || Number(values.maxTokens) < 1) {
+      throw new Error('maxTokens must be a positive integer or "unlimited"');
+    }
+    values.maxTokens = Number(values.maxTokens);
   }
   // "unlimited" by default: 14 of the 25 vendored tasks carry more than 10
   // tp golden findings (max 36), so the scenario runner's 10-cap would
@@ -231,7 +242,8 @@ export function releaseTask(repoDir, workDir) {
 
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
-    "--max-rounds", String(options.maxRounds), "--max-tokens", String(options.maxTokens),
+    "--max-rounds", String(options.maxRounds),
+    ...(options.maxTokens === "unlimited" ? [] : ["--max-tokens", String(options.maxTokens)]),
     "--max-findings", String(options.maxFindings), "--json", "--quiet", "--local", "--cwd", checkout];
   mkdirSync(path.join(runDir, "home"), { recursive: true });
   const start = performance.now();
@@ -293,7 +305,7 @@ export function prefilterPirFindings(findings) {
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
-    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json]\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
+    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N|unlimited] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json]\nEnv: PIR_EVAL_TASK_CONCURRENCY=N runs tasks through an N-worker pool (default 1 = serial);\n--max-tokens unlimited (or PIR_EVAL_MAX_TOKENS=unlimited) omits the token budget entirely.\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
     return 0;
   }
   if (env.PIR_EVAL !== "1") {
@@ -336,7 +348,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
     const summary = { schemaVersion: 1, round: roundName, startedAt: new Date().toISOString(), node: process.version,
       model: options.model, config, limits: { maxRounds: options.maxRounds, maxTokens: options.maxTokens,
-        maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs },
+        maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs,
+        taskConcurrency: options.taskConcurrency },
       repeats: options.repeats, variants, tasks: [] };
     const prefilterAcc = new Map(); // `${variant}-run${repeat}` -> { taskResults }
     const flushRoundArtifacts = () => {
@@ -354,7 +367,14 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     }
     let anyError = false;
 
-    for (const [index, entry] of selected.entries()) {
+    // One task = materialize once, then its repeats × variants runs, then
+    // release the worktree. Tasks are independent (per-task run dirs, cold
+    // memory, detached worktrees), so an opt-in worker pool runs up to
+    // taskConcurrency of them at once (PIR_EVAL_TASK_CONCURRENCY, default
+    // 1 = today's serial behavior). Shared accumulators (summary.tasks,
+    // prefilterAcc, anyError) are only touched in synchronous blocks between
+    // awaits, and summary.tasks is kept in manifest order for stable output.
+    const runTask = async ([index, entry]) => {
       const key = prKey(entry);
       const taskRow = { prKey: key, repo: entry.repo, prNumber: entry.pr_number, language: entry.language ?? null,
         repoSizeKb: entry.repo_size_kb ?? null, linesAdded: entry.lines_added ?? null, linesRemoved: entry.lines_removed ?? null,
@@ -434,8 +454,17 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       summary.tasks.push(taskRow);
       // Flush after every task: a multi-hour round that gets interrupted
       // keeps its aggregates (judging inputs are already on disk per task).
+      summary.tasks.sort((a, b) => selected.findIndex((e) => prKey(e) === a.prKey) - selected.findIndex((e) => prKey(e) === b.prKey));
       flushRoundArtifacts();
-    }
+    };
+
+    let dispatched = 0;
+    const worker = async () => {
+      while (dispatched < selected.length) {
+        await runTask([...selected.entries()][dispatched++]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(options.taskConcurrency, selected.length) }, worker));
 
   summary.finishedAt = new Date().toISOString();
   flushRoundArtifacts();
