@@ -1,4 +1,5 @@
 <!-- Thank you for contributing to pir! Keep the scope tight: one PR, one purpose. -->
+<!-- Formatting: write prose as whole paragraphs — one source line per paragraph and per list item, however long. Never hard-wrap body text at a fixed column width; the renderer reflows it. -->
 
 ## What & why
 
