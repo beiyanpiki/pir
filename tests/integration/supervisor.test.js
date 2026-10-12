@@ -2027,3 +2027,47 @@ test("findIssues: id maps resolve transitively through a displaced survivor (dog
     repo.cleanup();
   }
 });
+
+test("findIssues: a failed fan-out's id maps carry no dangling targets (dogfood F-147)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "correctness", "P1"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // Same defect filed by the security angle, which then fails the round.
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "security", "P2"));
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    assert.equal(ctx.memory.findings.list().filter((row) => row.status === "candidate").length, 1, "the cross-angle duplicate collapsed at recovery");
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
+    assert.equal(mapped.length, 2, "both angles publish their maps");
+    // Only one candidate persisted: the P1 survivor, whose runtime id is
+    // deterministically F-101 (severity-ordered reassignment). Every map
+    // entry must land on it — never on the dropped duplicate's own
+    // reassigned id, which persists nothing (the old failure path published
+    // exactly that dangling base-map target).
+    for (const entry of mapped.flatMap((ref) => ref.idMap)) {
+      assert.equal(entry.to, "F-101", `map entry ${entry.from} → ${entry.to} lands on the persisted survivor`);
+    }
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});

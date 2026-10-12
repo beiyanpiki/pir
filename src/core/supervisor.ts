@@ -583,6 +583,32 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
               .map((candidate) => ({ from: oldIds.get(candidate)!, to: candidate.displayId! }));
             if (ref && idMap.length > 0) ref.idMap = idMap;
           }
+          // Fold every session's id map entries onto their collapse survivor:
+          // resolved transitively (a chain can pass through a representative a
+          // later, more severe swap displaced in turn, dogfood F-139), and
+          // shared by the success and failure paths so a failed run's refs
+          // never dangle either (dogfood F-147).
+          const foldIdMaps = (duplicates: Array<{ candidate: CandidateFinding; of: CandidateFinding }>): void => {
+            const survivorId = new Map(duplicates.map(({ candidate, of }) => [candidate, of.displayId!]));
+            const byDisplayId = new Map(allCandidates.map((candidate) => [candidate.displayId!, candidate]));
+            const resolveSurvivor = (dropped: CandidateFinding): string => {
+              let current = dropped;
+              const visited = new Set<CandidateFinding>();
+              while (survivorId.has(current) && !visited.has(current)) {
+                visited.add(current);
+                current = byDisplayId.get(survivorId.get(current)!) ?? current;
+              }
+              return current.displayId!;
+            };
+            for (const it of settled) {
+              const ref = refs.find((entry) => entry.angle === it.angleId);
+              if (!ref?.idMap) continue;
+              for (const entry of ref.idMap) {
+                const owner = angleCandidates(it).find((candidate) => oldIds.get(candidate) === entry.from);
+                if (owner !== undefined && survivorId.has(owner)) entry.to = resolveSurvivor(owner);
+              }
+            }
+          };
           if (errs.length > 0) {
             // Single-session failure semantics: one ReviewerRoundError carries
             // every angle's recovered candidates plus the failed angles'
@@ -612,7 +638,14 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
             const cause = errs.length === 1
               ? errs[0]!.err
               : new Error(`angle fan-out failures: ${errs.map(({ angleId, err }) => `[${angleId}] ${err instanceof Error ? err.message : String(err)}`).join("; ")}`);
-            throw new ReviewerRoundError(cause, allCandidates, mergedUsage, evidence, { crossAngle: true });
+            // Recovery persists only the collapsed fresh set (the catch
+            // dedups what the error carries), so fold the id maps against
+            // that same collapse before throwing — otherwise the failed
+            // run's transcript refs point at duplicate ids that are never
+            // persisted (dogfood F-147).
+            const failureDedup = deduplicateCandidates(allCandidates, state.known, { crossAngle: true });
+            foldIdMaps(failureDedup.duplicates);
+            throw new ReviewerRoundError(cause, failureDedup.fresh, mergedUsage, evidence, { crossAngle: true });
           }
           // Merge across angles: the dedup collapses near-duplicates across
           // category labels between parallel angle sessions (F-132, the more
@@ -623,25 +656,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           // a representative that a later, more severe swap displaced in turn
           // (dogfood F-139).
           const dedup = deduplicateCandidates(allCandidates, state.known, { crossAngle: true });
-          const survivorId = new Map(dedup.duplicates.map(({ candidate, of }) => [candidate, of.displayId!]));
-          const byDisplayId = new Map(allCandidates.map((candidate) => [candidate.displayId!, candidate]));
-          const resolveSurvivor = (dropped: CandidateFinding): string => {
-            let current = dropped;
-            const visited = new Set<CandidateFinding>();
-            while (survivorId.has(current) && !visited.has(current)) {
-              visited.add(current);
-              current = byDisplayId.get(survivorId.get(current)!) ?? current;
-            }
-            return current.displayId!;
-          };
-          for (const it of settled) {
-            const ref = refs.find((entry) => entry.angle === it.angleId);
-            if (!ref?.idMap) continue;
-            for (const entry of ref.idMap) {
-              const owner = angleCandidates(it).find((candidate) => oldIds.get(candidate) === entry.from);
-              if (owner !== undefined && survivorId.has(owner)) entry.to = resolveSurvivor(owner);
-            }
-          }
+          foldIdMaps(dedup.duplicates);
           freshCount = dedup.fresh.length;
           state.known.push(...dedup.fresh);
           state.pending.push(...dedup.fresh);

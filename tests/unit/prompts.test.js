@@ -321,6 +321,10 @@ test("reviewer prompt: SPECIALIZED FOCUS renders per angle and is absent otherwi
   assert.deepEqual(resolveAngleIds(["security", "correctness"]).map((a) => a.id), ["security", "correctness"]);
   // Repeats collapse in order — colliding transcripts would otherwise result (dogfood F-136).
   assert.deepEqual(resolveAngleIds(["security", "security"]).map((a) => a.id), ["security"]);
+  // "all" expands to every built-in in declaration order (dogfood F-148):
+  // the error message advertises it, so the resolver must accept it too.
+  assert.deepEqual(resolveAngleIds(["all"]).map((a) => a.id), FINDER_ANGLES.map((a) => a.id));
+  assert.deepEqual(resolveAngleIds(["ALL"]).map((a) => a.id), FINDER_ANGLES.map((a) => a.id));
 });
 
 test("angle prompt states the shared reporting cap across parallel sessions (dogfood F-127)", () => {

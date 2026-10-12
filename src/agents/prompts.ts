@@ -67,11 +67,14 @@ export const FINDER_ANGLES: readonly AngleDef[] = [
   },
 ];
 
-/** Stable lookup + validation for --angles ids; repeats collapse in order. */
+/** Stable lookup + validation for --angles ids; repeats collapse in order.
+ * "all" expands to every built-in in declaration order, matching what the
+ * error message advertises (dogfood F-148). */
 export function resolveAngleIds(ids: readonly string[]): AngleDef[] {
   const byId = new Map(FINDER_ANGLES.map((angle) => [angle.id, angle]));
+  const expanded = ids.length === 1 && ids[0]!.toLowerCase() === "all" ? FINDER_ANGLES.map((angle) => angle.id) : ids;
   const resolved: AngleDef[] = [];
-  for (const id of new Set(ids)) {
+  for (const id of new Set(expanded)) {
     const angle = byId.get(id);
     if (!angle) throw new Error(`unknown angle "${id}" (available: ${FINDER_ANGLES.map((a) => a.id).join(", ")}, or "all")`);
     resolved.push(angle);
