@@ -180,14 +180,38 @@ export function emitRunEventForTest(event: RunEvent): void {
 /** Tool results can carry whole files; the live channel ships a bounded slice. */
 const MAX_TOOL_RESULT_CHARS = 128 * 1024;
 
+/**
+ * tool_execution_end carries the whole execution object that adaptTool
+ * returns (`{content: [...], details, terminate}`), while the transcript
+ * keeps only its text blocks. Reduce to that text so the live channel and
+ * the finished view render identical result bodies; non-envelope results
+ * return null and keep the JSON fallback.
+ */
+function executionContentText(result: unknown): string | null {
+  if (result === null || typeof result !== "object") return null;
+  const blocks = (result as { content?: unknown }).content;
+  if (!Array.isArray(blocks)) return null;
+  return blocks
+    .map((block) => {
+      const typed = block as { type?: unknown; text?: unknown };
+      return typed?.type === "text" && typeof typed.text === "string" ? typed.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function serializeToolResult(result: unknown): { result: string; truncated: boolean } {
   let text: string;
   if (typeof result === "string") text = result;
   else {
-    try {
-      text = JSON.stringify(result, null, 2) ?? String(result);
-    } catch {
-      text = String(result);
+    const contentText = executionContentText(result);
+    if (contentText !== null) text = contentText;
+    else {
+      try {
+        text = JSON.stringify(result, null, 2) ?? String(result);
+      } catch {
+        text = String(result);
+      }
     }
   }
   if (text.length > MAX_TOOL_RESULT_CHARS) {

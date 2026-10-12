@@ -93,6 +93,45 @@ test("session emitter reduces SDK events to deltas, blocks and tool results", ()
   }
 });
 
+test("tool results unwrap the MCP execution envelope so live matches the transcript", () => {
+  const received = [];
+  const unsubscribe = onRunEvent((event) => received.push(event));
+  try {
+    const sink = createRunEventSink("run-env", "project-1");
+    const session = sink.session({ sessionKind: "reviewer", role: "code reviewer", model: "prov/m" });
+
+    // adaptTool's execution result shape: {content, details, terminate}.
+    session.sdkEvent({
+      type: "tool_execution_end", toolCallId: "tc-1", toolName: "get_change", isError: false,
+      result: { content: [{ type: "text", text: '## "src/a.ts" [src/a.ts] (+1/-1)' }], details: undefined, terminate: undefined },
+    });
+    // Multiple text blocks join with newlines; non-text blocks contribute nothing.
+    session.sdkEvent({
+      type: "tool_execution_end", toolCallId: "tc-2", toolName: "find", isError: false,
+      result: { content: [{ type: "text", text: "one" }, { type: "image", data: "…" }, { type: "text", text: "two" }] },
+    });
+    // An envelope without text blocks reduces to the empty string, like the transcript view.
+    session.sdkEvent({
+      type: "tool_execution_end", toolCallId: "tc-3", toolName: "read_code", isError: false,
+      result: { content: [] },
+    });
+    // Objects that are not execution envelopes keep the JSON fallback.
+    session.sdkEvent({
+      type: "tool_execution_end", toolCallId: "tc-4", toolName: "read_code", isError: false,
+      result: { lines: ["x"] },
+    });
+
+    const results = received.filter((event) => event.kind === "session-tool-result");
+    assert.equal(results.length, 4);
+    assert.equal(results[0].result, '## "src/a.ts" [src/a.ts] (+1/-1)');
+    assert.equal(results[1].result, "one\ntwo");
+    assert.equal(results[2].result, "");
+    assert.equal(results[3].result, '{\n  "lines": [\n    "x"\n  ]\n}');
+  } finally {
+    unsubscribe();
+  }
+});
+
 test("session emitter caps oversized tool results and tombstones never-started sessions", () => {
   const received = [];
   const unsubscribe = onRunEvent((event) => received.push(event));
