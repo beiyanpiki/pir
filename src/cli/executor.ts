@@ -592,6 +592,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
     if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
     if (flags.has("--branch")) throw new UsageError("audit selects a commit with --head; --branch is not supported");
+    if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
   }
 
   // Server-side registered repo: fetch the clone, review in a throwaway worktree.
@@ -1121,7 +1122,6 @@ async function cmdAudit(
   // Audit has no comparison semantics: reject flags that would imply one.
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
-  if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
   // --detach is remote-only (#53): a local run cannot detach, and a server
   // receiving the flag unstripped (old client) must fail instead of ignoring.
