@@ -7,7 +7,7 @@
  * review; without PIR_EVAL=1 it exits successfully with no network, model,
  * or database access (same contract as tests/eval/run-eval.js).
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -240,34 +240,65 @@ export function releaseTask(repoDir, workDir) {
   }
 }
 
+/** Async pir run: spawn (not spawnSync) so task-concurrency workers actually
+ * overlap — spawnSync blocks the whole event loop and would serialize every
+ * worker behind the first run. Same exit/error semantics as before. */
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
     "--max-rounds", String(options.maxRounds),
     ...(options.maxTokens === "unlimited" ? [] : ["--max-tokens", String(options.maxTokens)]),
     "--max-findings", String(options.maxFindings), "--json", "--quiet", "--local", "--cwd", checkout];
   mkdirSync(path.join(runDir, "home"), { recursive: true });
-  const start = performance.now();
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd: checkout, encoding: "utf8",
-    timeout: options.taskTimeoutMs, maxBuffer: 32 * 1024 * 1024,
-    env: gitEnv(env, {
-      HOME: path.join(runDir, "home"),
-      XDG_STATE_HOME: path.join(runDir, "state"), XDG_CACHE_HOME: path.join(runDir, "cache"),
-      XDG_CONFIG_HOME: path.join(runDir, "xdg-config"), PIR_STATE_ROOT: path.join(runDir, "state"),
-      // Cold memory per task, deliberately: the benchmark measures the
-      // review engine, not accumulated decisions, and stays reproducible.
-      PIR_MEMORY_DB: path.join(runDir, "state/memory.sqlite"), PIR_CONFIG_DIR: path.join(runDir, "config"),
-      PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1", PIR_TRANSCRIPTS: "0",
-      PIR_MODE: "local", PIR_MODEL: options.model,
-    }) });
-  const wallTimeMs = Math.round(performance.now() - start);
-  const stderrTail = (text) => String(text ?? "").trim().split("\n").slice(-12).join("\n");
-  if (result.error) throw new Error(`${result.error.message}\nstderr tail:\n${stderrTail(result.stderr)}`);
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`CLI exited ${result.status}, signal ${result.signal ?? "none"}${result.signal === "SIGTERM" ? ` (task timeout ${options.taskTimeoutMs}ms)` : ""}\nstdout tail:\n${stderrTail(result.stdout)}\nstderr tail:\n${stderrTail(result.stderr)}`);
-  }
-  const envelope = JSON.parse(result.stdout);
-  if (!envelope?.data || !Array.isArray(envelope.data.findings)) throw new Error("CLI returned no data.findings array");
-  return { data: envelope.data, wallTimeMs, exitCode: result.status, stderr: result.stderr };
+  return new Promise((resolve, reject) => {
+    const start = performance.now();
+    const stderrTail = (text) => String(text ?? "").trim().split("\n").slice(-12).join("\n");
+    const child = spawn(process.execPath, [cli, ...args], { cwd: checkout,
+      env: gitEnv(env, {
+        HOME: path.join(runDir, "home"),
+        XDG_STATE_HOME: path.join(runDir, "state"), XDG_CACHE_HOME: path.join(runDir, "cache"),
+        XDG_CONFIG_HOME: path.join(runDir, "xdg-config"), PIR_STATE_ROOT: path.join(runDir, "state"),
+        // Cold memory per task, deliberately: the benchmark measures the
+        // review engine, not accumulated decisions, and stays reproducible.
+        PIR_MEMORY_DB: path.join(runDir, "state/memory.sqlite"), PIR_CONFIG_DIR: path.join(runDir, "config"),
+        PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1", PIR_TRANSCRIPTS: "0",
+        PIR_MODE: "local", PIR_MODEL: options.model,
+      }), stdio: ["ignore", "pipe", "pipe"] });
+    // Same 32 MB cap per stream as the previous spawnSync maxBuffer.
+    const MAX_BUFFER = 32 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { if (stdout.length < MAX_BUFFER) stdout += chunk; });
+    child.stderr.on("data", (chunk) => { if (stderr.length < MAX_BUFFER) stderr += chunk; });
+    const timer = setTimeout(() => child.kill("SIGTERM"), options.taskTimeoutMs);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(new Error(`${err.message}\nstderr tail:\n${stderrTail(stderr)}`));
+    });
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      const wallTimeMs = Math.round(performance.now() - start);
+      if (status === null && signal) {
+        reject(new Error(`CLI exited ${status}, signal ${signal} (task timeout ${options.taskTimeoutMs}ms)\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`));
+        return;
+      }
+      if (status !== 0 && status !== 1) {
+        reject(new Error(`CLI exited ${status}, signal ${signal ?? "none"}\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`));
+        return;
+      }
+      let envelope;
+      try {
+        envelope = JSON.parse(stdout);
+      } catch (error) {
+        reject(new Error(`CLI stdout is not JSON: ${error.message}\nstdout tail:\n${stderrTail(stdout)}`));
+        return;
+      }
+      if (!envelope?.data || !Array.isArray(envelope.data.findings)) {
+        reject(new Error("CLI returned no data.findings array"));
+        return;
+      }
+      resolve({ data: envelope.data, wallTimeMs, exitCode: status, stderr });
+    });
+  });
 }
 
 function loadGolden(manifestPath, key) {
@@ -412,7 +443,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           // without agent credentials pir cannot authenticate the model.
           for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
           try {
-            const result = runPir(variant.cli, checkout, entry, options, runDir, env);
+            const result = await runPir(variant.cli, checkout, entry, options, runDir, env);
             const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
             const reportedDir = path.join(roundDir, runLabel);
             const confirmedDir = path.join(roundDir, `${runLabel}-confirmed-only`);
