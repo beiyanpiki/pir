@@ -18,7 +18,7 @@ import {
   resolveRemoteTimeoutSeconds,
 } from "../../dist/cli/remote-fetch.js";
 import { jobStatusReporter } from "../../dist/cli/jobs.js";
-import { maxFindingsFlag, minConfidenceFlag, verifierModelFlag } from "../../dist/cli/executor.js";
+import { anglesFlag, maxFindingsFlag, minConfidenceFlag, verifierModelFlag } from "../../dist/cli/executor.js";
 
 const BASE = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const HEAD = "9999999999999999999999999999999999999999";
@@ -594,4 +594,17 @@ test("--detach cannot ride the registered-repo lane (#53, dogfood F-49)", async 
     remoteExec("http://127.0.0.1:9", ["find", "--detach", "--repo", "demo", "--json"], {}),
     (error) => error instanceof UsageError && /cannot be combined with --repo/.test(error.message),
   );
+});
+
+test("anglesFlag: comma ids, all expansion, validation (F1)", () => {
+  assert.equal(anglesFlag(new Map()), undefined);
+  assert.deepEqual(anglesFlag(new Map([["--angles", "correctness,security"]])), ["correctness", "security"]);
+  assert.deepEqual(anglesFlag(new Map([["--angles", " correctness , security "]])), ["correctness", "security"]);
+  assert.deepEqual(anglesFlag(new Map([["--angles", "security,security"]])), ["security"]);
+  assert.deepEqual(anglesFlag(new Map([["--angles", "all"]])), ["correctness", "concurrency", "security", "contracts", "performance"]);
+  assert.deepEqual(anglesFlag(new Map([["--angles", "ALL"]])), ["correctness", "concurrency", "security", "contracts", "performance"]);
+  assert.throws(() => anglesFlag(new Map([["--angles", "style"]])), UsageError);
+  assert.throws(() => anglesFlag(new Map([["--angles", "correctness,nope"]])), /nope/);
+  assert.throws(() => anglesFlag(new Map([["--angles", true]])), UsageError);
+  assert.throws(() => anglesFlag(new Map([["--angles", "  "]])), UsageError);
 });

@@ -140,3 +140,18 @@ test("writeRunManifest writes run.json next to transcripts and is a no-op withou
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("session events carry the finder angle (F1, dogfood F-129)", () => {
+  const received = [];
+  const sink = createRunEventSink("run-a", "proj-1");
+  const unsubscribe = onRunEvent((event) => received.push(event));
+  try {
+    const emitter = sink.session({ sessionKind: "reviewer", role: "code reviewer", round: 1, angle: "security" });
+    emitter.sessionStarted("prompt");
+    emitter.sessionEnded();
+    const start = received.find((event) => event.kind === "session-start");
+    assert.equal(start.angle, "security");
+  } finally {
+    unsubscribe();
+  }
+});

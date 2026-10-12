@@ -34,6 +34,10 @@ test("pir audit rejects find-only flags as usage errors before any context", asy
       executePirCommand(["audit", "--cwd", repo.dir, "--branch", "main"]),
       (error) => error instanceof UsageError && /--head/.test(error.message),
     );
+    await assert.rejects(
+      executePirCommand(["audit", "--cwd", repo.dir, "--angles", "all"]),
+      (error) => error instanceof UsageError && /--angles is a find-only flag/.test(error.message),
+    );
   } finally {
     repo.cleanup();
   }

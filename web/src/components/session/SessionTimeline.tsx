@@ -31,10 +31,11 @@ function useLiveSessions(events: RunEvent[] | null, runId: string): DerivedSessi
 // Session sections: quiet divider, then the activity stream.
 // ---------------------------------------------------------------------------
 
-function sessionTitle(kind: string, meta: { round?: number; unitId?: string; attempt?: number; displayId?: string }): string {
+function sessionTitle(kind: string, meta: { round?: number; unitId?: string; attempt?: number; displayId?: string; angle?: string }): string {
   if (kind === "reviewer") {
     if (meta.unitId !== undefined) return `unit ${meta.unitId}${meta.attempt !== undefined ? ` · attempt ${meta.attempt}` : ""}`;
-    return meta.round !== undefined ? `review round ${meta.round}` : "reviewer session";
+    const angle = meta.angle !== undefined ? ` · ${meta.angle}` : "";
+    return meta.round !== undefined ? `review round ${meta.round}${angle}` : `reviewer session${angle}`;
   }
   return meta.displayId !== undefined ? `verify ${meta.displayId}` : "verifier session";
 }

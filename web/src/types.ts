@@ -90,6 +90,10 @@ export interface SessionRef {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  /** F1: the specialized finder angle this reviewer session ran as. */
+  angle?: string;
+  /** F1: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
+  idMap?: Array<{ from: string; to: string }>;
 }
 
 export interface RoundInfo {
@@ -163,6 +167,7 @@ export interface LiveSessionState {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  angle?: string;
   prompt: string;
   startedAt: number;
   endedAt: number | null;
@@ -236,6 +241,7 @@ export type RunEvent =
       unitId?: string;
       attempt?: number;
       displayId?: string;
+      angle?: string;
       prompt: string;
     })
   | (RunEventCommon & { kind: "session-delta"; sessionId: string; deltaType: "thinking" | "text"; text: string; /** Coalesced by the server: text spans the streak from its start, seq is the newest. */ cumulative?: boolean })

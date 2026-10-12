@@ -14,18 +14,34 @@ acceptance criteria, and the benchmark protocol that judges them.
 Progress is tracked in issue #73; this file is re-synced to reality as
 slices land.
 
-**Status (post-C1/M1).** D1 (this plan + ADR 0003) merged via #74; B1 merged
+**Status (post-F1).** D1 (this plan + ADR 0003) merged via #74; B1 merged
 via #76; Q1 merged via #78; Q2 merged via #80; Q3 merged via #81; Q4
 merged via #83; Q5 merged via #84; C1 merged via #86 (stage 1) + #88
-(stage 2); M1 merged via #87. The original D1-rooted stacked-PR
-convention was retired when D1 merged — every landed slice branched off
-`dev` directly and later slices do the same (see "PR convention"; ADR
-0003's process paragraph is amended to match). **Next slice:
-B1-baseline — the 2× test-25 baseline on dev (F1's gate).** The planned
-`opencode-go/deepseek-v4.1-flash` provider is not configured on this
-machine; the baseline uses `baseten/deepseek-ai/DeepSeek-V4.1-Flash`
-(same underlying model, different provider), recorded in #73 and
-RESULTS.md.
+(stage 2); M1 merged via #87; F1 merged via #90 (8 dogfood rounds, 23
+findings resolved, final round clean; CI green). The original D1-rooted
+stacked-PR convention was retired when D1 merged — every landed slice
+branched off `dev` directly and later slices do the same (see "PR
+convention"; ADR 0003's process paragraph is amended to match).
+**Remaining: the B1-baseline recording (revised protocol below), then the
+closeout — F1's A/B delta row, ADR 0003 → Accepted, delete this plan
+file.**
+
+**B1-baseline protocol revision (maintainer decision, 2026-10-12,
+recorded in #73).** The first recording attempt (pir model
+`opencode-go/deepseek-v4.1-flash:max`, the runner's default 400k
+per-run token budget) truncated every run — all 13 completed runs hit
+"token budget exhausted" and reported **zero** findings, matching the
+2026-10-09 smoke; a budget-capped run measures the budget, not the
+engine. That partial round was discarded. The baseline re-records with
+`PIR_EVAL_MAX_TOKENS=unlimited` (the `--max-tokens` flag omitted
+entirely; runs bound by `--max-rounds 2` and a 60-minute per-run wall
+clock) and `PIR_EVAL_TASK_CONCURRENCY=2` (a runner opt-in added for
+this; 4-way concurrency OOM-killed the box mid-round and was also
+discarded). Under the revised protocol findings flow normally (every
+completed run reports confirmed findings, none truncated). F1 merged
+ahead of its A/B rows by maintainer decision — the feature is
+default-off; its subset-10 A/B delta row lands in RESULTS.md via the
+closeout PR once the baseline completes.
 
 ## Goals
 
@@ -71,7 +87,7 @@ RESULTS.md.
 |----|-------|------|--------|-----------|------|------|
 | D1 | This plan + ADR 0003 (docs) | docs | merged #74 | — | — | — |
 | B1 | ReviewBench real-world tasks as a local benchmark (extends `tests/eval/`) | feat | merged #76 | — | M | L |
-| B1-baseline | 2× test-25 baseline on dev | bench | deferred (maintainer decision; lands before F1 — reference for F1+ rows; pre-baseline slices' rows waived) | B1 | S | — |
+| B1-baseline | 2× test-25 baseline on dev | bench | recording (revised protocol: unlimited tokens, 2-way task concurrency; see the status note) — RESULTS.md row + PR to follow | B1 | S | — |
 | Q1 | Prompt hardening: do-not-report blacklist + severity calibration | feat | merged #78 (ReviewBench row waived by the baseline deferral) | B1 (for delta rows) | S | L |
 | Q2 | Parallel verification drain (`verifyConcurrency`) | feat | merged #80 (live A/B 1.56x wall-clock, identical fingerprint sets) | — | M | M |
 | Q3 | Verifier evidence gate on `submit_verdict` | feat | merged #81 (dogfood fixed two citation gaps, F-116/F-117) | — | S–M | M |
@@ -79,7 +95,7 @@ RESULTS.md.
 | Q5 | Separate verifier model option | feat | merged #84 (Q2 drain seam populated; live QA: verifier transcript effective model = the override id, manifest records both models) | Q2 preferred (design carries a no-Q2 fallback) | S | L |
 | C1 | Change-mode diff coverage ledger | feat | merged #86 (stage 1) + #88 (stage 2; dogfood F-123/F-124/F-125 fixed; live: forced round fired exactly once at 7/11 hunks, no loop) | — | M | M |
 | M1 | Memory denoising, observational (similar-dismissed context) | feat | merged #87 (live: real feedback dismissal surfaced in the next run's verifier prompt; suppression contract untouched) | — | M | M |
-| F1 | Multi-angle finder fan-out (default-off) | feat | pending | B1 numbers, Q2 pool | L | H |
+| F1 | Multi-angle finder fan-out (default-off) | feat | merged #90 (8 dogfood rounds; merged ahead of its A/B rows by maintainer decision — default-off, A/B row lands in the closeout) | Q2 pool; A/B rows post-baseline | L | H |
 
 ### PR convention
 
@@ -997,16 +1013,19 @@ re-evaluation after model upgrades.
    the single forced coverage round with backlog/budget/convergence guards,
    dogfood F-123/F-124/F-125 fixed). **M1** — merged (#87):
    `similarDismissed` + the SIMILAR DISMISSED HISTORY prompt block,
-   observational only. **B1-baseline next** (model substitution recorded
-   above), then F1.
-6. **F1** last, gated on B1 numbers + Q2 pool — the B1-baseline therefore
-   lands before F1 (see the deferral note under "Benchmark protocol").
-7. ADR 0003 status → Accepted once Q1–Q3 have landed under the
-   scenario-harness variance gate and the pre-F1 baseline era has opened
-   with F1's A/B rows non-regressing (per-PR ReviewBench rows for
-   pre-baseline slices are waived by the deferral; the ADR's Status
-   section carries the amended acceptance clause). Any reverted item
-   amends the ADR.
+   observational only.
+6. **F1** — merged (#90): round-1 fan-out through the Q2 pool machinery,
+   default-off `--angles`, cross-angle collapse with severest-survivor
+   semantics and per-session id maps; 8 dogfood rounds resolved 23
+   findings (F-127..F-150; F-142 and F-145 converged on a recorded
+   `expected` decision via the memory-endorsement path). Merged ahead of
+   its A/B rows by maintainer decision (default-off); the subset-10 A/B
+   delta row lands in the closeout once the B1-baseline completes.
+7. **Closeout** — B1-baseline RESULTS.md row + PR; F1's subset-10 A/B
+   delta row; ADR 0003 status → Accepted once the baseline era has
+   opened and F1's A/B rows are recorded and judged (the original
+   non-regression gate applies to the recorded numbers); then delete
+   this plan file (top-of-file note). Any reverted item amends the ADR.
 8. When every task in the tracking issue is complete, **delete this plan
    file** (top-of-file note) — ADR 0003 and the landed design docs are the
    durable record.

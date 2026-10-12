@@ -22,6 +22,7 @@ export interface DerivedSession {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  angle?: string;
   prompt: string;
   startedAt: number;
   endedAt: number | null;
@@ -117,6 +118,7 @@ export function createLiveFold(): LiveFold {
             ...(event.unitId !== undefined ? { unitId: event.unitId } : {}),
             ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
             ...(event.displayId !== undefined ? { displayId: event.displayId } : {}),
+            ...(event.angle !== undefined ? { angle: event.angle } : {}),
             prompt: event.prompt,
             startedAt: event.ts,
             endedAt: null,

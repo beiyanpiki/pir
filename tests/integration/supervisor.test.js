@@ -1567,3 +1567,507 @@ test("findIssues: forced coverage round fires once the backlog drains (dogfood F
     repo.cleanup();
   }
 });
+
+test("findIssues: --angles fans out round 1, merges candidates, reassigns displayIds, aggregates (F1)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const reviewerPrompts = [];
+  let active = 0;
+  let peak = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      reviewerPrompts.push(promptText);
+      if (promptText.includes('angle "correctness"')) {
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await tool("record_candidate").execute({
+          title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "correctness", severity: "P1", entityKey: "Pay.retry",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("finish_round").execute({ summary: "correctness done", nextFocus: ["recheck quota"], needsMoreRounds: true });
+        active -= 1;
+      } else if (promptText.includes('angle "security"')) {
+        active += 1; peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await tool("record_candidate").execute({
+          title: "same defect seen from security", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "security", severity: "P0", entityKey: "Pay.retry",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("record_candidate").execute({
+          title: "tainted input", claim: "claim B: user input reaches the gateway unchecked", trigger: "retry request",
+          category: "security", severity: "P0", entityKey: "Pay.retry",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "gateway(input)" }],
+        });
+        await tool("finish_round").execute({ summary: "security done", nextFocus: ["audit input"], needsMoreRounds: false });
+        active -= 1;
+      } else {
+        // Round 2 general session with the merged focus.
+        await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+        await tool("finish_round").execute({ summary: "general wrap-up", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "security"], maxRounds: 3 },
+    });
+    // Round 1: two angle sessions concurrently; round 2: one general session.
+    assert.equal(peak, 2, "angle sessions run in parallel");
+    assert.equal(reviewerPrompts.length, 3);
+    assert.match(reviewerPrompts[0], /SPECIALIZED FOCUS \(angle "(correctness|security)"/);
+    assert.match(reviewerPrompts[1], /SPECIALIZED FOCUS \(angle "(correctness|security)"/);
+    assert.ok(!reviewerPrompts[2].includes("SPECIALIZED FOCUS"), "later rounds stay general");
+    // needsReview = any(needsMoreRounds): correctness asked for more.
+    assert.equal(outcome.rounds.length, 2);
+    // Cross-angle duplicate collapses: 3 recorded, 2 fresh.
+    assert.equal(outcome.rounds[0].candidates, 3);
+    assert.equal(outcome.rounds[0].fresh, 2);
+    assert.equal(outcome.findings.length, 2);
+    // Store rows carry store ids (severity-ordered, P0 first); the
+    // supervisor-reassigned runtime ids (F-1xx) are unique and observable in
+    // the verifier transcript names and the manifest's per-angle id maps.
+    assert.deepEqual(outcome.findings.map((f) => f.displayId), ["F-1", "F-2"]);
+    assert.equal(outcome.findings[0].severity, "P0");
+    // Aggregation: angle-labelled summaries and the focus union reach round 2.
+    const round2Prompt = reviewerPrompts[2];
+    assert.ok(round2Prompt.includes("[correctness] correctness done"));
+    assert.ok(round2Prompt.includes("[security] security done"));
+    assert.ok(round2Prompt.includes("recheck quota") && round2Prompt.includes("audit input"));
+    // Transcripts: per-angle reviewer files with the id map; verifier files
+    // named by the reassigned ids.
+    const files = readdirSync(outcome.transcriptDir);
+    assert.ok(files.includes("reviewer-r1-correctness.json"));
+    assert.ok(files.includes("reviewer-r1-security.json"));
+    assert.ok(files.includes("reviewer-r2.json"));
+    assert.ok(files.some((f) => /^verifier-r1-F-10[12]\.json$/.test(f)), "verifier transcripts use reassigned ids");
+    // The P0 cross-angle duplicate outranks the correctness angle's P1 —
+    // the more severe occurrence survives the collapse (dogfood F-135).
+    const survivor = outcome.findings.find((f) => f.claim.includes("claim A"));
+    assert.equal(survivor.severity, "P0");
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
+    assert.equal(mapped.length, 2, "both angle sessions record their id maps");
+    const targets = mapped.flatMap((entry) => entry.idMap.map((m) => m.to)).sort();
+    // F-101 twice is correct: the survivor maps to itself from its own
+    // session, and the collapsed duplicate's session folds onto it.
+    assert.deepEqual(targets, ["F-101", "F-101", "F-102"], "every candidate maps; duplicates fold onto their survivor");
+    // The collapsed duplicate's map points at the SURVIVOR, keeping its
+    // transcript traceable (dogfood F-137).
+    const correctnessRef = manifest.sessions.find((entry) => entry.angle === "correctness");
+    assert.ok(correctnessRef.idMap.length >= 1);
+    for (const entry of correctnessRef.idMap) {
+      assert.ok(["F-101", "F-102"].includes(entry.to), `dropped candidate maps to a surviving id (got ${entry.to})`);
+    }
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: angle fan-out shrinks deterministically under a token budget (F1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const anglePrompts = [];
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes("SPECIALIZED FOCUS")) anglePrompts.push(promptText);
+      // Read the diff: keeps C1 stage 2's forced round out of this fixture.
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("finish_round").execute({ summary: "nothing found", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    // Five angles requested; 300k tokens remaining allows only K=2
+    // (2 x 150k allowance) — trailing angles drop in stable order.
+    const events = [];
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "concurrency", "security", "contracts", "performance"], maxTokens: 300000 },
+      onProgress: (event) => events.push(event),
+    });
+    assert.equal(outcome.rounds.length, 1);
+    assert.equal(anglePrompts.length, 2);
+    assert.match(anglePrompts[0], /angle "correctness"/);
+    assert.match(anglePrompts[1], /angle "concurrency"/);
+    // The shrink is logged with the dropped angle ids (dogfood F-130).
+    const shrink = events.find((e) => e.type === "info" && /angle fan-out reduced by budget/.test(e.message));
+    assert.ok(shrink, "shrink event emitted");
+    assert.match(shrink.message, /running 2 of 5, dropped security, contracts, performance/);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: an angle session failure recovers every angle's candidates (F1)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute({
+          title: "quota bug", claim: "claim A: the quota path skips its guard", trigger: "gateway exception",
+          category: "correctness", severity: "P1", entityKey: "Pay.retry",
+          anchors: [{ path: "src/pay.ts", startLine: 1 }],
+          evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+        });
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // security angle never calls finish_round → ReviewerRoundError.
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    // The healthy angle's candidate survives as a recoverable pending row.
+    const rows = ctx.memory.findings.list();
+    assert.equal(rows.filter((row) => row.status === "candidate").length, 1);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: multiple angle failures are all named in the cause (dogfood F-131)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (_tool, promptText) => {
+      // Neither angle calls finish_round; distinct failure contexts.
+      if (promptText.includes('angle "correctness"')) {
+        throw new Error("correctness provider exploded");
+      }
+      // security angle: session ends without the terminal tool.
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      (error) => {
+        assert.match(error.message, /angle fan-out failures: /);
+        assert.match(error.message, /\[correctness\] correctness provider exploded/);
+        assert.match(error.message, /\[security\]/);
+        return true;
+      },
+    );
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed fan-out charges successful angles' usage exactly once (dogfood F-128)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = {
+    async createSession(config) {
+      let sessionUsage = 550;
+      return {
+        config,
+        async prompt(text) {
+          if (config.systemRole === "code reviewer") {
+            const tool = (name) => config.tools.find((t) => t.name === name);
+            if (text.includes('angle "correctness"')) {
+              await tool("finish_round").execute({ summary: "ok angle", nextFocus: [], needsMoreRounds: false });
+            } else {
+              sessionUsage = 300;
+              // security angle: records a candidate, then never calls
+              // finish_round → fails with measured usage on its error.
+              await tool("record_candidate").execute({
+                title: "tainted input", claim: "claim B: user input reaches the gateway unchecked", trigger: "retry request",
+                category: "security", severity: "P0",
+                anchors: [{ path: "src/pay.ts", startLine: 1 }],
+                evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "gateway(input)" }],
+              });
+            }
+          }
+        },
+        getLastAssistantText: () => "fake",
+        getLastAssistantError: () => undefined,
+        getUsage: () => ({ inputTokens: sessionUsage - 50, outputTokens: 50, totalTokens: sessionUsage, cost: 0.001, durationMs: 5 }),
+        dispose() {},
+      };
+    },
+  };
+  const events = [];
+  const { onRunEvent } = await import("../../dist/observability/run-events.js");
+  const unsubscribe = onRunEvent((event) => events.push(event));
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    assert.equal(manifest.status, "failed");
+    // Successful angle (550) + failed angle's measured usage (300), each
+    // charged exactly once — a double charge would report ~1700, a dropped
+    // one ~550 (dogfood F-128, F-133).
+    assert.equal(manifest.usage.totalTokens, 850);
+    // Recovered candidates publish unique runtime ids even on the failure
+    // path (dogfood F-134): the run-end summaries carry the reassigned ids.
+    const runEnd = events.find((event) => event.kind === "run-end");
+    const ids = runEnd.findings.map((f) => f.displayId).filter(Boolean);
+    assert.ok(ids.length >= 1, "recovered candidates summarized");
+    assert.equal(new Set(ids).size, ids.length, "runtime ids unique across parallel angles");
+  } finally {
+    unsubscribe();
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+// Claim wordings with tuned Jaccard similarity (0.875 within the pair,
+// 0.778 across the paraphrases) so the three candidates form one defect
+// group whose collapse chain exercises the id-map rewrite.
+const CHAIN_WORDS = "alpha beta gamma delta epsilon zeta eta";
+const chainClaimA = CHAIN_WORDS;
+const chainClaimB = `${CHAIN_WORDS} theta`;
+const chainClaimC = `${CHAIN_WORDS} iota`;
+
+function chainCandidate(claim, category, severity) {
+  return {
+    title: claim.slice(0, 40), claim, trigger: "gateway exception",
+    category, severity, entityKey: "Pay.retry",
+    anchors: [{ path: "src/pay.ts", startLine: 1 }],
+    evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota()" }],
+  };
+}
+
+test("findIssues: --angles all runs every angle under a concurrency cap (dogfood F-144)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const angleIds = [];
+  let active = 0;
+  let peak = 0;
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      const match = promptText.match(/angle "([a-z-]+)"/);
+      if (match) {
+        angleIds.push(match[1]);
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        active -= 1;
+      }
+      await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
+      await tool("finish_round").execute({ summary: "nothing found", nextFocus: [], needsMoreRounds: false });
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    // No token budget: nothing is dropped — "all" runs all five built-ins
+    // (the old code selected only 4 and logged the 5th as a fake budget cut).
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "concurrency", "security", "contracts", "performance"] },
+    });
+    assert.deepEqual(
+      [...angleIds].sort(),
+      ["concurrency", "contracts", "correctness", "performance", "security"],
+      "every requested angle runs",
+    );
+    assert.ok(peak >= 2 && peak <= 4, `sessions run concurrently under the cap (peak ${peak})`);
+    assert.equal(outcome.rounds.length, 1);
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed angle's transcript ref still records its id map (dogfood F-138)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "correctness", "P1"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // security angle records a candidate, then never calls finish_round.
+        await tool("record_candidate").execute(chainCandidate(chainClaimB, "security", "P2"));
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    const securityRef = manifest.sessions.find((entry) => entry.angle === "security");
+    assert.ok(securityRef, "failed angle's session ref is published");
+    // The failed angle's recovered candidate joined the merge and the
+    // reassignment, so its ref carries the same complete map as a healthy
+    // angle's (the old code attached maps for completed angles only).
+    assert.ok(Array.isArray(securityRef.idMap) && securityRef.idMap.length === 1, "failed angle records its id map");
+    assert.match(securityRef.idMap[0].from, /^F-1/);
+    assert.match(securityRef.idMap[0].to, /^F-1/);
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: fan-out failure recovery dedups with the cross-angle relaxation (dogfood F-140)", async () => {
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      // Both angles file the same defect under their own category label;
+      // security then fails the round.
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "correctness", "P1"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "security", "P2"));
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    // Recovery collapses the cross-angle duplicate: one candidate row, not two.
+    const rows = ctx.memory.findings.list().filter((row) => row.status === "candidate");
+    assert.equal(rows.length, 1, "cross-angle duplicates collapse on the recovery path too");
+  } finally {
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: id maps resolve transitively through a displaced survivor (dogfood F-139)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        // P2 anchor wording, plus the paraphrase that only matches it.
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "correctness", "P2"));
+        await tool("record_candidate").execute(chainCandidate(chainClaimC, "correctness", "P2"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // The P0 that displaces the P2 as the group's survivor.
+        await tool("record_candidate").execute(chainCandidate(chainClaimB, "security", "P0"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { angles: ["correctness", "security"] },
+    });
+    // One defect group: 3 recorded, 1 fresh (the P0).
+    assert.equal(outcome.rounds[0].candidates, 3);
+    assert.equal(outcome.rounds[0].fresh, 1);
+    assert.equal(outcome.findings.length, 1);
+    assert.equal(outcome.findings[0].severity, "P0");
+    // The transcript id map carries RUNTIME ids (F-<round><seq>): the P0
+    // survivor deterministically takes F-101.
+    const survivorRuntimeId = "F-101";
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir, "run.json"), "utf8"));
+    const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
+    assert.equal(mapped.length, 2);
+    // Every dropped candidate's map entry — including the paraphrase whose
+    // collapse chain passes through the displaced P2 representative — must
+    // point at the one surviving id, never at a dropped intermediate.
+    for (const entry of mapped.flatMap((ref) => ref.idMap)) {
+      assert.equal(entry.to, survivorRuntimeId, `map entry ${entry.from} → ${entry.to} lands on the survivor`);
+    }
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: a failed fan-out's id maps carry no dangling targets (dogfood F-147)", async () => {
+  const savedEnv = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const repo = setupRepo();
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool, promptText) => {
+      if (promptText.includes('angle "correctness"')) {
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "correctness", "P1"));
+        await tool("finish_round").execute({ summary: "done", nextFocus: [], needsMoreRounds: false });
+      } else {
+        // Same defect filed by the security angle, which then fails the round.
+        await tool("record_candidate").execute(chainCandidate(chainClaimA, "security", "P2"));
+      }
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, { verdict: "confirmed", rationale: "traced it", confidence: 0.9 });
+    },
+  });
+  try {
+    await assert.rejects(
+      findIssues({ repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory, options: { angles: ["correctness", "security"] } }),
+      /reviewer did not call finish_round/,
+    );
+    assert.equal(ctx.memory.findings.list().filter((row) => row.status === "candidate").length, 1, "the cross-angle duplicate collapsed at recovery");
+    const runDirs = readdirSync(path.join(repo.dir, "transcripts"));
+    const manifest = JSON.parse(readFileSync(path.join(repo.dir, "transcripts", runDirs[0], "run.json"), "utf8"));
+    const mapped = manifest.sessions.filter((entry) => entry.idMap !== undefined);
+    assert.equal(mapped.length, 2, "both angles publish their maps");
+    // Only one candidate persisted: the P1 survivor, whose runtime id is
+    // deterministically F-101 (severity-ordered reassignment). Every map
+    // entry must land on it — never on the dropped duplicate's own
+    // reassigned id, which persists nothing (the old failure path published
+    // exactly that dangling base-map target).
+    for (const entry of mapped.flatMap((ref) => ref.idMap)) {
+      assert.equal(entry.to, "F-101", `map entry ${entry.from} → ${entry.to} lands on the persisted survivor`);
+    }
+  } finally {
+    process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});

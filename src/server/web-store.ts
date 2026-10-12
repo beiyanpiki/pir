@@ -86,6 +86,10 @@ export interface SessionRef {
   unitId?: string;
   attempt?: number;
   displayId?: string;
+  /** F1: the specialized finder angle this reviewer session ran as. */
+  angle?: string;
+  /** F1: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
+  idMap?: Array<{ from: string; to: string }>;
 }
 
 export interface FeedbackEventView {
