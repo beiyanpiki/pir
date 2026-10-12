@@ -172,6 +172,8 @@ Write the PR body in English by explicitly filling this repo's template
 Cite sanitized artifacts only; never paste raw secret-bearing logs, env
 dumps, tokens, or auth headers into the PR.
 
+**Body formatting — whole paragraphs, never hard-wrapped.** Every paragraph and every list item in the PR body is ONE source line, however long it gets. Markdown reflows prose at render time, so manual line breaks at a fixed column width add nothing on GitHub; they freeze mid-sentence breaks at an arbitrary width and make bodies noisy to edit, diff, and quote. The same rule applies to any prose you write for the user or commit to this repo (docs, skill files, comments): one logical paragraph = one line, and let the renderer wrap. Only code blocks, tables, and one-line-per-item lists keep their line structure.
+
 ```bash
 gh pr create --base "$BASE_BRANCH" --title "$TITLE" --body "$(cat <<'EOF'
 ## What & why
@@ -391,4 +393,5 @@ git rebase "$BASE_REF"     # origin/dev, or the parent branch of a stack
 | Blindly implementing or dismissing dogfood findings | Each finding gets verified against the code; dismissals are recorded with a reason | MEDIUM |
 | Bundling independent slices into one big PR | Atomic review dies; one bad slice blocks all the others | HIGH |
 | `--squash` / `--rebase` merges | Erases the atomic dogfood-fix commit history | MEDIUM |
+| Hard-wrapping PR body prose at a fixed column width | One paragraph = one line; manual breaks add nothing on GitHub and make edits, diffs, and quotes noisy | LOW |
 | Not running local checks before push | Wastes a CI round-trip on obvious failures | MEDIUM |
