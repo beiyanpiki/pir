@@ -40,6 +40,9 @@ async function packMatches(repoRoot: string, commit: string, pack: LanguagePack)
     }
   }
   if (basenames.size === 0 && patterns.length === 0) return false;
+  // Any-depth detection needs one full tree enumeration per run: git has no
+  // basename-anywhere probe (ls-tree rejects the glob pathspec magic), so the
+  // listing is the deliberate cost of monorepo layouts resolving correctly.
   try {
     const tree = await listFilesAtCommit(repoRoot, commit);
     return tree.some((path) => {
