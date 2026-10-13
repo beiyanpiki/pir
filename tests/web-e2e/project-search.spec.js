@@ -129,10 +129,15 @@ test("page alerts ignore historical replay and report newly observed completion 
   await page.goto(`/runs/${projectId}/${runB}`);
   await expect.poll(() => page.evaluate(() => typeof window.emitReviewEvent)).toBe("function");
   const end = { kind: "run-end", runId: runB, projectId, status: "completed", stoppedBecause: "Finished live browser fixture", durationMs: 1, counts: { rounds: 1, candidates: 1, confirmed: 1, rejected: 0, uncertain: 0, pending: 0 }, findings: [] };
-  await page.evaluate((event) => window.emitReviewEvent(event), { ...end, seq: 1, ts: 1 });
   await expect(page.getByRole("checkbox", { name: "Page alerts" })).not.toBeChecked();
   await expect(page.locator(".page-alert-toast")).toHaveCount(0);
   await page.getByRole("checkbox", { name: "Page alerts" }).check();
+  await page.evaluate((event) => window.emitReviewEvent(event), { ...end, seq: 1, ts: 1 });
+  // A settled replay ends this observation. Reopen the still-running REST
+  // fixture before testing a newly observed outcome on a fresh connection.
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => typeof window.emitReviewEvent)).toBe("function");
+  await expect(page.getByRole("checkbox", { name: "Page alerts" })).toBeChecked();
   await expect(page.locator(".page-alert-toast")).toHaveCount(0);
   await page.evaluate((event) => window.emitReviewEvent(event), { ...end, seq: 2, ts: Date.now() + 100 });
   await expect(page.locator(".page-alert-toast")).toContainText("Review ended: completed.");
