@@ -258,6 +258,18 @@ test("detectPacks activates frontend by framework markers, not package.json alon
     } finally {
       repo3.cleanup();
     }
+
+    // Directory names with line terminators: matching runs through git
+    // pathspec wildmatch, not a JS regex whose `.` skips terminators (dogfood F-168).
+    const repo4 = createTempGitRepo("pir-plugins-frontend-nl-");
+    try {
+      repo4.write("we\nb/vite.config.ts", "export default {};\n");
+      const nlHead = repo4.commit("frontend under a newline directory");
+      const nlActive = await detectPacks(repo4.dir, nlHead, packs);
+      assert.ok(nlActive.find((p) => p.name === "frontend"), "newline directory path activates frontend");
+    } finally {
+      repo4.cleanup();
+    }
   } finally {
     repo.cleanup();
   }

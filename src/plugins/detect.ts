@@ -3,9 +3,11 @@ import { renderGuidance } from "./loader.js";
 import type { ActivePack, LanguagePack, LanguagePackRun, PluginSelection } from "./types.js";
 
 /**
- * Glob marker semantics (validated in the loader): a leading double-star
- * slash prefix matches at any depth, root included; a star as a whole
- * segment matches one directory level.
+ * Wildmatch translation for glob markers beyond the plain any-depth form:
+ * a leading double-star-slash prefix spans any depth, root included; a
+ * whole-segment star stays within one directory level. The `s` flag lets the
+ * depth prefix cross line terminators — git paths may legally contain them
+ * (dogfood F-168).
  */
 function markerRegExp(marker: string): RegExp {
   const depthAny = marker.startsWith("**/");
@@ -14,31 +16,39 @@ function markerRegExp(marker: string): RegExp {
     .split("/")
     .map((seg) => (seg === "*" ? "[^/]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
     .join("/");
-  return new RegExp(`^${depthAny ? "(?:.*/)?" : ""}${pattern}$`);
+  return new RegExp(`^${depthAny ? "(?:.*/)?" : ""}${pattern}$`, "s");
 }
 
 /** True when any marker file exists at the pinned commit. */
 async function packMatches(repoRoot: string, commit: string, pack: LanguagePack): Promise<boolean> {
-  let tree: string[] | null = null;
+  // `**/basename` markers match through one basename Set (O(1) per listed
+  // path, dogfood F-166); other glob markers fall back to wildmatch regexes.
+  // Literal markers stay on cheap per-file probes. Best-effort either way: a
+  // failure means "markers unchecked", never a dead run (dogfood F-163).
+  const basenames = new Set<string>();
+  const patterns: RegExp[] = [];
   for (const marker of pack.markerFiles) {
     if (!marker.includes("*")) {
       if ((await readFileAtCommit(repoRoot, commit, marker)) !== null) return true;
       continue;
     }
-    // One tree listing shared by every glob marker of this pack. Detection is
-    // best-effort, matching literal markers: a failed listing means "glob
-    // markers unchecked", never a dead run.
-    if (tree === null) {
-      try {
-        tree = await listFilesAtCommit(repoRoot, commit);
-      } catch {
-        tree = [];
-      }
+    const rest = marker.startsWith("**/") ? marker.slice(3) : null;
+    if (rest !== null && !rest.includes("*") && !rest.includes("/")) {
+      basenames.add(rest);
+    } else {
+      patterns.push(markerRegExp(marker));
     }
-    const re = markerRegExp(marker);
-    if (tree.some((path) => re.test(path))) return true;
   }
-  return false;
+  if (basenames.size === 0 && patterns.length === 0) return false;
+  try {
+    const tree = await listFilesAtCommit(repoRoot, commit);
+    return tree.some((path) => {
+      if (basenames.size > 0 && basenames.has(path.slice(path.lastIndexOf("/") + 1))) return true;
+      return patterns.some((re) => re.test(path));
+    });
+  } catch {
+    return false;
+  }
 }
 
 /**
