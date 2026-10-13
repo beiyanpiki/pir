@@ -30,7 +30,7 @@ export interface SessionTranscript {
     thinkingLevel: string;
     builtinTools: string[];
     customTools: string[];
-    systemPrompt: "read-only-review-v1";
+    systemPrompt: "read-only-review-v2";
     resources: "isolated";
     settings: "in-memory";
     toolExecution: "sequential";
