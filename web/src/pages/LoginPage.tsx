@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, KeyRound, LogIn, ShieldCheck } from "lucide-react";
 import { apiGet, getToken, setToken } from "../api";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [token, setTokenValue] = useState("");
   const [visible, setVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +18,10 @@ export function LoginPage() {
     setToken(token.trim() || null);
     try {
       await apiGet("/api/overview");
-      navigate("/projects");
+      const from = typeof location.state?.from === "string" && /^\/(?!\/)/.test(location.state.from)
+        ? location.state.from
+        : "/projects";
+      navigate(from, { replace: true, state: null });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setChecking(false);
