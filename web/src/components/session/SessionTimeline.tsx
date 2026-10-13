@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { cachedTranscript, fetchTranscript } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
 import { createLiveFold, type DerivedSession, type LiveFold, type LiveItem } from "../../live-fold";
-import { mergeSessionIdentities, sessionIdentity } from "../../live-projection";
+import { mergeSessionIdentities, sessionAnchor, sessionIdentity } from "../../live-projection";
 import type { RunEvent, SessionRef, SessionTranscript } from "../../types";
 import { LiveBadge, SessionKindBadge } from "../badges";
 import { TextBlockView, ThinkingRow, ToolRow, UserGoalCard } from "./blocks";
@@ -42,8 +42,7 @@ function sessionTitle(kind: string, meta: { round?: number; unitId?: string; att
 }
 
 export function sessionDomId(session: Pick<SessionRef, "file"> | { sessionId: string; transcriptFile?: string }): string {
-  const key = sessionIdentity(session);
-  return `session-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+  return sessionAnchor(sessionIdentity(session));
 }
 
 function SessionDivider({
@@ -71,7 +70,7 @@ function SessionDivider({
 }
 
 /** Activity stream of a live session (events already in memory). */
-const LiveSessionSection = memo(function LiveSessionSection({ session }: { session: DerivedSession }) {
+const LiveSessionSection = memo(function LiveSessionSection({ session, identityKey }: { session: DerivedSession; identityKey: string }) {
   const state: "running" | "error" | "done" = session.endedAt === null ? "running" : session.error ? "error" : "done";
   const meta = [
     session.model ?? "",
@@ -79,7 +78,7 @@ const LiveSessionSection = memo(function LiveSessionSection({ session }: { sessi
     session.usage ? `${fmtCount(session.usage.totalTokens)} tok · ${fmtCost(session.usage.cost)}` : "",
   ].filter(Boolean).join(" · ");
   return (
-    <section className="session-flow-section" id={sessionDomId(session)} data-session-key={session.sessionId}>
+    <section className="session-flow-section" id={sessionAnchor(identityKey)} data-session-key={identityKey}>
       <SessionDivider kind={session.kind} title={sessionTitle(session.kind, session)} meta={meta} state={state} />
       <div className="session-flow">
         <UserGoalCard text={session.prompt} />
@@ -233,7 +232,7 @@ export function SessionTimeline({
   const liveSessions = useLiveSessions(liveEvents, runId);
   const identities = mergeSessionIdentities(liveSessions, sessions);
 
-  if (awaitingLive) {
+  if (awaitingLive && identities.length === 0) {
     return (
       <div className="loading-state is-compact" role="status">
         <span className="pir-mini-spinner" /> Connecting to live stream…
@@ -256,7 +255,7 @@ export function SessionTimeline({
         identity.persisted && preferPersisted ? (
           <TranscriptSessionSection key={identity.key} projectId={projectId} runId={runId} session={identity.persisted} />
         ) : identity.live ? (
-          <LiveSessionSection key={identity.key} session={identity.live} />
+          <LiveSessionSection key={identity.key} session={identity.live} identityKey={identity.key} />
         ) : identity.persisted ? (
           <TranscriptSessionSection key={identity.key} projectId={projectId} runId={runId} session={identity.persisted} />
         ) : null

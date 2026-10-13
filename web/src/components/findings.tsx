@@ -35,6 +35,9 @@ export function FindingsTab({
 }) {
   const [showAll, setShowAll] = useState(true);
   const [severity, setSeverity] = useState("all");
+  useEffect(() => {
+    if (selectedFinding) { setShowAll(true); setSeverity("all"); }
+  }, [selectedFinding]);
   const sorted = useMemo(() => [...findings.items].sort((a, b) => {
     const severityDelta = (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
     return severityDelta || a.createdAt - b.createdAt;
