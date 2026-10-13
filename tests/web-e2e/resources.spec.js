@@ -217,24 +217,44 @@ test("mobile project, run list, and detail stay within the viewport", async ({ p
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
 });
 
-test("offset correction and pagination preserve history and keyboard focus", async ({ page }) => {
+test("an out-of-range offset is corrected in place instead of trapping Back", async ({ page }) => {
   await page.route("**/api/projects/*/runs?*", async (route) => {
-    const url = new URL(route.request().url());
-    const offset = Number(url.searchParams.get("offset") ?? 0);
-    route.fulfill({ json: { runs: [run(runA), run(runB, "audit")], total: offset === 0 ? 51 : 2 } });
+    route.fulfill({ json: { runs: [run(runA), run(runB, "audit")], total: 200 } });
   });
-  await page.goto(`/projects/${projectA}?offset=50`);
-  await expect(page.getByRole("status", { name: "1–2 of 2 runs" })).toBeHidden();
-  await expect(page.getByRole("button", { name: "Older runs" })).toBeDisabled();
+  await page.goto("/projects");
+  await page.locator(`.sidebar-project-link[href='/projects/${projectA}']`).click();
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}$`));
+  // The bad offset is replaced, not pushed, so two Backs still leave the page.
+  await page.goto(`/projects/${projectA}?offset=4000`);
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}\\?offset=150$`));
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}$`));
+  await page.goBack();
+  await expect(page).toHaveURL(/\/projects$/);
+});
+
+test("paging refreshes the rows in place so the pager keeps keyboard focus", async ({ page }) => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  let defer = false;
+  await page.route("**/api/projects/*/runs?*", async (route) => {
+    if (defer) await pending;
+    const offset = Number(new URL(route.request().url()).searchParams.get("offset") ?? 0);
+    route.fulfill({ json: { runs: [offset === 0 ? run(runA) : run(runB, "audit")], total: 200 } });
+  });
   await page.goto(`/projects/${projectA}`);
   const older = page.getByRole("button", { name: "Older runs" });
-  await expect(older).toBeEnabled();
   await older.focus();
   await expect(older).toBeFocused();
+  defer = true;
   await older.click();
-  await expect(page).toHaveURL(/offset=50/);
-  await expect(older).toBeFocused();
+  // Mid-flight: the previous rows and the pager stay mounted, and the control
+  // that was activated is still the focused element.
   await expect(page.locator(".run-table")).toBeVisible();
-  await page.goBack();
-  await expect(page).toHaveURL(/\/projects\/a{64}$/);
+  await expect(page.getByText("Updating…")).toBeVisible();
+  await expect(older).toBeFocused();
+  release();
+  await expect(page).toHaveURL(/offset=50/);
+  await expect(page.locator(".run-table")).toContainText("audit");
+  await expect(older).toBeFocused();
 });

@@ -11,33 +11,42 @@ export interface ApiState<T> {
   reload: () => void;
 }
 
+export interface ApiOptions {
+  /**
+   * Deps whose change replaces the resource being displayed. Data is discarded
+   * only for these; every other dep keeps the held data visible while the new
+   * request is in flight, so lists do not unmount (and lose focus) on a simple
+   * filter or page change. Defaults to all deps.
+   */
+  identity?: unknown[];
+}
+
 /**
  * Fetch-on-mount with 401 → /login redirection. Each resource identity owns
  * an AbortController, so route changes cancel work and stale responses cannot
  * repopulate the next page. The reload counter is the explicit invalidation
  * signal.
  */
-export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: unknown[]): ApiState<T> {
+export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: unknown[], options: ApiOptions = {}): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [loadedKey, setLoadedKey] = useState<string | null>(null);
-  const lastResourceKey = useRef<string | null>(null);
+  const loadedIdentity = useRef<string | null>(null);
   const [tick, setTick] = useState(0);
   const navigate = useNavigate();
-  const resourceKey = JSON.stringify(deps);
+  const identityKey = JSON.stringify(options.identity ?? deps);
 
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
     const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const resourceChanged = lastResourceKey.current !== resourceKey;
-    lastResourceKey.current = resourceKey;
-    // A route change invalidates the previous resource immediately. This
-    // prevents a late response from briefly rendering data for another URL.
-    if (resourceChanged) setData(null);
+    const identityChanged = loadedIdentity.current !== identityKey;
+    loadedIdentity.current = identityKey;
+    // A different resource invalidates the held data immediately. This
+    // prevents a late response from briefly rendering data for another URL,
+    // while a plain filter or page change keeps the current rows mounted.
+    if (identityChanged) setData(null);
     setError(null);
-    setLoadedKey(resourceKey);
     setLoading(true);
     fetcher(controller.signal)
       .then((result) => {
@@ -75,7 +84,9 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   }, [...deps, tick]);
 
   const reload = useCallback(() => setTick((value) => value + 1), []);
-  return loadedKey === resourceKey
+  // Before the effect for a new identity runs, hold the loading state instead
+  // of rendering the previous resource's data under the new URL.
+  return loadedIdentity.current === identityKey
     ? { data, error, loading, reload }
     : { data: null, error: null, loading: true, reload };
 }

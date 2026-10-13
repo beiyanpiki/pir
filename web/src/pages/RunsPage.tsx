@@ -34,6 +34,9 @@ export function RunsPage() {
   const runs = useApi<RunsResponse>(
     (signal) => apiGet<RunsResponse>(`/api/projects/${projectId}/runs?limit=${PAGE_SIZE}&offset=${offset}${statusFilter !== "all" ? `&status=${statusFilter}` : ""}${modeFilter !== "all" ? `&mode=${modeFilter}` : ""}`, signal),
     [projectId, offset, statusFilter, modeFilter],
+    // Paging and filtering refresh the held rows in place (aria-busy), so the
+    // pager keeps focus; only a different project replaces the resource.
+    { identity: [projectId] },
   );
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
@@ -105,7 +108,7 @@ export function RunsPage() {
             })}</tbody>
           </table>
         </div>}
-        {runs.data && total > 0 && <div className="pagination"><span className="pagination-range">{offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of {total} runs</span><button className="icon-button" type="button" disabled={offset === 0} aria-label="Newer runs" title="Newer runs" onClick={() => updateUrl({ offset: Math.max(0, offset - PAGE_SIZE) })}><ChevronLeft size={17} /></button><span>{page} / {pages}</span><button className="icon-button" type="button" disabled={offset + PAGE_SIZE >= total} aria-label="Older runs" title="Older runs" onClick={() => updateUrl({ offset: offset + PAGE_SIZE })}><ChevronRight size={17} /></button></div>}
+        {runs.data && total > 0 && <div className="pagination"><span className="pagination-range">{offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of {total} runs</span><button className="icon-button" type="button" disabled={offset === 0} aria-label="Newer runs" title="Newer runs" onClick={() => { if (!runs.loading) updateUrl({ offset: Math.max(0, offset - PAGE_SIZE) }); }}><ChevronLeft size={17} /></button><span>{page} / {pages}</span><button className="icon-button" type="button" disabled={offset + PAGE_SIZE >= total} aria-label="Older runs" title="Older runs" onClick={() => { if (!runs.loading) updateUrl({ offset: offset + PAGE_SIZE }); }}><ChevronRight size={17} /></button></div>}
       </section>
     </div>
   );
