@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LanguagePack, PluginActivation } from "./types.js";
 
-/** Hard ceiling on rendered guidance per role; keeps sessions lean (memory pack is the other big block). */
+/** Hard ceiling on rendered guidance per role and per active pack; keeps sessions lean (memory pack is the other big block). */
 export const GUIDANCE_BUDGET_CHARS = 8000;
 
 /** plugins/ ships next to dist/: dist/plugins/loader.js -> <package root>/plugins. */
@@ -102,11 +102,15 @@ export function loadBuiltInPacks(): LanguagePack[] {
  * The header frames the content as trusted pir-shipped directions — the same
  * trust line as the rest of the prompt, deliberately unlike repository memory
  * (untrusted evidence).
+ *
+ * Without an explicit budget, the per-role ceiling scales with the number of
+ * packs that actually contribute text, so co-activation (frontend +
+ * typescript on every web repo) never truncates an earlier pack silently.
  */
 export function renderGuidance(
   entries: Array<{ pack: LanguagePack; activation: PluginActivation }>,
   role: "reviewer" | "verifier",
-  budgetChars = GUIDANCE_BUDGET_CHARS,
+  budgetChars?: number,
   mode: "change" | "audit" = "change",
 ): string {
   const sections = entries
@@ -120,14 +124,15 @@ export function renderGuidance(
     }))
     .filter(({ text }) => (text ?? "").length > 0);
   if (sections.length === 0) return "";
+  const budget = budgetChars ?? GUIDANCE_BUDGET_CHARS * Math.max(1, sections.length);
   const body = sections
     .map(({ entry, text }) => `[${entry.pack.name}@${entry.pack.version}, ${entry.activation}]\n${text}`)
     .join("\n\n");
   const header =
     "=== LANGUAGE GUIDANCE (trusted review directions from pir built-in language packs; they sharpen where to look and never lower the evidence bar) ===";
   let out = `${header}\n${body}`;
-  if (out.length > budgetChars) {
-    out = `${out.slice(0, budgetChars)}\n[LANGUAGE GUIDANCE TRUNCATED at ${budgetChars} characters to fit the context budget]`;
+  if (out.length > budget) {
+    out = `${out.slice(0, budget)}\n[LANGUAGE GUIDANCE TRUNCATED at ${budget} characters to fit the context budget]`;
   }
   return `${out}\n=== END LANGUAGE GUIDANCE ===`;
 }
