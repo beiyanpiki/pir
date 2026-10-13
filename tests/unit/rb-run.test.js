@@ -54,6 +54,18 @@ test("parseOptions: defaults match the scenario-runner surface plus RB flags", (
   assert.equal(parseOptions(["--max-findings", "15"], {}).maxFindings, 15);
   assert.equal(parseOptions(["--max-findings", "UNLIMITED"], {}).maxFindings, "unlimited");
   assert.throws(() => parseOptions(["--max-findings", "0"], {}), /positive integer or "unlimited"/);
+
+  // Token budget: numeric by default (400000); "unlimited" is the explicit
+  // no-budget form and task concurrency defaults to serial (1).
+  assert.equal(options.maxTokens, 400000);
+  assert.equal(options.taskConcurrency, 1);
+  assert.equal(parseOptions(["--max-tokens", "unlimited"], {}).maxTokens, "unlimited");
+  assert.equal(parseOptions([], { PIR_EVAL_MAX_TOKENS: "UNLIMITED" }).maxTokens, "unlimited");
+  assert.equal(parseOptions([], { PIR_EVAL_TASK_CONCURRENCY: "4" }).taskConcurrency, 4);
+  assert.equal(options.resume, false);
+  assert.equal(parseOptions(["--resume"], {}).resume, true);
+  assert.throws(() => parseOptions(["--max-tokens", "0"], {}), /positive integer or "unlimited"/);
+  assert.throws(() => parseOptions([], { PIR_EVAL_TASK_CONCURRENCY: "0" }), /taskConcurrency must be a positive integer/);
 });
 
 test("parseOptions: flags, repeatable --only, env fallbacks, and numeric validation", () => {

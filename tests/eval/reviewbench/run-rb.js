@@ -7,7 +7,7 @@
  * review; without PIR_EVAL=1 it exits successfully with no network, model,
  * or database access (same contract as tests/eval/run-eval.js).
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -101,6 +101,8 @@ export function parseOptions(argv = [], env = process.env) {
     limit: env.PIR_EVAL_RB_LIMIT,
     only: env.PIR_EVAL_RB_ONLY ? env.PIR_EVAL_RB_ONLY.split(",").map((s) => s.trim()).filter(Boolean) : [],
     manifest: env.PIR_EVAL_RB_MANIFEST ?? path.join(RB_DIR, "fixtures/test-set.json"),
+    taskConcurrency: env.PIR_EVAL_TASK_CONCURRENCY ?? "1",
+    resume: false,
     json: env.PIR_EVAL_JSON === "1",
   };
   const flags = {
@@ -112,6 +114,7 @@ export function parseOptions(argv = [], env = process.env) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--json") { values.json = true; continue; }
     if (argv[i] === "--help") { values.help = true; continue; }
+    if (argv[i] === "--resume") { values.resume = true; continue; }
     if (argv[i] === "--only") {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
       values.only.push(argv[++i]);
@@ -121,11 +124,21 @@ export function parseOptions(argv = [], env = process.env) {
     if (!key || !argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
     values[key] = argv[++i];
   }
-  for (const key of ["repeats", "maxRounds", "maxTokens", "taskTimeoutMs", "fetchTimeoutMs"]) {
+  for (const key of ["repeats", "maxRounds", "taskTimeoutMs", "fetchTimeoutMs", "taskConcurrency"]) {
     if (!/^\d+$/.test(String(values[key])) || !Number.isSafeInteger(Number(values[key])) || Number(values[key]) < 1) {
       throw new Error(`${key} must be a positive integer`);
     }
     values[key] = Number(values[key]);
+  }
+  // "unlimited" omits --max-tokens entirely: the CLI only accepts a positive
+  // integer, and pir runs unbounded by default (rounds still cap).
+  if (String(values.maxTokens).toLowerCase() === "unlimited") {
+    values.maxTokens = "unlimited";
+  } else {
+    if (!/^\d+$/.test(String(values.maxTokens)) || !Number.isSafeInteger(Number(values.maxTokens)) || Number(values.maxTokens) < 1) {
+      throw new Error('maxTokens must be a positive integer or "unlimited"');
+    }
+    values.maxTokens = Number(values.maxTokens);
   }
   // "unlimited" by default: 14 of the 25 vendored tasks carry more than 10
   // tp golden findings (max 36), so the scenario runner's 10-cap would
@@ -229,33 +242,139 @@ export function releaseTask(repoDir, workDir) {
   }
 }
 
+/** Async pir run: spawn (not spawnSync) so task-concurrency workers actually
+ * overlap — spawnSync blocks the whole event loop and would serialize every
+ * worker behind the first run. Same exit/error semantics as before. */
+
+/**
+ * Mirror a completed run's records (review_runs, findings with freshly
+ * allocated display ids, finding_evidence) into the shared local state DB
+ * (PIR_EVAL_STATE_ROOT — the root the web explorer reads), so benchmark runs
+ * are browsable without weakening per-task memory isolation: the run's own
+ * memory DB stayed cold and private, this is a write-only record copy.
+ * Best-effort by design: a mirror failure warns and never fails the run.
+ */
+async function mirrorRunToState(runDir, runId, env) {
+  const stateRoot = env.PIR_EVAL_STATE_ROOT;
+  const scratchDb = path.join(runDir, "state/memory.sqlite");
+  if (!stateRoot || !runId || !existsSync(scratchDb)) return false;
+  try {
+    const { SqliteStore } = await import(pathToFileURL(path.join(ROOT, "dist/memory/sqlite-store.js")).href);
+    const src = SqliteStore.open(scratchDb);
+    try {
+      const project = src.get("SELECT id FROM projects LIMIT 1");
+      if (!project) return false;
+      const dstPath = path.join(stateRoot, project.id, "memory.sqlite");
+      mkdirSync(path.dirname(dstPath), { recursive: true });
+      const dst = SqliteStore.open(dstPath);
+      try {
+        const insertRow = (table, row) => {
+          const cols = Object.keys(row);
+          dst.run(`INSERT OR IGNORE INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`, ...cols.map((c) => row[c]));
+        };
+        const proj = src.get("SELECT * FROM projects WHERE id = ?", project.id);
+        if (proj) insertRow("projects", proj);
+        const run = src.get("SELECT * FROM review_runs WHERE id = ?", runId);
+        if (!run) return false;
+        insertRow("review_runs", run);
+        const findings = src.all("SELECT * FROM findings WHERE run_id = ? ORDER BY created_at, rowid", runId);
+        for (const finding of findings) {
+          const n = dst.get("SELECT COUNT(*) AS n FROM findings WHERE project_id = ?", project.id);
+          // Same allocation rule as the store's nextDisplayId(): F-<count+1>.
+          insertRow("findings", { ...finding, display_id: `F-${(n?.n ?? 0) + 1}` });
+          for (const ev of src.all("SELECT * FROM finding_evidence WHERE finding_id = ?", finding.id)) insertRow("finding_evidence", ev);
+        }
+        // Transcripts live next to the run's private DB (runTranscriptDir);
+        // copy them into the shared root so the web explorer can render the
+        // sessions. Also mirrored from disk for runs completed before this
+        // step existed, via sync-transcripts.js.
+        const srcTranscripts = path.join(path.dirname(scratchDb), "transcripts", runId);
+        const dstTranscripts = path.join(stateRoot, project.id, "transcripts", runId);
+        if (existsSync(srcTranscripts) && !existsSync(dstTranscripts)) {
+          cpSync(srcTranscripts, dstTranscripts, { recursive: true });
+        }
+        return true;
+      } finally {
+        dst.close();
+      }
+    } finally {
+      src.close();
+    }
+  } catch (error) {
+    console.error(`WARN mirror-to-state failed for run ${runId}: ${String(error.message ?? error)}`);
+    return false;
+  }
+}
+
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
-    "--max-rounds", String(options.maxRounds), "--max-tokens", String(options.maxTokens),
+    "--max-rounds", String(options.maxRounds),
+    ...(options.maxTokens === "unlimited" ? [] : ["--max-tokens", String(options.maxTokens)]),
     "--max-findings", String(options.maxFindings), "--json", "--quiet", "--local", "--cwd", checkout];
   mkdirSync(path.join(runDir, "home"), { recursive: true });
-  const start = performance.now();
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd: checkout, encoding: "utf8",
-    timeout: options.taskTimeoutMs, maxBuffer: 32 * 1024 * 1024,
-    env: gitEnv(env, {
-      HOME: path.join(runDir, "home"),
-      XDG_STATE_HOME: path.join(runDir, "state"), XDG_CACHE_HOME: path.join(runDir, "cache"),
-      XDG_CONFIG_HOME: path.join(runDir, "xdg-config"), PIR_STATE_ROOT: path.join(runDir, "state"),
-      // Cold memory per task, deliberately: the benchmark measures the
-      // review engine, not accumulated decisions, and stays reproducible.
-      PIR_MEMORY_DB: path.join(runDir, "state/memory.sqlite"), PIR_CONFIG_DIR: path.join(runDir, "config"),
-      PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1", PIR_TRANSCRIPTS: "0",
-      PIR_MODE: "local", PIR_MODEL: options.model,
-    }) });
-  const wallTimeMs = Math.round(performance.now() - start);
-  const stderrTail = (text) => String(text ?? "").trim().split("\n").slice(-12).join("\n");
-  if (result.error) throw new Error(`${result.error.message}\nstderr tail:\n${stderrTail(result.stderr)}`);
-  if (result.status !== 0 && result.status !== 1) {
-    throw new Error(`CLI exited ${result.status}, signal ${result.signal ?? "none"}${result.signal === "SIGTERM" ? ` (task timeout ${options.taskTimeoutMs}ms)` : ""}\nstdout tail:\n${stderrTail(result.stdout)}\nstderr tail:\n${stderrTail(result.stderr)}`);
-  }
-  const envelope = JSON.parse(result.stdout);
-  if (!envelope?.data || !Array.isArray(envelope.data.findings)) throw new Error("CLI returned no data.findings array");
-  return { data: envelope.data, wallTimeMs, exitCode: result.status, stderr: result.stderr };
+  return new Promise((resolve, reject) => {
+    const start = performance.now();
+    const stderrTail = (text) => String(text ?? "").trim().split("\n").slice(-12).join("\n");
+    const child = spawn(process.execPath, [cli, ...args], { cwd: checkout,
+      env: gitEnv(env, {
+        HOME: path.join(runDir, "home"),
+        XDG_STATE_HOME: path.join(runDir, "state"), XDG_CACHE_HOME: path.join(runDir, "cache"),
+        XDG_CONFIG_HOME: path.join(runDir, "xdg-config"),
+        // PIR_EVAL_STATE_ROOT points transcripts/manifests at the shared local
+        // state root when set (web-explorer visibility); default stays the
+        // per-run scratch. Memory stays per-run either way.
+        PIR_STATE_ROOT: env.PIR_EVAL_STATE_ROOT ?? path.join(runDir, "state"),
+        // Cold memory per task, deliberately: the benchmark measures the
+        // review engine, not accumulated decisions, and stays reproducible.
+        PIR_MEMORY_DB: path.join(runDir, "state/memory.sqlite"), PIR_CONFIG_DIR: path.join(runDir, "config"),
+        PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1",
+        PIR_TRANSCRIPTS: env.PIR_EVAL_TRANSCRIPTS ?? "0",
+        PIR_MODE: "local", PIR_MODEL: options.model,
+      }), stdio: ["ignore", "pipe", "pipe"] });
+    // Same 32 MB cap per stream as the previous spawnSync maxBuffer.
+    const MAX_BUFFER = 32 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { if (stdout.length < MAX_BUFFER) stdout += chunk; });
+    child.stderr.on("data", (chunk) => { if (stderr.length < MAX_BUFFER) stderr += chunk; });
+    const timer = setTimeout(() => child.kill("SIGTERM"), options.taskTimeoutMs);
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      const wrapped = new Error(`${err.message}\nstderr tail:\n${stderrTail(stderr)}`);
+      wrapped.stderrText = stderr;
+      reject(wrapped);
+    });
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      const wallTimeMs = Math.round(performance.now() - start);
+      if (status === null && signal) {
+        const wrapped = new Error(`CLI exited ${status}, signal ${signal} (task timeout ${options.taskTimeoutMs}ms)\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
+        return;
+      }
+      if (status !== 0 && status !== 1) {
+        const wrapped = new Error(`CLI exited ${status}, signal ${signal ?? "none"}\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
+        return;
+      }
+      let envelope;
+      try {
+        envelope = JSON.parse(stdout);
+      } catch (error) {
+        const wrapped = new Error(`CLI stdout is not JSON: ${error.message}\nstdout tail:\n${stderrTail(stdout)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
+        return;
+      }
+      if (!envelope?.data || !Array.isArray(envelope.data.findings)) {
+        reject(new Error("CLI returned no data.findings array"));
+        return;
+      }
+      resolve({ data: envelope.data, wallTimeMs, exitCode: status, stderr });
+    });
+  });
 }
 
 function loadGolden(manifestPath, key) {
@@ -293,7 +412,7 @@ export function prefilterPirFindings(findings) {
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
-    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json]\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
+    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N|unlimited] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json] [--resume]\n--resume continues an interrupted round: completed artifacts are reused as-is, only missing ones re-run.\nEnv: PIR_EVAL_TASK_CONCURRENCY=N runs tasks through an N-worker pool (default 1 = serial);\n--max-tokens unlimited (or PIR_EVAL_MAX_TOKENS=unlimited) omits the token budget entirely.\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
     return 0;
   }
   if (env.PIR_EVAL !== "1") {
@@ -322,7 +441,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   // throwaway snapshots — an interrupted run never leaves credential copies
   // under the repo tree.
   const configRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-config-"));
-  const runRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-runs-"));
+  // Persistent (gitignored) per-run scratch: memory DBs and stderr logs stay
+  // on disk after the run instead of vanishing in /tmp. Credentials never
+  // land here — configRoot stays ephemeral.
+  const runRoot = path.join(RB_DIR, ".cache", "runs", options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`);
+  mkdirSync(runRoot, { recursive: true });
   try {
     const config = snapshotConfig(configRoot, env);
     options.model ??= config.model;
@@ -331,12 +454,30 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
     const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`;
     const roundDir = path.join(RB_OUT_ROOT, roundName);
-    if (existsSync(roundDir)) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name or remove it)`);
+    // --resume: an interrupted round's artifacts are the record — judging
+    // inputs on disk are exactly what the judge consumes, so completed runs
+    // are reused as-is and only missing artifacts re-run. Without the flag
+    // an existing directory stays a hard error (a fresh round must never
+    // silently mix with an old one).
+    let prevRuns = new Map();
+    let startedAt = new Date().toISOString();
+    if (existsSync(roundDir)) {
+      if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume to continue it)`);
+      const summaryPath = path.join(roundDir, "summary.json");
+      const prev = existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : null;
+      if (prev?.startedAt) startedAt = prev.startedAt;
+      for (const task of prev?.tasks ?? []) {
+        for (const row of task.runs ?? []) prevRuns.set(`${task.prKey}|${row.variant}|${row.repeat}`, row);
+      }
+      console.error(`resuming ${roundName}: ${prevRuns.size} recorded runs, completed artifacts are reused as-is`);
+    }
     mkdirSync(roundDir, { recursive: true });
 
-    const summary = { schemaVersion: 1, round: roundName, startedAt: new Date().toISOString(), node: process.version,
+    const summary = { schemaVersion: 1, round: roundName, startedAt, resumedAt: options.resume ? new Date().toISOString() : undefined,
+      node: process.version,
       model: options.model, config, limits: { maxRounds: options.maxRounds, maxTokens: options.maxTokens,
-        maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs },
+        maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs,
+        taskConcurrency: options.taskConcurrency },
       repeats: options.repeats, variants, tasks: [] };
     const prefilterAcc = new Map(); // `${variant}-run${repeat}` -> { taskResults }
     const flushRoundArtifacts = () => {
@@ -354,11 +495,45 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     }
     let anyError = false;
 
-    for (const [index, entry] of selected.entries()) {
+    // One task = materialize once, then its repeats × variants runs, then
+    // release the worktree. Tasks are independent (per-task run dirs, cold
+    // memory, detached worktrees), so an opt-in worker pool runs up to
+    // taskConcurrency of them at once (PIR_EVAL_TASK_CONCURRENCY, default
+    // 1 = today's serial behavior). Shared accumulators (summary.tasks,
+    // prefilterAcc, anyError) are only touched in synchronous blocks between
+    // awaits, and summary.tasks is kept in manifest order for stable output.
+    const runTask = async ([index, entry]) => {
       const key = prKey(entry);
       const taskRow = { prKey: key, repo: entry.repo, prNumber: entry.pr_number, language: entry.language ?? null,
         repoSizeKb: entry.repo_size_kb ?? null, linesAdded: entry.lines_added ?? null, linesRemoved: entry.lines_removed ?? null,
         runs: [] };
+      // Resume: reuse a run iff its judging-input artifact is on disk (only
+      // successful runs write artifacts — error rows never do), so reuse and
+      // re-run decide per run, not per task.
+      const allRunLabels = [];
+      for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
+        for (const variant of variants) allRunLabels.push({ runLabel: `${variant.name}-run${repeat}`, variant, repeat });
+      }
+      const isReused = (label) => options.resume && existsSync(path.join(roundDir, label, `${key}.json`));
+      // Rebuild a reused run's prefilter entry from its artifact, so the
+      // aggregated PREFILTER.md stays complete across resumptions.
+      const reuseRun = (runLabel, variant, repeat) => {
+        const prevRow = prevRuns.get(`${key}|${variant.name}|${repeat}`);
+        taskRow.runs.push({ ...(prevRow ?? { variant: variant.name, repeat, status: "ok" }), reused: true });
+        const goldenFindings = goldenRecallTargets(loadGolden(options.manifest, key));
+        const pirFindings = JSON.parse(readFileSync(path.join(roundDir, runLabel, `${key}.json`), "utf8")).findings
+          .map((f) => ({ message: f.message, paths: [f.file], start_line: f.start_line, end_line: f.end_line }));
+        const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
+        if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
+        prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });
+        console.error(`REUSED ${runLabel} ${key}`);
+      };
+      if (allRunLabels.every(({ runLabel }) => isReused(runLabel))) {
+        for (const { runLabel, variant, repeat } of allRunLabels) reuseRun(runLabel, variant, repeat);
+        summary.tasks.push(taskRow);
+        flushRoundArtifacts();
+        return;
+      }
       let repoDir = null;
       let checkout = null;
       let materializationError = null;
@@ -380,6 +555,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         const order = (repeat + index) % 2 === 0 ? [...variants].reverse() : variants;
         for (const variant of order) {
           const runLabel = `${variant.name}-run${repeat}`;
+          if (isReused(runLabel)) {
+            reuseRun(runLabel, variant, repeat);
+            continue;
+          }
           if (materializationError) {
             taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: `materialization: ${materializationError}` });
             anyError = true;
@@ -391,8 +570,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           // Same forced-local snapshot the scenario runner gives its runs:
           // without agent credentials pir cannot authenticate the model.
           for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
+          const logFile = path.join(RB_DIR, ".cache", "logs", roundName, runLabel, `${key}.log`);
           try {
-            const result = runPir(variant.cli, checkout, entry, options, runDir, env);
+            const result = await runPir(variant.cli, checkout, entry, options, runDir, env);
+            mkdirSync(path.dirname(logFile), { recursive: true });
+            writeFileSync(logFile, result.stderr ?? "");
             const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
             const reportedDir = path.join(roundDir, runLabel);
             const confirmedDir = path.join(roundDir, `${runLabel}-confirmed-only`);
@@ -421,12 +603,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
             `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""}` +
             `${truncated ? ` [WARN truncated: ${result.data.stoppedBecause ?? "pending candidates"}]` : ""} in ${result.wallTimeMs}ms`);
+          // Record copy for the web explorer (best-effort, warns on failure).
+          const mirrored = await mirrorRunToState(runDir, result.data.run?.id, env);
+          if (env.PIR_EVAL_STATE_ROOT && mirrored) console.error(`mirrored ${runLabel} ${key} to the shared state DB`);
           } catch (error) {
+            mkdirSync(path.dirname(logFile), { recursive: true });
+            writeFileSync(logFile, String(error.stderrText ?? "") || `${String(error.message ?? error)}\n`);
             taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: String(error.message ?? error) });
             anyError = true;
             console.error(`ERROR ${runLabel} ${key}: ${String(error.message ?? error)}`);
-          } finally {
-            rmSync(runDir, { recursive: true, force: true });
           }
         }
       }
@@ -434,8 +619,17 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       summary.tasks.push(taskRow);
       // Flush after every task: a multi-hour round that gets interrupted
       // keeps its aggregates (judging inputs are already on disk per task).
+      summary.tasks.sort((a, b) => selected.findIndex((e) => prKey(e) === a.prKey) - selected.findIndex((e) => prKey(e) === b.prKey));
       flushRoundArtifacts();
-    }
+    };
+
+    let dispatched = 0;
+    const worker = async () => {
+      while (dispatched < selected.length) {
+        await runTask([...selected.entries()][dispatched++]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(options.taskConcurrency, selected.length) }, worker));
 
   summary.finishedAt = new Date().toISOString();
   flushRoundArtifacts();
@@ -445,7 +639,6 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return anyError ? 1 : 0;
   } finally {
     rmSync(configRoot, { recursive: true, force: true });
-    rmSync(runRoot, { recursive: true, force: true });
   }
 }
 
