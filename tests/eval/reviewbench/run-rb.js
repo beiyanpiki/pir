@@ -245,6 +245,58 @@ export function releaseTask(repoDir, workDir) {
 /** Async pir run: spawn (not spawnSync) so task-concurrency workers actually
  * overlap — spawnSync blocks the whole event loop and would serialize every
  * worker behind the first run. Same exit/error semantics as before. */
+
+/**
+ * Mirror a completed run's records (review_runs, findings with freshly
+ * allocated display ids, finding_evidence) into the shared local state DB
+ * (PIR_EVAL_STATE_ROOT — the root the web explorer reads), so benchmark runs
+ * are browsable without weakening per-task memory isolation: the run's own
+ * memory DB stayed cold and private, this is a write-only record copy.
+ * Best-effort by design: a mirror failure warns and never fails the run.
+ */
+async function mirrorRunToState(runDir, runId, env) {
+  const stateRoot = env.PIR_EVAL_STATE_ROOT;
+  const scratchDb = path.join(runDir, "state/memory.sqlite");
+  if (!stateRoot || !runId || !existsSync(scratchDb)) return false;
+  try {
+    const { SqliteStore } = await import(pathToFileURL(path.join(ROOT, "dist/memory/sqlite-store.js")).href);
+    const src = SqliteStore.open(scratchDb);
+    try {
+      const project = src.get("SELECT id FROM projects LIMIT 1");
+      if (!project) return false;
+      const dstPath = path.join(stateRoot, project.id, "memory.sqlite");
+      mkdirSync(path.dirname(dstPath), { recursive: true });
+      const dst = SqliteStore.open(dstPath);
+      try {
+        const insertRow = (table, row) => {
+          const cols = Object.keys(row);
+          dst.run(`INSERT OR IGNORE INTO ${table} (${cols.join(",")}) VALUES (${cols.map(() => "?").join(",")})`, ...cols.map((c) => row[c]));
+        };
+        const proj = src.get("SELECT * FROM projects WHERE id = ?", project.id);
+        if (proj) insertRow("projects", proj);
+        const run = src.get("SELECT * FROM review_runs WHERE id = ?", runId);
+        if (!run) return false;
+        insertRow("review_runs", run);
+        const findings = src.all("SELECT * FROM findings WHERE run_id = ? ORDER BY created_at, rowid", runId);
+        for (const finding of findings) {
+          const n = dst.get("SELECT COUNT(*) AS n FROM findings WHERE project_id = ?", project.id);
+          // Same allocation rule as the store's nextDisplayId(): F-<count+1>.
+          insertRow("findings", { ...finding, display_id: `F-${(n?.n ?? 0) + 1}` });
+          for (const ev of src.all("SELECT * FROM finding_evidence WHERE finding_id = ?", finding.id)) insertRow("finding_evidence", ev);
+        }
+        return true;
+      } finally {
+        dst.close();
+      }
+    } finally {
+      src.close();
+    }
+  } catch (error) {
+    console.error(`WARN mirror-to-state failed for run ${runId}: ${String(error.message ?? error)}`);
+    return false;
+  }
+}
+
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
     "--max-rounds", String(options.maxRounds),
@@ -258,11 +310,16 @@ function runPir(cli, checkout, entry, options, runDir, env) {
       env: gitEnv(env, {
         HOME: path.join(runDir, "home"),
         XDG_STATE_HOME: path.join(runDir, "state"), XDG_CACHE_HOME: path.join(runDir, "cache"),
-        XDG_CONFIG_HOME: path.join(runDir, "xdg-config"), PIR_STATE_ROOT: path.join(runDir, "state"),
+        XDG_CONFIG_HOME: path.join(runDir, "xdg-config"),
+        // PIR_EVAL_STATE_ROOT points transcripts/manifests at the shared local
+        // state root when set (web-explorer visibility); default stays the
+        // per-run scratch. Memory stays per-run either way.
+        PIR_STATE_ROOT: env.PIR_EVAL_STATE_ROOT ?? path.join(runDir, "state"),
         // Cold memory per task, deliberately: the benchmark measures the
         // review engine, not accumulated decisions, and stays reproducible.
         PIR_MEMORY_DB: path.join(runDir, "state/memory.sqlite"), PIR_CONFIG_DIR: path.join(runDir, "config"),
-        PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1", PIR_TRANSCRIPTS: "0",
+        PI_CODING_AGENT_DIR: path.join(runDir, "agent"), PIR_NO_WIZARD: "1",
+        PIR_TRANSCRIPTS: env.PIR_EVAL_TRANSCRIPTS ?? "0",
         PIR_MODE: "local", PIR_MODEL: options.model,
       }), stdio: ["ignore", "pipe", "pipe"] });
     // Same 32 MB cap per stream as the previous spawnSync maxBuffer.
@@ -274,24 +331,32 @@ function runPir(cli, checkout, entry, options, runDir, env) {
     const timer = setTimeout(() => child.kill("SIGTERM"), options.taskTimeoutMs);
     child.on("error", (err) => {
       clearTimeout(timer);
-      reject(new Error(`${err.message}\nstderr tail:\n${stderrTail(stderr)}`));
+      const wrapped = new Error(`${err.message}\nstderr tail:\n${stderrTail(stderr)}`);
+      wrapped.stderrText = stderr;
+      reject(wrapped);
     });
     child.on("close", (status, signal) => {
       clearTimeout(timer);
       const wallTimeMs = Math.round(performance.now() - start);
       if (status === null && signal) {
-        reject(new Error(`CLI exited ${status}, signal ${signal} (task timeout ${options.taskTimeoutMs}ms)\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`));
+        const wrapped = new Error(`CLI exited ${status}, signal ${signal} (task timeout ${options.taskTimeoutMs}ms)\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
         return;
       }
       if (status !== 0 && status !== 1) {
-        reject(new Error(`CLI exited ${status}, signal ${signal ?? "none"}\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`));
+        const wrapped = new Error(`CLI exited ${status}, signal ${signal ?? "none"}\nstdout tail:\n${stderrTail(stdout)}\nstderr tail:\n${stderrTail(stderr)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
         return;
       }
       let envelope;
       try {
         envelope = JSON.parse(stdout);
       } catch (error) {
-        reject(new Error(`CLI stdout is not JSON: ${error.message}\nstdout tail:\n${stderrTail(stdout)}`));
+        const wrapped = new Error(`CLI stdout is not JSON: ${error.message}\nstdout tail:\n${stderrTail(stdout)}`);
+        wrapped.stderrText = stderr;
+        reject(wrapped);
         return;
       }
       if (!envelope?.data || !Array.isArray(envelope.data.findings)) {
@@ -367,7 +432,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   // throwaway snapshots — an interrupted run never leaves credential copies
   // under the repo tree.
   const configRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-config-"));
-  const runRoot = mkdtempSync(path.join(tmpdir(), "pir-rb-runs-"));
+  // Persistent (gitignored) per-run scratch: memory DBs and stderr logs stay
+  // on disk after the run instead of vanishing in /tmp. Credentials never
+  // land here — configRoot stays ephemeral.
+  const runRoot = path.join(RB_DIR, ".cache", "runs", options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`);
+  mkdirSync(runRoot, { recursive: true });
   try {
     const config = snapshotConfig(configRoot, env);
     options.model ??= config.model;
@@ -492,8 +561,11 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           // Same forced-local snapshot the scenario runner gives its runs:
           // without agent credentials pir cannot authenticate the model.
           for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
+          const logFile = path.join(RB_DIR, ".cache", "logs", roundName, runLabel, `${key}.log`);
           try {
             const result = await runPir(variant.cli, checkout, entry, options, runDir, env);
+            mkdirSync(path.dirname(logFile), { recursive: true });
+            writeFileSync(logFile, result.stderr ?? "");
             const { reported, confirmedOnly, dropped } = normalizeTask({ manifestEntry: entry, outcome: result });
             const reportedDir = path.join(roundDir, runLabel);
             const confirmedDir = path.join(roundDir, `${runLabel}-confirmed-only`);
@@ -522,12 +594,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           console.error(`OK ${runLabel} ${key}: ${reported.findings.length} reported (${confirmedOnly.findings.length} confirmed)` +
             `${dropped.length > 0 ? ` [WARN dropped ${dropped.length} anchorless reported findings]` : ""}` +
             `${truncated ? ` [WARN truncated: ${result.data.stoppedBecause ?? "pending candidates"}]` : ""} in ${result.wallTimeMs}ms`);
+          // Record copy for the web explorer (best-effort, warns on failure).
+          const mirrored = await mirrorRunToState(runDir, result.data.run?.id, env);
+          if (env.PIR_EVAL_STATE_ROOT && mirrored) console.error(`mirrored ${runLabel} ${key} to the shared state DB`);
           } catch (error) {
+            mkdirSync(path.dirname(logFile), { recursive: true });
+            writeFileSync(logFile, String(error.stderrText ?? "") || `${String(error.message ?? error)}\n`);
             taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: String(error.message ?? error) });
             anyError = true;
             console.error(`ERROR ${runLabel} ${key}: ${String(error.message ?? error)}`);
-          } finally {
-            rmSync(runDir, { recursive: true, force: true });
           }
         }
       }
@@ -555,7 +630,6 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return anyError ? 1 : 0;
   } finally {
     rmSync(configRoot, { recursive: true, force: true });
-    rmSync(runRoot, { recursive: true, force: true });
   }
 }
 
