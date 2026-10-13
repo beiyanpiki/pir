@@ -251,6 +251,10 @@ test("detectPacks activates frontend by framework markers, not package.json alon
       const uniHead = repo3.commit("frontend under a non-ascii directory");
       const uniActive = await detectPacks(repo3.dir, uniHead, packs);
       assert.ok(uniActive.find((p) => p.name === "frontend"), "non-ASCII directory path activates frontend");
+
+      // A broken listing degrades to "no activation", never a dead run (dogfood F-163).
+      const ghost = await detectPacks(repo3.dir, "9".repeat(40), packs);
+      assert.deepEqual(ghost, [], "unresolvable commit degrades to no packs");
     } finally {
       repo3.cleanup();
     }

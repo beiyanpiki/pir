@@ -25,8 +25,16 @@ async function packMatches(repoRoot: string, commit: string, pack: LanguagePack)
       if ((await readFileAtCommit(repoRoot, commit, marker)) !== null) return true;
       continue;
     }
-    // One tree listing shared by every glob marker of this pack.
-    tree ??= await listFilesAtCommit(repoRoot, commit);
+    // One tree listing shared by every glob marker of this pack. Detection is
+    // best-effort, matching literal markers: a failed listing means "glob
+    // markers unchecked", never a dead run.
+    if (tree === null) {
+      try {
+        tree = await listFilesAtCommit(repoRoot, commit);
+      } catch {
+        tree = [];
+      }
+    }
     const re = markerRegExp(marker);
     if (tree.some((path) => re.test(path))) return true;
   }
