@@ -29,6 +29,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     // A route change invalidates the previous resource immediately. This
     // prevents a late response from briefly rendering data for another URL.
     setData(null);
@@ -48,7 +49,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
         if (cause instanceof ApiError && cause.status === 401) {
           navigate("/login", {
             replace: true,
-            state: { from: `${window.location.pathname}${window.location.search}${window.location.hash}` },
+            state: { from },
           });
           return;
         }

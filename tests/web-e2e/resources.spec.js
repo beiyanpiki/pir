@@ -9,6 +9,9 @@ const projects = [
   { projectId: projectB, name: "Project B", remote: null, runsTotal: 1, lastRunAt: 1, lastRunStatus: "completed", openFindings: 0, namedInRegistry: true },
 ];
 const run = (runId, mode = "change") => ({ runId, mode, base: "c".repeat(40), head: "d".repeat(40), startedAt: 1, finishedAt: 2, status: "completed", rounds: 1, candidates: 0, confirmed: 0, rejected: 0, uncertain: 0, notes: null, model: null, durationMs: 1, totalTokens: null, cost: null, transcriptsAvailable: false });
+const detail = (runId, extra = {}) => ({ run: run(runId, runId === runB ? "audit" : "change"), findings: { items: [], total: 0 }, sessions: [], manifest: null, ...extra });
+const session = { file: "reviewer-r1.json", sessionKind: "reviewer", round: 1 };
+const transcript = (prompt) => ({ role: "reviewer", model: "test-model", startedAt: "2026-10-13T00:00:00Z", endedAt: "2026-10-13T00:00:01Z", prompt, messages: [] });
 
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/overview", (route) => route.fulfill({ json: { projects, active: [] } }));
@@ -21,8 +24,7 @@ test.beforeEach(async ({ page }) => {
   });
   await page.route("**/api/runs/*/*", (route) => {
     const parts = new URL(route.request().url()).pathname.split("/");
-    const item = run(parts[4], parts[4] === runB ? "audit" : "change");
-    route.fulfill({ json: { run: item, findings: { items: [], total: 0 }, sessions: [], manifest: null } });
+    route.fulfill({ json: detail(parts[4]) });
   });
 });
 
@@ -44,15 +46,137 @@ test("project links update the active sidebar route", async ({ page }) => {
   await expect(page.locator(".sidebar-project.is-active")).toContainText("Project B");
 });
 
-test("inspector acts as a modal drawer on tablet and restores focus", async ({ page }) => {
-  await page.setViewportSize({ width: 900, height: 700 });
+test("run navigation isolates transcripts with identical file names", async ({ page }) => {
+  await page.route("**/api/runs/*/*", (route) => {
+    const runId = new URL(route.request().url()).pathname.split("/")[4];
+    route.fulfill({ json: detail(runId, { run: { ...run(runId), transcriptsAvailable: true }, sessions: [session] }) });
+  });
+  await page.route("**/api/runs/*/*/transcript/*", (route) => {
+    const runId = new URL(route.request().url()).pathname.split("/")[4];
+    route.fulfill({ json: transcript(runId === runA ? "Goal from run A" : "Goal from run B") });
+  });
+  await page.goto(`/runs/${projectA}/${runA}`);
+  await expect(page.getByText("Goal from run A", { exact: true })).toBeVisible();
+  await page.locator(`.sidebar-run[href='/runs/${projectA}/${runB}']`).click();
+  await expect(page.getByText("Goal from run B", { exact: true })).toBeVisible();
+  await expect(page.getByText("Goal from run A", { exact: true })).toHaveCount(0);
+  await page.locator(`.sidebar-run[href='/runs/${projectA}/${runA}']`).click();
+  await expect(page.getByText("Goal from run A", { exact: true })).toBeVisible();
+  await expect(page.getByText("Goal from run B", { exact: true })).toHaveCount(0);
+});
+
+test("a delayed run response is cancelled when navigating to the next run", async ({ page }) => {
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/runs/*/*", async (route) => {
+    const runId = new URL(route.request().url()).pathname.split("/")[4];
+    if (runId === runA) {
+      await pending;
+      await route.fulfill({ json: detail(runA) }).catch(() => {});
+      return;
+    }
+    await route.fulfill({ json: detail(runId) });
+  });
+  await page.goto(`/runs/${projectA}/${runA}`);
+  const cancelled = page.waitForEvent("requestfailed", (request) => request.url().endsWith(`/api/runs/${projectA}/${runA}`));
+  await page.locator(`.sidebar-run[href='/runs/${projectA}/${runB}']`).click();
+  await cancelled;
+  await expect(page.locator(".run-header h1")).toHaveText("cccccccc…dddddddd");
+  release();
+  await expect(page.locator(".run-header")).toContainText("audit");
+  await expect(page.locator(".run-header")).not.toContainText("change");
+});
+
+for (const [status, message] of [
+  [403, "You do not have permission to view this resource."],
+  [404, "This resource was not found."],
+  [500, "The server could not load this resource."],
+  [0, "Network error:"],
+]) {
+  test(`run errors (${status || "network"}) offer a working retry`, async ({ page }) => {
+    let failing = true;
+    await page.route(`**/api/runs/${projectA}/${runA}`, (route) => {
+      if (!failing) return route.fulfill({ json: detail(runA) });
+      return status ? route.fulfill({ status, json: { error: "Fixture failure" } }) : route.abort("failed");
+    });
+    await page.goto(`/runs/${projectA}/${runA}`);
+    await expect(page.getByRole("alert")).toContainText(message);
+    await expect(page.getByText("Run not found", { exact: true })).toHaveCount(0);
+    failing = false;
+    await page.getByRole("button", { name: "Retry", exact: true }).click();
+    await expect(page.locator(".run-header h1")).toHaveText("cccccccc…dddddddd");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}
+
+test("login restores the full deep link after authentication", async ({ page }) => {
+  await page.route("**/api/**", (route) => {
+    if (route.request().headers().authorization === "Bearer fixture-token") return route.fallback();
+    return route.fulfill({ status: 401, json: { error: "unauthorized" } });
+  });
+  const target = `/runs/${projectA}/${runA}?mode=change&q=review%20scope#session-reviewer-r1`;
+  await page.goto(target);
+  await expect(page).toHaveURL(/\/login$/);
+  await page.getByLabel("Access token").fill("fixture-token");
+  await page.getByRole("button", { name: "Open workspace" }).click();
+  await expect(page).toHaveURL(`http://127.0.0.1:5174${target}`);
+  await expect(page.locator(".run-header h1")).toBeVisible();
+});
+
+for (const width of [1100, 1240]) {
+test(`inspector traps Tab and restores focus at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 700 });
   await page.goto(`/runs/${projectA}/${runA}`);
   const opener = page.getByRole("button", { name: "Open inspector" });
   await opener.click();
   const dialog = page.getByRole("dialog", { name: "Review inspector" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute("aria-modal", "true");
+  const firstTab = dialog.getByRole("tab", { name: "Findings" });
+  const close = dialog.getByRole("button", { name: "Close inspector" });
+  await expect(firstTab).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(close).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(firstTab).toBeFocused();
+  await expect(page.locator(".workspace-topbar")).toHaveJSProperty("inert", true);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(opener).toBeFocused();
+  await expect(page.locator(".workspace-topbar")).toHaveJSProperty("inert", false);
+});
+}
+
+test("closing the desktop inspector restores the stream width", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.goto(`/runs/${projectA}/${runA}`);
+  const inspector = page.getByRole("complementary", { name: "Review inspector" });
+  const stream = page.getByRole("region", { name: "Review execution stream" });
+  await expect(inspector).toBeVisible();
+  const initial = await stream.boundingBox();
+  await page.locator(".run-header").getByRole("button", { name: "Close inspector" }).click();
+  await expect(inspector).toBeHidden();
+  await expect.poll(async () => (await stream.boundingBox()).width).toBeGreaterThan(initial.width + 300);
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  await expect.poll(async () => (await stream.boundingBox()).width).toBe(initial.width);
+});
+
+test("mobile project, run list, and detail stay within the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const [path, ready] of [
+    ["/projects", ".project-table"],
+    [`/projects/${projectA}`, ".run-table"],
+    [`/runs/${projectA}/${runA}`, ".run-header"],
+  ]) {
+    await page.goto(path);
+    await expect(page.locator(ready)).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  }
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  const dialog = page.getByRole("dialog", { name: "Review inspector" });
+  await expect(dialog).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const bounds = await dialog.boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
 });
