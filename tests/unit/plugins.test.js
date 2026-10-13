@@ -111,8 +111,11 @@ test("frontend and typescript packs co-activate without truncating each other", 
     assert.ok(!rendered.includes("TRUNCATED"), `${role} co-render must not truncate (got ${rendered.length} chars)`);
     assert.ok(rendered.includes(`[frontend@${frontend.version}, auto]`), "frontend section present");
     assert.ok(rendered.includes(`[typescript@${typescript.version}, auto]`), "typescript section present");
-    assert.ok(rendered.includes("## XSS and client-side secrets"), "frontend tail intact");
-    assert.match(rendered, /No reachable path, no finding\./, "typescript tail intact");
+    // Tail markers: the last content of each pack's guidance for this role.
+    const tails = role === "reviewer"
+      ? ["## Tests this diff touches", /No reachable path, no finding\./]
+      : ["Accessibility: confirm the element lacks every accessible path", /prefer uncertain over confirmed when tooling-dependent/];
+    assert.ok(rendered.includes(tails[0]) && tails[1].test(rendered), `${role} both packs' tails intact`);
   }
 });
 
