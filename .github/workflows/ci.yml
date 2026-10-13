@@ -27,6 +27,8 @@ jobs:
       # Model-free suite: supervisor loop, memory contracts, CLI, HTTPS server
       # (uses fake codegraph binaries and scripted agent sessions).
       - run: npm test
+      - name: Install browser test dependencies
+        run: npx playwright install --with-deps chromium
       - name: Web browser regression tests
         run: npm run test:web:e2e
       - name: Upload web browser artifacts
@@ -34,7 +36,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: web-browser-artifacts
-          path: test-results/web-artifacts
+          path: |
+            test-results/web-artifacts
+            test-results/web-report
           if-no-files-found: ignore
 
   # The npm package behind `npx github:beiyanpiki/pir` and
