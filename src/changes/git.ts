@@ -197,6 +197,12 @@ export async function readFileAtCommit(repoRoot: string, commit: string, path: s
   }
 }
 
+export async function listFilesAtCommit(repoRoot: string, commit: string): Promise<string[]> {
+  // NUL-separated raw paths: no core.quotepath C-quoting, no cwd subtree limit.
+  const out = await gitBuffer(repoRoot, ["ls-tree", "-r", "--name-only", "-z", "--full-tree", commit]);
+  return out.toString("utf8").split("\0").filter((line) => line.length > 0);
+}
+
 export async function commitExists(repoRoot: string, ref: string): Promise<boolean> {
   try {
     await git(repoRoot, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);

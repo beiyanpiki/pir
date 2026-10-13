@@ -101,7 +101,7 @@ target):
 | `--max-findings <n>` | cap on reported findings (default 10; ceiling, not target) |
 | `--max-rounds <n>` | discovery/verification rounds (default 2) |
 | `--max-tokens <n>` | optional session token budget |
-| `--plugins auto\|none\|golang,typescript` | language packs (default auto-detect) |
+| `--plugins auto\|none\|frontend,golang,typescript` | language packs (default auto-detect) |
 | `--no-sync-index` | skip codegraph index sync |
 | `--quiet` | suppress stderr progress |
 

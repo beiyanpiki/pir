@@ -1,0 +1,50 @@
+{
+  "name": "frontend",
+  "title": "Frontend",
+  "version": "1.0.0",
+  "description": "Web frontend review directions: SSR/hydration boundaries, effect races and leaks, DOM XSS sinks, client-side secret exposure, framework boundary misuse, bundle and render-path performance, diff-introduced a11y defects.",
+  "detect": {
+    "markerFiles": [
+      "**/next.config.js",
+      "**/next.config.ts",
+      "**/next.config.mjs",
+      "**/next.config.cjs",
+      "**/nuxt.config.js",
+      "**/nuxt.config.ts",
+      "**/nuxt.config.mjs",
+      "**/nuxt.config.cjs",
+      "**/svelte.config.js",
+      "**/svelte.config.ts",
+      "**/svelte.config.mjs",
+      "**/astro.config.js",
+      "**/astro.config.mjs",
+      "**/astro.config.ts",
+      "**/astro.config.cjs",
+      "**/angular.json",
+      "**/remix.config.js",
+      "**/remix.config.mjs",
+      "**/vue.config.js",
+      "**/vue.config.cjs",
+      "**/vite.config.js",
+      "**/vite.config.ts",
+      "**/vite.config.mjs",
+      "**/vite.config.mts",
+      "**/vite.config.cjs",
+      "**/vite.config.cts",
+      "**/index.html"
+    ],
+    "extensions": [
+      "vue",
+      "svelte",
+      "astro",
+      "css",
+      "scss"
+    ]
+  },
+  "guidance": {
+    "reviewer": "guidance/reviewer.md",
+    "verifier": "guidance/verifier.md",
+    "reviewerAudit": "guidance/reviewer-audit.md",
+    "verifierAudit": "guidance/verifier-audit.md"
+  }
+}
