@@ -18,7 +18,7 @@ Read package.json, the lockfile, and the framework config at the snapshot:
 - Stale closure: show the value the closed-over binding holds at the reachable execution vs the fresher value the effect needs; a dep entry or ref read rejects.
 - XSS: trace source→sink concretely (route param/API field → state → innerHTML/href). Sanitization on the path (DOMPurify, server-side bleach, framework auto-escaping intact) rejects; author-controlled static strings are at most uncertain; attacker-influenced taint with no boundary confirms. javascript:-URL claims need a user-influenced construction path.
 - Secret in client bundle: show the client-side reference (NEXT_PUBLIC_/VITE_ var, import into a "use client" graph) AND that the value class is private (key material, tokens, connection strings). Publishable keys and values already public in-repo reject.
-- Server→client boundary break: the prop must be constructed server-side and consumed by a "use client" component — both sides read. Client→client data flow rejects.
+- Server→client boundary break: the prop must be constructed server-side and consumed by a "use client" component — both sides read. Client→client data flow rejects. React Flight serializes Date, Map, Set, Promise and typed arrays across that boundary: claims naming those types reject.
 - Performance: read-only review has no benchmark — reason from the code's allocation/complexity structure and the reachable path (row counts, event frequency, entry-graph reachability for bundle claims). No reachable hot path → uncertain, not confirmed.
 - Accessibility: confirm the element lacks every accessible path (aria-label, aria-labelledby, native button/input alternative, keyboard handler) before confirming; an existing alternative is counter-evidence.
 

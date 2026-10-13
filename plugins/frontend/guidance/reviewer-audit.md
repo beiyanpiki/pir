@@ -33,7 +33,7 @@ These directions only sharpen where to look; every finding still needs the same 
 
 ## Framework boundary misuse
 
-- Next App Router: functions, class instances or Dates passed as props from a server to a client component (not serializable — runtime error); "use client" module importing server-only code (pulls secrets into the client graph).
+- Next App Router: functions and class instances passed as props from a server to a client component (not serializable — runtime error). Date, Map, Set, Promise and typed arrays serialize fine; flagging them is a false direction. A "use client" module importing server-only code pulls secrets into the client graph.
 - Dynamic APIs (cookies(), headers(), searchParams) in a page meant to stay static: the route silently drops to per-request rendering. fetch cache options contradicting the data's freshness needs — gated on the Next major (14 caches GET fetch by default, 15 does not).
 - Vue: destructuring props/reactive into plain constants drops reactivity; a ref read in the template but missing .value in script; mutating props; v-model on a computed with no setter.
 - A component flipping between controlled and uncontrolled across renders loses or freezes input state.
