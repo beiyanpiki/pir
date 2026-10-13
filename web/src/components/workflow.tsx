@@ -1,48 +1,5 @@
 import { useMemo } from "react";
-import { sessionIdentity } from "../live-projection";
-import type { RunEvent, SessionRef } from "../types";
-
-export interface WorkflowSession {
-  key: string;
-  kind: string;
-  status: "running" | "completed" | "failed" | "archived";
-  label: string;
-  file?: string;
-  round?: number;
-  findingIds: string[];
-}
-
-/** Merge the live event index with transcript refs using the same keys as the stream. */
-export function workflowSessions(events: RunEvent[] | null, refs: SessionRef[]): WorkflowSession[] {
-  const sessions = new Map<string, WorkflowSession>();
-  for (const event of events ?? []) {
-    if (event.kind === "session-start") {
-      const key = sessionIdentity(event);
-      sessions.set(key, { key, kind: event.sessionKind, status: "running",
-        label: event.displayId ?? event.angle ?? event.sessionKind,
-        ...(event.transcriptFile ? { file: event.transcriptFile } : {}),
-        ...(event.round !== undefined ? { round: event.round } : {}), findingIds: [] });
-    } else if (event.kind === "session-end") {
-      for (const session of sessions.values()) {
-        if (session.key === `runtime:${event.sessionId}` ||
-          (events ?? []).some((start) => start.kind === "session-start" && start.sessionId === event.sessionId && sessionIdentity(start) === session.key)) {
-          session.status = event.error ? "failed" : "completed";
-        }
-      }
-    }
-  }
-  for (const ref of refs) {
-    const key = sessionIdentity(ref);
-    const previous = sessions.get(key);
-    const findingIds = [...new Set([
-      ...(ref.displayId ? [ref.findingIdMap?.find((entry) => entry.from === ref.displayId)?.to ?? ref.displayId] : []),
-      ...(ref.findingIdMap ?? []).map((entry) => entry.to),
-    ])];
-    sessions.set(key, { key, kind: ref.sessionKind, status: previous?.status ?? "archived",
-      label: ref.displayId ?? ref.angle ?? ref.sessionKind, file: ref.file, round: ref.round, findingIds });
-  }
-  return [...sessions.values()];
-}
+import type { WorkflowSession } from "../live-projection";
 
 export function WorkflowTab({ sessions, selected, onSession, onFinding, role, status, query, onFilter }: {
   sessions: WorkflowSession[];
@@ -72,12 +29,12 @@ export function WorkflowTab({ sessions, selected, onSession, onFinding, role, st
     </div>
     <div className="workflow-count">{visible.length} of {sessions.length} sessions</div>
     {visible.map((session) => <section className="inspector-section workflow-session" key={session.key}>
-      <button type="button" className={selected === session.key ? "is-active" : ""} onClick={() => onSession(session.key)}>
+      <button type="button" className={session.aliases.includes(selected ?? "") ? "is-active" : ""} onClick={() => onSession(session.key)}>
         <strong>{session.label}</strong><small>{session.kind} · {session.status}{session.round ? ` · round ${session.round}` : ""}</small>
         {session.file && <code>{session.file}</code>}
       </button>
-      {session.findingIds.length > 0 && <div className="workflow-finding-links">{session.findingIds.map((id) =>
-        <button type="button" key={id} onClick={() => onFinding(id)}>{id}</button>)}</div>}
+      {session.findingIds.length > 0 && <div className="workflow-finding-links">{session.findingMappings.map((entry) =>
+        <button type="button" key={`${entry.from}:${entry.to}`} onClick={() => onFinding(entry.to)}>{entry.from} → {entry.to}</button>)}</div>}
     </section>)}
     {visible.length === 0 && <div className="empty-state is-compact">No matching sessions</div>}
   </div>;
