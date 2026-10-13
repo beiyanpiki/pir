@@ -1662,6 +1662,9 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
     // F-101 twice is correct: the survivor maps to itself from its own
     // session, and the collapsed duplicate's session folds onto it.
     assert.deepEqual(targets, ["F-101", "F-101", "F-102"], "every candidate maps; duplicates fold onto their survivor");
+    assert.ok(manifest.sessions.every((session) => session.transcriptFile === session.file), "manifest refs carry the same transcript identity as live starts");
+    assert.deepEqual(new Set(mapped.flatMap((entry) => entry.findingIdMap?.map((item) => item.to) ?? [])), new Set(["F-1", "F-2"]),
+      "angle transcripts link runtime ids to persisted finding ids");
     // The collapsed duplicate's map points at the SURVIVOR, keeping its
     // transcript traceable (dogfood F-137).
     const correctnessRef = manifest.sessions.find((entry) => entry.angle === "correctness");
@@ -1938,6 +1941,10 @@ test("findIssues: a failed angle's transcript ref still records its id map (dogf
     assert.ok(Array.isArray(securityRef.idMap) && securityRef.idMap.length === 1, "failed angle records its id map");
     assert.match(securityRef.idMap[0].from, /^F-1/);
     assert.match(securityRef.idMap[0].to, /^F-1/);
+    assert.equal(securityRef.findingIdMap?.length, 1, "failed angle links to its persisted candidate");
+    assert.match(securityRef.findingIdMap[0].to, /^F-\d+$/);
+    assert.equal(securityRef.findingIdMap[0].from, securityRef.idMap[0].to);
+    assert.equal(ctx.memory.findings.get(securityRef.findingIdMap[0].to)?.claim, chainClaimA);
   } finally {
     process.env.PIR_TRANSCRIPTS = savedEnv;
     ctx.memory.close();
