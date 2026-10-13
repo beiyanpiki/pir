@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { cachedTranscript, fetchTranscript } from "../../api";
 import { fmtCost, fmtCount, fmtDuration } from "../../format";
 import { createLiveFold, type DerivedSession, type LiveFold, type LiveItem } from "../../live-fold";
+import { mergeSessionIdentities, sessionIdentity } from "../../live-projection";
 import type { RunEvent, SessionRef, SessionTranscript } from "../../types";
 import { LiveBadge, SessionKindBadge } from "../badges";
 import { TextBlockView, ThinkingRow, ToolRow, UserGoalCard } from "./blocks";
@@ -40,8 +41,8 @@ function sessionTitle(kind: string, meta: { round?: number; unitId?: string; att
   return meta.displayId !== undefined ? `verify ${meta.displayId}` : "verifier session";
 }
 
-export function sessionDomId(session: Pick<SessionRef, "file"> | { sessionId: string }): string {
-  const key = "file" in session ? session.file : session.sessionId;
+export function sessionDomId(session: Pick<SessionRef, "file"> | { sessionId: string; transcriptFile?: string }): string {
+  const key = sessionIdentity(session);
   return `session-${key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 }
 
@@ -218,6 +219,7 @@ export function SessionTimeline({
   sessions,
   liveEvents,
   awaitingLive = false,
+  preferPersisted = false,
 }: {
   projectId: string;
   runId: string;
@@ -225,19 +227,11 @@ export function SessionTimeline({
   liveEvents: RunEvent[] | null;
   /** Live run whose SSE replay has not landed yet: hold the spinner. */
   awaitingLive?: boolean;
+  /** Use complete transcripts once the terminal manifest has arrived. */
+  preferPersisted?: boolean;
 }) {
   const liveSessions = useLiveSessions(liveEvents, runId);
-  const useLive = liveSessions.length > 0;
-
-  if (useLive) {
-    return (
-      <div className="session-timeline">
-        {liveSessions.map((session) => (
-          <LiveSessionSection key={session.sessionId} session={session} />
-        ))}
-      </div>
-    );
-  }
+  const identities = mergeSessionIdentities(liveSessions, sessions);
 
   if (awaitingLive) {
     return (
@@ -247,7 +241,7 @@ export function SessionTimeline({
     );
   }
 
-  if (sessions.length === 0) {
+  if (identities.length === 0) {
     return (
       <div className="empty-state">
         No session transcripts for this run — it predates <code>PIR_TRANSCRIPTS=1</code>, or the
@@ -258,8 +252,14 @@ export function SessionTimeline({
 
   return (
     <div className="session-timeline">
-      {sessions.map((session) => (
-        <TranscriptSessionSection key={session.file} projectId={projectId} runId={runId} session={session} />
+      {identities.map((identity) => (
+        identity.persisted && preferPersisted ? (
+          <TranscriptSessionSection key={identity.key} projectId={projectId} runId={runId} session={identity.persisted} />
+        ) : identity.live ? (
+          <LiveSessionSection key={identity.key} session={identity.live} />
+        ) : identity.persisted ? (
+          <TranscriptSessionSection key={identity.key} projectId={projectId} runId={runId} session={identity.persisted} />
+        ) : null
       ))}
     </div>
   );

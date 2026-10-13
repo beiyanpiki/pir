@@ -24,6 +24,7 @@ import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
 import { mergeEvents } from "../live-fold";
+import { createLiveRunProjection, reduceLiveRunProjection, sessionIdentity } from "../live-projection";
 import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
 import { SessionTimeline, sessionDomId } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
@@ -50,12 +51,12 @@ export function RunDetailPage() {
   const inspectorOpenerRef = useRef<HTMLElement | null>(null);
   const detail = useApi<RunDetail>((signal) => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`, signal), [projectId, runId]);
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
-  const now = useTicker(((detail.data?.run.status === "running" && detail.data.run.finishedAt === null) || (detail.data?.live !== null && detail.data?.live?.end === null)) ? 1000 : 0);
 
   const run = detail.data?.run;
   const live = detail.data?.live ?? null;
   const ongoing = (run?.status === "running" && run.finishedAt === null) || (live !== null && live.end === null);
   const [liveEvents, setLiveEvents] = useState<RunEvent[] | null>(null);
+  const [projection, setProjection] = useState(() => createLiveRunProjection(runId));
   const maxSeqRef = useRef(0);
   const pendingLiveEventsRef = useRef<RunEvent[]>([]);
   const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,7 +108,12 @@ export function RunDetailPage() {
     maxSeqRef.current = 0;
     pendingLiveEventsRef.current = [];
     setLiveEvents(null);
+    setProjection(createLiveRunProjection(runId));
   }, [runId]);
+
+  useEffect(() => {
+    if (detail.data) setProjection((previous) => reduceLiveRunProjection(previous, { type: "detail", detail: detail.data! }));
+  }, [detail.data]);
 
   const flushLiveEvents = useCallback(() => {
     liveFlushTimerRef.current = null;
@@ -115,6 +121,7 @@ export function RunDetailPage() {
     if (pending.length === 0) return;
     pendingLiveEventsRef.current = [];
     setLiveEvents((previous) => mergeEvents(previous ?? [], pending));
+    setProjection((previous) => pending.reduce((state, event) => reduceLiveRunProjection(state, { type: "event", event }), previous));
   }, []);
 
   const sseStatus = useRunEvents(ongoing ? runId : null, true, (event) => {
@@ -130,11 +137,16 @@ export function RunDetailPage() {
     }
   });
 
+  useEffect(() => {
+    setProjection((previous) => reduceLiveRunProjection(previous, { type: "connection", state: sseStatus }));
+  }, [sseStatus]);
+
   useEffect(() => () => {
     if (liveFlushTimerRef.current !== null) clearTimeout(liveFlushTimerRef.current);
   }, []);
 
-  const displayStatus = deriveStatus(run, live, sseStatus);
+  const now = useTicker(ongoing ? 1000 : 0);
+  const displayStatus = projection.executionState !== "unknown" ? projection.executionState : deriveStatus(run, live, sseStatus);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
   // While the SSE replay has not landed yet, hold the stream on a spinner
   // instead of flashing the settled "no transcripts" state for a live run.
@@ -151,11 +163,11 @@ export function RunDetailPage() {
   }
 
   const manifest = detail.data.manifest;
-  const counts = live?.end?.counts ?? null;
+  const counts = projection.counts ?? live?.end?.counts ?? null;
   const confirmed = counts?.confirmed ?? run.confirmed;
   const rejected = counts?.rejected ?? run.rejected;
   const uncertain = counts?.uncertain ?? run.uncertain;
-  const rounds = counts?.rounds ?? run.rounds;
+  const rounds = projection.round || counts?.rounds || run.rounds;
   const duration = live && live.end === null
     ? now - live.startedAt
     : (run.durationMs ?? (run.finishedAt !== null ? run.finishedAt - run.startedAt : null));
@@ -213,6 +225,7 @@ export function RunDetailPage() {
                 sessions={detail.data.sessions}
                 liveEvents={liveEvents}
                 awaitingLive={awaitingLive}
+                preferPersisted={manifest !== null && projection.executionState !== "running"}
               />
             </div>
           </div>
@@ -285,9 +298,11 @@ function SessionRail({
   sessions: SessionRef[];
   liveEvents: RunEvent[] | null;
 }) {
-  const liveSessionIds = useMemo(() => new Set(
-    (liveEvents ?? []).filter((event) => event.kind === "session-start").map((event) => (event as { sessionId: string }).sessionId),
-  ), [liveEvents]);
+  const liveSessions = useMemo(() => {
+    const persisted = new Set(sessions.map((session) => sessionIdentity(session)));
+    return (liveEvents ?? []).filter((event): event is Extract<RunEvent, { kind: "session-start" }> => event.kind === "session-start")
+      .filter((event) => !persisted.has(sessionIdentity(event)));
+  }, [liveEvents, sessions]);
   const grouped = useMemo(() => {
     const rounds = new Map<number, SessionRef[]>();
     for (const session of sessions) {
@@ -297,7 +312,7 @@ function SessionRail({
     return [...rounds.entries()].sort(([a], [b]) => a - b);
   }, [sessions]);
 
-  const jumpTo = (session: SessionRef | { sessionId: string }): void => {
+  const jumpTo = (session: SessionRef | { sessionId: string; transcriptFile?: string }): void => {
     const target = document.getElementById(sessionDomId(session));
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
@@ -306,10 +321,10 @@ function SessionRail({
     <aside className="session-rail" aria-label="Review sessions">
       <div className="session-rail-head">
         <span><SquareTerminal size={14} /> Sessions</span>
-        <span>{sessions.length || liveSessionIds.size}</span>
+        <span>{sessions.length + liveSessions.length}</span>
       </div>
 
-      {grouped.length === 0 && liveSessionIds.size === 0 && (
+      {grouped.length === 0 && liveSessions.length === 0 && (
         <div className="sidebar-empty">No session index</div>
       )}
 
@@ -330,10 +345,10 @@ function SessionRail({
         </section>
       ))}
 
-      {[...liveSessionIds].map((sessionId) => (
-        <button key={sessionId} type="button" className="session-link is-live" onClick={() => jumpTo({ sessionId })}>
+      {liveSessions.map((session) => (
+        <button key={session.sessionId} type="button" className="session-link is-live" onClick={() => jumpTo(session)}>
           <span className="live-dot" />
-          <span><strong>Live session</strong><small>{sessionId.slice(0, 8)}</small></span>
+          <span><strong>Live session</strong><small>{session.sessionId.slice(0, 8)}</small></span>
         </button>
       ))}
     </aside>
