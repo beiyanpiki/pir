@@ -7,6 +7,8 @@ export interface ApiState<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  /** True while the held data answers a previous resource or query. */
+  stale: boolean;
   /** Bump to refetch; auto-retries after the previous load finished. */
   reload: () => void;
 }
@@ -32,9 +34,11 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const loadedIdentity = useRef<string | null>(null);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const navigate = useNavigate();
   const identityKey = JSON.stringify(options.identity ?? deps);
+  const resourceKey = JSON.stringify(deps);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -53,6 +57,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
         if (!cancelled) {
           setData(result);
           setError(null);
+          setSettledKey(resourceKey);
         }
       })
       .catch((cause: unknown) => {
@@ -86,9 +91,8 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   const reload = useCallback(() => setTick((value) => value + 1), []);
   // Before the effect for a new identity runs, hold the loading state instead
   // of rendering the previous resource's data under the new URL.
-  return loadedIdentity.current === identityKey
-    ? { data, error, loading, reload }
-    : { data: null, error: null, loading: true, reload };
+  if (loadedIdentity.current !== identityKey) return { data: null, error: null, loading: true, stale: false, reload };
+  return { data, error, loading, stale: settledKey !== resourceKey, reload };
 }
 
 export type SseStatus = "idle" | "connecting" | "open" | "unavailable" | "closed" | "error";

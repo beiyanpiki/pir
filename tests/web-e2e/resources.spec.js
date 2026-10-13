@@ -291,3 +291,12 @@ test("a failed finding detail offers retry and keeps the error state", async ({ 
   await row.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByText("The loop overruns by one.")).toBeVisible();
 });
+
+test("typing in the run search keeps every keystroke and lands one URL entry", async ({ page }) => {
+  await page.goto(`/projects/${projectA}`);
+  const search = page.getByRole("searchbox", { name: "Search this page" });
+  await search.type("scope", { delay: 40 });
+  await expect(search).toHaveValue("scope");
+  await expect(page).toHaveURL(/q=scope/);
+  await expect(page).not.toHaveURL(/q=sc(?!ope)/);
+});

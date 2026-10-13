@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ChevronLeft, ChevronRight, Clock3, Code2, FileSearch, FolderGit2, Gauge, ShieldAlert } from "lucide-react";
 import { apiGet } from "../api";
@@ -31,6 +31,24 @@ export function RunsPage() {
     }
     setSearchParams(next, { replace });
   };
+  // Typing stays local and debounces into the URL: setSearchParams is a
+  // transition, and driving the input straight from it can revert keystrokes.
+  const [searchDraft, setSearchDraft] = useState(query);
+  const pushedQuery = useRef(query);
+  useEffect(() => {
+    if (query === pushedQuery.current) return;
+    pushedQuery.current = query;
+    setSearchDraft(query);
+  }, [query]);
+  useEffect(() => {
+    if (searchDraft === pushedQuery.current) return;
+    const timer = setTimeout(() => {
+      pushedQuery.current = searchDraft;
+      updateUrl({ q: searchDraft, offset: 0 }, true);
+    }, 250);
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchDraft]);
   const runs = useApi<RunsResponse>(
     (signal) => apiGet<RunsResponse>(`/api/projects/${projectId}/runs?limit=${PAGE_SIZE}&offset=${offset}${statusFilter !== "all" ? `&status=${statusFilter}` : ""}${modeFilter !== "all" ? `&mode=${modeFilter}` : ""}`, signal),
     [projectId, offset, statusFilter, modeFilter],
@@ -51,9 +69,11 @@ export function RunsPage() {
   const refresh = (): void => { runs.reload(); overview.reload(); };
 
   useEffect(() => {
-    if (runs.data && offset > 0 && offset >= total) updateUrl({ offset: total > 0 ? Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE : 0 }, true);
+    // Retained rows keep the previous page mounted while a new request is in
+    // flight; correcting against their totals would rewrite the URL twice.
+    if (!runs.stale && runs.data && offset > 0 && offset >= total) updateUrl({ offset: total > 0 ? Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE : 0 }, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runs.data, total, offset]);
+  }, [runs.data, runs.stale, total, offset]);
 
   if (!overview.loading && !overview.error && overview.data && !overview.data.projects.some((candidate) => candidate.projectId === projectId)) {
     return <div className="page-shell"><div className="empty-state is-page"><FileSearch size={22} /><strong>Project not found</strong><span>This project is no longer available.</span><Link className="text-command" to="/projects">Back to projects</Link></div></div>;
@@ -77,7 +97,7 @@ export function RunsPage() {
         <div><Code2 size={17} /><span><small>Project ID</small><strong title={projectId}>{projectId.slice(0, 12)}</strong></span></div>
       </section>
       <section className="data-section" aria-label="Review runs">
-        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={query} onChange={(value) => updateUrl({ q: value, offset: 0 }, true)} label="Search this page" /></div>
+        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={searchDraft} onChange={setSearchDraft} label="Search this page" /></div>
         <div className="run-toolbar">
           <div className="segmented-control" role="group" aria-label="Filter runs by status">{STATUSES.map((status) => (
             <button key={status} type="button" aria-pressed={statusFilter === status} className={statusFilter === status ? "is-active" : ""} onClick={() => updateUrl({ status, offset: 0 })}>{status === "all" ? "All runs" : status[0].toUpperCase() + status.slice(1)}</button>
