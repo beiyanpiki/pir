@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   Activity,
   ArrowDown,
@@ -30,12 +30,13 @@ import { SessionTimeline, sessionDomId } from "../components/session/SessionTime
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import { RunDetails } from "../components/run-details";
+import { WorkflowTab, workflowSessions } from "../components/workflow";
 import { PageError } from "../components/page-controls";
 import { InspectorToggle } from "../layout/WorkspaceShell";
 import type { ActiveRunView, ProjectSummary, RunDetail, RunEvent, SessionRef } from "../types";
 import { useStickToBottom } from "use-stick-to-bottom";
 
-type InspectorTab = "findings" | "coverage" | "details";
+type InspectorTab = "findings" | "workflow" | "coverage" | "details";
 
 interface Overview {
   projects: ProjectSummary[];
@@ -44,7 +45,21 @@ interface Overview {
 
 export function RunDetailPage() {
   const { projectId = "", runId = "" } = useParams();
-  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("findings");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const inspectorTab: InspectorTab = requestedTab === "workflow" || requestedTab === "coverage" || requestedTab === "details" ? requestedTab : "findings";
+  const selectedSession = searchParams.get("session");
+  const selectedFinding = searchParams.get("finding");
+  const updateQuery = useCallback((changes: Record<string, string | null>) => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      for (const [key, value] of Object.entries(changes)) {
+        if (value === null) next.delete(key);
+        else next.set(key, value);
+      }
+      return next;
+    });
+  }, [setSearchParams]);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
   const [narrowInspector, setNarrowInspector] = useState(() => window.innerWidth < 1280);
   const inspectorRef = useRef<HTMLElement | null>(null);
@@ -151,6 +166,16 @@ export function RunDetailPage() {
   // While the SSE replay has not landed yet, hold the stream on a spinner
   // instead of flashing the settled "no transcripts" state for a live run.
   const awaitingLive = ongoing && liveEvents === null && sseStatus !== "unavailable" && sseStatus !== "error";
+  const workflow = useMemo(() => workflowSessions(liveEvents, detail.data?.sessions ?? []), [liveEvents, detail.data?.sessions]);
+  useEffect(() => {
+    if (!selectedSession) return;
+    const target = document.getElementById(`session-${selectedSession.replace(/[^a-zA-Z0-9_-]/g, "-")}`);
+    target?.scrollIntoView({ block: "start" });
+  }, [selectedSession, liveEvents, detail.data?.sessions, inspectorTab]);
+  useEffect(() => {
+    if (inspectorTab !== "findings" || !selectedFinding) return;
+    document.getElementById(`finding-${selectedFinding}`)?.scrollIntoView({ block: "center" });
+  }, [inspectorTab, selectedFinding, detail.data?.findings]);
 
   if (detail.loading && !detail.data) {
     return <div className="page-shell"><div className="loading-state is-page"><span className="pir-mini-spinner" /> Loading review run…</div></div>;
@@ -213,7 +238,7 @@ export function RunDetailPage() {
       )}
 
       <div className={`run-workspace ${inspectorOpen ? "has-inspector" : ""}`}>
-        <SessionRail sessions={detail.data.sessions} liveEvents={liveEvents} />
+        <SessionRail sessions={detail.data.sessions} liveEvents={liveEvents} onSession={(key) => updateQuery({ tab: "workflow", session: key })} />
 
         <section className="run-stream" aria-label="Review execution stream">
           <div className="run-scroll" ref={streamSticky.scrollRef}>
@@ -252,9 +277,14 @@ export function RunDetailPage() {
               role="tab"
               aria-selected={activeInspectorTab === "findings"}
               className={activeInspectorTab === "findings" ? "is-active" : ""}
-              onClick={() => setInspectorTab("findings")}
+              onClick={() => updateQuery({ tab: "findings" })}
             >
               <ShieldAlert size={14} /> Findings <span>{detail.data.findings.total}</span>
+            </button>
+            <button type="button" role="tab" aria-selected={activeInspectorTab === "workflow"}
+              className={activeInspectorTab === "workflow" ? "is-active" : ""}
+              onClick={() => updateQuery({ tab: "workflow" })}>
+              <ListTree size={14} /> Workflow <span>{workflow.length}</span>
             </button>
             {isAudit && (
               <button
@@ -262,7 +292,7 @@ export function RunDetailPage() {
                 role="tab"
                 aria-selected={activeInspectorTab === "coverage"}
                 className={activeInspectorTab === "coverage" ? "is-active" : ""}
-                onClick={() => setInspectorTab("coverage")}
+                onClick={() => updateQuery({ tab: "coverage" })}
               >
                 <Gauge size={14} /> Coverage
               </button>
@@ -272,7 +302,7 @@ export function RunDetailPage() {
               role="tab"
               aria-selected={activeInspectorTab === "details"}
               className={activeInspectorTab === "details" ? "is-active" : ""}
-              onClick={() => setInspectorTab("details")}
+              onClick={() => updateQuery({ tab: "details" })}
             >
               <Info size={14} /> Details
             </button>
@@ -281,7 +311,12 @@ export function RunDetailPage() {
             </button>
           </div>
           <div className="inspector-content">
-            {activeInspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} />}
+            {activeInspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} selectedFinding={selectedFinding} />}
+            {activeInspectorTab === "workflow" && <WorkflowTab sessions={workflow} selected={selectedSession}
+              onSession={(key) => updateQuery({ tab: "workflow", session: key })}
+              onFinding={(id) => updateQuery({ tab: "findings", finding: id })}
+              role={searchParams.get("role") ?? "all"} status={searchParams.get("status") ?? "all"} query={searchParams.get("q") ?? ""}
+              onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value })} />}
             {activeInspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
             {activeInspectorTab === "details" && <RunDetails detail={detail.data} />}
           </div>
@@ -294,9 +329,11 @@ export function RunDetailPage() {
 function SessionRail({
   sessions,
   liveEvents,
+  onSession,
 }: {
   sessions: SessionRef[];
   liveEvents: RunEvent[] | null;
+  onSession: (key: string) => void;
 }) {
   const liveSessions = useMemo(() => {
     const persisted = new Set(sessions.map((session) => sessionIdentity(session)));
@@ -313,6 +350,7 @@ function SessionRail({
   }, [sessions]);
 
   const jumpTo = (session: SessionRef | { sessionId: string; transcriptFile?: string }): void => {
+    onSession(sessionIdentity(session));
     const target = document.getElementById(sessionDomId(session));
     target?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
