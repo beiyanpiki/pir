@@ -45,6 +45,11 @@ export interface RunSummary {
   totalTokens: number | null;
   cost: number | null;
   transcriptsAvailable: boolean;
+  verifierModel: string | null;
+  runVerdict: string | null;
+  incomplete: boolean;
+  stoppedBecause: string | null;
+  lastUpdatedAt: number | null;
 }
 
 export interface FindingSummary {
@@ -58,6 +63,7 @@ export interface FindingSummary {
   round: number;
   createdAt: number;
   evidenceCount: number;
+  confidence: number | null;
 }
 
 export interface FindingView {
@@ -77,6 +83,8 @@ export interface FindingView {
   verifierRationale: string | null;
   round: number;
   createdAt: number;
+  confidence: number | null;
+  relatedSessions: Array<{ sessionKey: string; relation: "candidate" | "verification"; originalDisplayId?: string }>;
 }
 
 export interface SessionRef {
@@ -115,6 +123,20 @@ export interface RunDetail {
   /** False when the run predates transcripts (nothing to replay). */
   transcriptsAvailable: boolean;
 }
+
+export interface ChangeCoverageFileView { path: string; covered: number; total: number }
+export interface ChangeCoverageSummaryView { hunksTotal: number; hunksCovered: number; filesTotal: number; filesCovered: number; files: ChangeCoverageFileView[] }
+export interface AuditUnitView { id: string; module: string; state: string; reason?: string; files: number; attempts: number }
+export interface AuditFileCoverageView { path: string; blobId: string; state: string; reason?: string; rangesTotal: number; rangesReviewed: number }
+export interface AuditCoverageSummaryView {
+  filesTotal: number; filesNotSelected: number; filesExcluded: number; filesInScope: number;
+  filesReviewed: number; filesPartial: number; filesUnreviewed: number; filesBlocked: number; filesFailed: number;
+  batchesTotal: number; batchesCompleted: number; batchesBlocked: number; batchesFailed: number;
+}
+export type CoverageView =
+  | { mode: "change"; available: true; summary: ChangeCoverageSummaryView; files: ChangeCoverageFileView[] }
+  | { mode: "audit"; available: true; summary: AuditCoverageSummaryView; units: AuditUnitView[]; files: AuditFileCoverageView[]; target: unknown }
+  | { mode: "change" | "audit"; available: false; reason: "not-recorded" | "unavailable" };
 
 const PROJECT_ID_PATTERN = /^[0-9a-f]{64}$/;
 const SUMMARY_CACHE_TTL_MS = 5_000;
@@ -265,6 +287,8 @@ interface RawRunRow {
   rejected: number;
   uncertain: number;
   notes: string | null;
+  target?: string | null;
+  updated_at?: number | null;
 }
 
 function manifestFor(stateRoot: string, projectId: string, runId: string): RunManifest | null {
@@ -301,6 +325,11 @@ function toRunSummary(row: RawRunRow, stateRoot: string, projectId: string): Run
     totalTokens: manifest?.usage?.totalTokens ?? null,
     cost: manifest?.usage?.cost ?? null,
     transcriptsAvailable: existsSync(path.join(stateRoot, projectId, "transcripts", row.id)),
+    verifierModel: manifest?.verifierModel ?? null,
+    runVerdict: manifest?.incomplete ? "incomplete" : manifest?.runVerdict === "correct" ? "clean" : manifest?.runVerdict === "incorrect" ? "incorrect" : manifest?.runVerdict ? "unknown" : null,
+    incomplete: manifest?.incomplete ?? row.status === "incomplete",
+    stoppedBecause: manifest?.stoppedBecause ?? row.notes ?? null,
+    lastUpdatedAt: row.updated_at ?? manifest?.finishedAt ?? row.finished_at ?? row.started_at,
   };
 }
 
@@ -355,6 +384,7 @@ interface RawFindingRow {
   verifier_rationale: string | null;
   round: number;
   created_at: number;
+  confidence?: number | null;
 }
 
 interface RawEvidenceRow {
@@ -399,6 +429,8 @@ function toFindingView(row: RawFindingRow, evidenceRows: RawEvidenceRow[]): Find
     verifierRationale: row.verifier_rationale,
     round: row.round,
     createdAt: row.created_at,
+    confidence: row.confidence ?? null,
+    relatedSessions: [],
   };
 }
 
@@ -411,6 +443,7 @@ interface RawSummaryRow {
   status: string;
   round: number;
   created_at: number;
+  confidence?: number | null;
 }
 
 const FINDINGS_ORDER = "ORDER BY severity, created_at";
@@ -425,7 +458,7 @@ function findingSummaries(
   const limit = options.limit !== undefined ? Math.min(Math.max(options.limit, 1), 500) : -1;
   const offset = options.offset !== undefined ? Math.max(options.offset, 0) : 0;
   const rows = db
-    .prepare(`SELECT id, display_id, title, category, severity, status, round, created_at FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
+    .prepare(`SELECT * FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
     .all(runId, limit, offset) as unknown as RawSummaryRow[];
   const counts = new Map<string, number>();
   for (const row of db
@@ -445,6 +478,7 @@ function findingSummaries(
       round: row.round,
       createdAt: row.created_at,
       evidenceCount: counts.get(row.id) ?? 0,
+      confidence: row.confidence ?? null,
     })),
   };
 }
@@ -455,11 +489,11 @@ function runExists(db: DatabaseSync, runId: string): boolean {
 
 /** One finding with its full evidence — the expand-a-row payload. */
 function findingView(db: DatabaseSync, runId: string, findingId: string): FindingView | null {
-  const row = db.prepare("SELECT * FROM findings WHERE run_id = ? AND id = ?").get(runId, findingId) as unknown as RawFindingRow | undefined;
+  const row = db.prepare("SELECT * FROM findings WHERE run_id = ? AND (id = ? OR display_id = ?)").get(runId, findingId, findingId) as unknown as RawFindingRow | undefined;
   if (!row) return null;
   const evidence = db
     .prepare("SELECT kind, path, start_line, end_line, excerpt, description FROM finding_evidence WHERE finding_id = ? ORDER BY created_at")
-    .all(findingId) as unknown as RawEvidenceRow[];
+    .all(row.id) as unknown as RawEvidenceRow[];
   return toFindingView(row, evidence);
 }
 
@@ -534,7 +568,17 @@ export function findingById(
   const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
   return withDb(dbPath, (db) => {
     if (!runExists(db, runId)) return null;
-    return findingView(db, runId, findingId);
+    const view = findingView(db, runId, findingId);
+    if (!view) return null;
+    const manifest = manifestFor(stateRoot, projectId, runId);
+    view.relatedSessions = (manifest?.sessions ?? []).flatMap<FindingView["relatedSessions"][number]>((session) => {
+      const key = `persisted:${session.file}`;
+      const mapped = session.idMap?.find((entry) => entry.to === view.displayId);
+      if (session.sessionKind === "verifier" && session.displayId === view.displayId) return [{ sessionKey: key, relation: "verification" as const }];
+      if (session.sessionKind === "reviewer" && mapped) return [{ sessionKey: key, relation: "candidate" as const, originalDisplayId: mapped.from }];
+      return [];
+    });
+    return view;
   });
 }
 
@@ -561,17 +605,61 @@ export async function readTranscript(
   let stats;
   try {
     stats = await stat(resolved);
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
   if (!stats.isFile()) return null;
   const etag = `"tx-${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
-  try {
-    const payload = JSON.parse(await readFile(resolved, "utf8"));
-    return { payload, etag };
-  } catch {
-    return null;
-  }
+  const payload: unknown = JSON.parse(await readFile(resolved, "utf8"));
+  return { payload, etag };
+}
+
+
+function parseJsonRecord(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "string") return null;
+  try { const value = JSON.parse(raw); return value && typeof value === "object" ? value as Record<string, unknown> : null; } catch { return null; }
+}
+
+/** Read the mode-specific coverage artifact without converting missing data to zero. */
+export function coverageFor(projectId: string, runId: string, stateRoot = pirStateBase()): CoverageView | null {
+  if (!isValidProjectId(projectId) || !/^[\w-]+$/.test(runId)) return null;
+  const manifest = manifestFor(stateRoot, projectId, runId);
+  const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
+  return withDb(dbPath, (db) => {
+    const row = db.prepare("SELECT * FROM review_runs WHERE id = ?").get(runId) as { mode?: string; target?: string | null } | undefined;
+    if (!row) return null;
+    const mode = row.mode === "audit" ? "audit" : "change";
+    if (mode === "change") {
+      const summary = manifest?.changeCoverage;
+      if (!summary) return { mode, available: false, reason: "not-recorded" };
+      return { mode, available: true, summary, files: summary.files ?? [] };
+    }
+    let summary = manifest?.coverage;
+    let units: AuditUnitView[] = [];
+    let files: AuditFileCoverageView[] = [];
+    try {
+      units = (db.prepare("SELECT unit_id, state, reason, files, attempts FROM audit_work_units WHERE run_id = ? ORDER BY unit_id").all(runId) as Array<Record<string, unknown>>).map((u) => ({
+        id: String(u.unit_id), module: String(u.unit_id), state: String(u.state), ...(u.reason ? { reason: String(u.reason) } : {}), files: Number(u.files ?? 0), attempts: Number(u.attempts ?? 0),
+      }));
+      files = (db.prepare("SELECT path, blob_id, state, reason, ranges_total, ranges_reviewed FROM audit_file_coverage WHERE run_id = ? ORDER BY path").all(runId) as Array<Record<string, unknown>>).map((f) => ({
+        path: String(f.path), blobId: String(f.blob_id), state: String(f.state), ...(f.reason ? { reason: String(f.reason) } : {}), rangesTotal: Number(f.ranges_total ?? 0), rangesReviewed: Number(f.ranges_reviewed ?? 0),
+      }));
+    } catch {
+      return { mode, available: false, reason: "unavailable" };
+    }
+    if (!summary && files.length === 0 && units.length === 0) return { mode, available: false, reason: "not-recorded" };
+    if (!summary) {
+      const count = (state: string) => files.filter((f) => f.state === state).length;
+      summary = {
+        filesTotal: files.length, filesNotSelected: count("notSelected"), filesExcluded: count("excluded"),
+        filesInScope: files.filter((f) => !["notSelected", "excluded"].includes(f.state)).length,
+        filesReviewed: count("reviewed"), filesPartial: count("partial"), filesUnreviewed: count("unreviewed"), filesBlocked: count("blocked"), filesFailed: count("failed"),
+        batchesTotal: units.length, batchesCompleted: units.filter((u) => u.state === "reviewed").length, batchesBlocked: units.filter((u) => u.state === "blocked").length, batchesFailed: units.filter((u) => u.state === "failed").length,
+      };
+    }
+    return { mode, available: true, summary, units, files, target: parseJsonRecord(row.target) ?? null };
+  });
 }
 
 export function recentFeedback(projectId: string, limit = 20, stateRoot = pirStateBase()): FeedbackEventView[] | null {
