@@ -12,7 +12,7 @@ Read package.json, the lockfile, and the framework config at head:
 
 ## Claim playbooks
 
-- Hydration mismatch: name the two divergent outputs (server string vs client string) and the reachable render producing each. suppressHydrationWarning scoped to exactly the mismatching element is accepted mitigation; on a wrapper it hides siblings and confirms.
+- Hydration mismatch: name the two divergent outputs (server string vs client string) and the reachable render producing each. suppressHydrationWarning covers only that element's own attribute/text diff — no descendants — so claims that a wrapper "hides" descendant mismatches reject; the flag burying a real divergence the code introduced confirms.
 - Stale-response race: construct both orderings (slow A, fast B) and show A's write lands last with no guard; an AbortController wired to cleanup/dep change, an ignore flag, or a seq check rejects. StrictMode double-invoke is dev-only, not a production path.
 - Leak: show the long-lived owner (window, document, module store) and the missing teardown on every path; a listener whose owner dies with the component, or accumulation only under HMR, rejects.
 - Stale closure: show the value the closed-over binding holds at the reachable execution vs the fresher value the effect needs; a dep entry or ref read rejects.

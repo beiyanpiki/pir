@@ -7,7 +7,7 @@ These directions only sharpen where to look; every finding still needs the same 
 - Non-deterministic render output: Date.now()/Math.random()/crypto.randomUUID(), timezone- or locale-dependent formatting (toLocaleString, Intl), or reads of window.innerWidth/media during render — server HTML and first client render diverge.
 - A `typeof window !== "undefined"` branch (or import.meta.env.SSR) that changes rendered markup is itself the mismatch, even when both branches work.
 - Browser-only APIs (window, document, localStorage, matchMedia, observers) read during render instead of in an effect/onMounted: the server render crashes or skips, then the client re-renders differently.
-- suppressHydrationWarning on a wrapper instead of the one known-mismatched element: it silences the whole subtree and hides the next real defect.
+- suppressHydrationWarning used to bury a mismatch instead of fixing its source: it silences only that element's own attribute/text diff (no descendants), so the underlying server/client divergence stays. Next's <html suppressHydrationWarning> against extension noise is established use, not a defect.
 - useSyncExternalStore whose getServerSnapshot diverges from the first client getSnapshot.
 - Invalid nesting — <div>/<ul> inside <p>, <a> inside <a>: the browser reparses server HTML before hydration attaches, so the client tree differs.
 
