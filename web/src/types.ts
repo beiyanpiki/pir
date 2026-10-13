@@ -85,6 +85,9 @@ export interface FindingView {
 
 export interface SessionRef {
   file: string;
+  transcriptFile?: string;
+  /** Stable live identity when available in newer manifests. */
+  sessionId?: string;
   sessionKind: "reviewer" | "verifier" | "unknown";
   round?: number;
   unitId?: string;
@@ -94,6 +97,7 @@ export interface SessionRef {
   angle?: string;
   /** F1: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
   idMap?: Array<{ from: string; to: string }>;
+  findingIdMap?: Array<{ from: string; to: string }>;
 }
 
 export interface RoundInfo {
@@ -168,6 +172,7 @@ export interface LiveSessionState {
   attempt?: number;
   displayId?: string;
   angle?: string;
+  transcriptFile?: string;
   prompt: string;
   startedAt: number;
   endedAt: number | null;
@@ -242,6 +247,7 @@ export type RunEvent =
       attempt?: number;
       displayId?: string;
       angle?: string;
+      transcriptFile?: string;
       prompt: string;
     })
   | (RunEventCommon & { kind: "session-delta"; sessionId: string; deltaType: "thinking" | "text"; text: string; /** Coalesced by the server: text spans the streak from its start, seq is the newest. */ cumulative?: boolean })
@@ -258,7 +264,7 @@ export type RunEvent =
       findings: Array<{ displayId: string | null; title: string; severity: string; status: string }>;
     })
   | { kind: "ready"; runId: string | null }
-  | { kind: "unavailable"; runId: string };
+  | { kind: "unavailable"; runId: string | null };
 
 // ---------------------------------------------------------------------------
 // Session transcripts — SDK message shapes as persisted by transcripts.ts.
