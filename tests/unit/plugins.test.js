@@ -87,6 +87,34 @@ test("renderGuidance returns empty string without packs and truncates over budge
   assert.match(rendered, /\[verbose@9\.9\.9, manual\]/);
 });
 
+test("renderGuidance scales the default budget with the number of contributing packs", () => {
+  // Two near-budget packs: a shared 8000-char pool would truncate the first
+  // one's tail (the golang+typescript co-activation case on every monorepo).
+  const mkPack = (name, char) => ({
+    name,
+    title: name,
+    version: "1.0.0",
+    markerFiles: [`${name}.txt`],
+    extensions: [],
+    reviewerGuidance: char.repeat(GUIDANCE_BUDGET_CHARS - 100),
+    verifierGuidance: "y",
+  });
+  const entries = [
+    { pack: mkPack("pack-a", "a"), activation: "manual" },
+    { pack: mkPack("pack-b", "b"), activation: "manual" },
+  ];
+  const rendered = renderGuidance(entries, "reviewer");
+  assert.ok(!rendered.includes("TRUNCATED"), `two packs must not truncate (got ${rendered.length} chars)`);
+  assert.ok(rendered.includes("a".repeat(50)) && rendered.includes("b".repeat(50)), "both packs' bodies present in full");
+  // An explicit budget still caps the output: callers can opt back into a hard pool.
+  const capped = renderGuidance(entries, "reviewer", GUIDANCE_BUDGET_CHARS);
+  assert.match(capped, /TRUNCATED at 8000 characters/);
+  // Audit mode scales with packs that actually ship audit variants, not raw entries.
+  const withAudit = entries.map(({ pack }) => ({ pack: { ...pack, reviewerAuditGuidance: pack.reviewerGuidance } , activation: "manual" }));
+  const auditOnly = renderGuidance(withAudit, "reviewer", undefined, "audit");
+  assert.ok(!auditOnly.includes("TRUNCATED"), `audit contributors must not truncate (got ${auditOnly.length} chars)`);
+});
+
 test("detectPacks activates by marker file at the pinned head commit, not the working tree", async () => {
   const packs = loadBuiltInPacks();
   const repo = createTempGitRepo("pir-plugins-detect-");
