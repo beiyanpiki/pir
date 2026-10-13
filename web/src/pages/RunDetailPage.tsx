@@ -24,16 +24,16 @@ import { apiGet } from "../api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../format";
 import { useApi, useRunEvents } from "../hooks";
 import { mergeEvents } from "../live-fold";
-import { createLiveRunProjection, reduceLiveRunProjection, sessionIdentity } from "../live-projection";
+import { createLiveRunProjection, reduceLiveRunProjection, sessionAnchor, workflowSessions, type WorkflowSession } from "../live-projection";
 import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
-import { SessionTimeline, sessionDomId } from "../components/session/SessionTimeline";
+import { SessionTimeline } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import { RunDetails } from "../components/run-details";
-import { WorkflowTab, workflowSessions } from "../components/workflow";
+import { WorkflowTab } from "../components/workflow";
 import { PageError } from "../components/page-controls";
 import { InspectorToggle } from "../layout/WorkspaceShell";
-import type { ActiveRunView, ProjectSummary, RunDetail, RunEvent, SessionRef } from "../types";
+import type { ActiveRunView, ProjectSummary, RunDetail, RunEvent } from "../types";
 import { useStickToBottom } from "use-stick-to-bottom";
 
 type InspectorTab = "findings" | "workflow" | "coverage" | "details";
@@ -66,16 +66,29 @@ export function RunDetailPage() {
   const inspectorOpenerRef = useRef<HTMLElement | null>(null);
   const detail = useApi<RunDetail>((signal) => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`, signal), [projectId, runId]);
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
-
   const run = detail.data?.run;
   const live = detail.data?.live ?? null;
-  const ongoing = (run?.status === "running" && run.finishedAt === null) || (live !== null && live.end === null);
   const [liveEvents, setLiveEvents] = useState<RunEvent[] | null>(null);
   const [projection, setProjection] = useState(() => createLiveRunProjection(runId));
+  const ongoing = projection.end === null && projection.executionState !== "completed" &&
+    projection.executionState !== "incomplete" && projection.executionState !== "failed" &&
+    ((run?.status === "running" && run.finishedAt === null) || (live !== null && live.end === null));
   const maxSeqRef = useRef(0);
   const pendingLiveEventsRef = useRef<RunEvent[]>([]);
   const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const streamSticky = useStickToBottom({ initial: "smooth", resize: "smooth" });
+  const calibrationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastCalibrationRef = useRef(0);
+  const receivedReadyRef = useRef(false);
+  const streamSticky = useStickToBottom({ initial: selectedSession ? false : "smooth", resize: "smooth" });
+  const { stopScroll } = streamSticky;
+  const calibrate = useCallback(() => {
+    if (calibrationTimerRef.current !== null) return;
+    calibrationTimerRef.current = setTimeout(() => {
+      calibrationTimerRef.current = null;
+      lastCalibrationRef.current = Date.now();
+      detail.reload();
+    }, Math.max(240, 1_000 - (Date.now() - lastCalibrationRef.current)));
+  }, [detail.reload]);
 
   useEffect(() => {
     const update = (): void => setNarrowInspector(window.innerWidth < 1280);
@@ -120,11 +133,21 @@ export function RunDetailPage() {
   // replay buffer), so switching runs must reset the sequence cursor — a stale
   // high-water mark would silently drop the next run's early events.
   useEffect(() => {
+    if (liveFlushTimerRef.current !== null) clearTimeout(liveFlushTimerRef.current);
+    if (calibrationTimerRef.current !== null) clearTimeout(calibrationTimerRef.current);
+    liveFlushTimerRef.current = null;
+    calibrationTimerRef.current = null;
+    lastCalibrationRef.current = 0;
+    receivedReadyRef.current = false;
     maxSeqRef.current = 0;
     pendingLiveEventsRef.current = [];
     setLiveEvents(null);
     setProjection(createLiveRunProjection(runId));
-  }, [runId]);
+    return () => {
+      if (liveFlushTimerRef.current !== null) clearTimeout(liveFlushTimerRef.current);
+      if (calibrationTimerRef.current !== null) clearTimeout(calibrationTimerRef.current);
+    };
+  }, [projectId, runId]);
 
   useEffect(() => {
     if (detail.data) setProjection((previous) => reduceLiveRunProjection(previous, { type: "detail", detail: detail.data! }));
@@ -140,15 +163,20 @@ export function RunDetailPage() {
   }, []);
 
   const sseStatus = useRunEvents(ongoing ? runId : null, true, (event) => {
-    if (event.kind === "ready" || event.kind === "unavailable") return;
-    if (event.seq <= maxSeqRef.current) return;
+    if (event.kind === "ready") {
+      if (receivedReadyRef.current) calibrate();
+      receivedReadyRef.current = true;
+      return;
+    }
+    if (event.kind === "unavailable") { calibrate(); return; }
+    if (event.runId !== runId || event.projectId !== projectId || event.seq <= maxSeqRef.current) return;
     maxSeqRef.current = event.seq;
     pendingLiveEventsRef.current.push(event);
-    if (liveFlushTimerRef.current === null) {
-      liveFlushTimerRef.current = setTimeout(flushLiveEvents, 80);
-    }
-    if (event.kind === "run-end") {
-      setTimeout(() => detail.reload(), 800);
+    if (liveFlushTimerRef.current === null) liveFlushTimerRef.current = setTimeout(flushLiveEvents, 80);
+    if (event.kind === "run-end" || (event.kind === "progress" && event.phase === "round-end") ||
+        (event.kind === "session-end" && [...(liveEvents ?? []), ...pendingLiveEventsRef.current]
+          .some((start) => start.kind === "session-start" && start.sessionId === event.sessionId && start.sessionKind === "verifier"))) {
+      calibrate();
     }
   });
 
@@ -156,22 +184,34 @@ export function RunDetailPage() {
     setProjection((previous) => reduceLiveRunProjection(previous, { type: "connection", state: sseStatus }));
   }, [sseStatus]);
 
-  useEffect(() => () => {
-    if (liveFlushTimerRef.current !== null) clearTimeout(liveFlushTimerRef.current);
-  }, []);
-
   const now = useTicker(ongoing ? 1000 : 0);
-  const displayStatus = projection.executionState !== "unknown" ? projection.executionState : deriveStatus(run, live, sseStatus);
+  const displayStatus = projection.executionState !== "unknown" ? projection.executionState : deriveStatus(run, live);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
   // While the SSE replay has not landed yet, hold the stream on a spinner
   // instead of flashing the settled "no transcripts" state for a live run.
-  const awaitingLive = ongoing && liveEvents === null && sseStatus !== "unavailable" && sseStatus !== "error";
+  const awaitingLive = ongoing && liveEvents === null && sseStatus !== "unavailable" && sseStatus !== "error" && sseStatus !== "unauthorized";
   const workflow = useMemo(() => workflowSessions(liveEvents, detail.data?.sessions ?? []), [liveEvents, detail.data?.sessions]);
+  const selectedSessionKey = workflow.find((session) => session.aliases.includes(selectedSession ?? ""))?.key ?? selectedSession;
   useEffect(() => {
-    if (!selectedSession) return;
-    const target = document.getElementById(`session-${selectedSession.replace(/[^a-zA-Z0-9_-]/g, "-")}`);
-    target?.scrollIntoView({ block: "start" });
-  }, [selectedSession, liveEvents, detail.data?.sessions, inspectorTab]);
+    if (!selectedSessionKey) return;
+    stopScroll();
+    const jump = (): boolean => {
+      const target = document.getElementById(sessionAnchor(selectedSessionKey));
+      if (!target) return false;
+      target.scrollIntoView({ block: "start" });
+      return true;
+    };
+    if (jump()) return;
+    // The incremental session fold mounts one effect after the replay index.
+    const observer = new MutationObserver(() => { if (jump()) observer.disconnect(); });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [selectedSessionKey, runId, stopScroll]);
+  const selectSession = (key: string): void => {
+    stopScroll();
+    updateQuery({ tab: "workflow", session: key });
+    document.getElementById(sessionAnchor(key))?.scrollIntoView({ block: "start" });
+  };
   useEffect(() => {
     if (inspectorTab !== "findings" || !selectedFinding) return;
     document.getElementById(`finding-${selectedFinding}`)?.scrollIntoView({ block: "center" });
@@ -180,7 +220,7 @@ export function RunDetailPage() {
   if (detail.loading && !detail.data) {
     return <div className="page-shell"><div className="loading-state is-page"><span className="pir-mini-spinner" /> Loading review run…</div></div>;
   }
-  if (detail.error) {
+  if (detail.error && !detail.data) {
     return <div className="page-shell"><PageError error={detail.error} retry={detail.reload} /></div>;
   }
   if (!run || !detail.data) {
@@ -233,12 +273,17 @@ export function RunDetailPage() {
         <div><Code2 size={14} /><span><small>Model</small><strong>{run.model ?? manifest?.model ?? "pi default"}</strong></span></div>
       </section>
 
+      {ongoing && sseStatus !== "open" && <div className="notice-bar" role="status"><Info size={14} />
+        {sseStatus === "unavailable" ? "Live connection unavailable. Run state is awaiting confirmation." :
+          sseStatus === "error" || sseStatus === "closed" ? "Live connection disconnected. Reconnecting; run state is awaiting confirmation." : "Connecting to live stream…"}
+      </div>}
+      {detail.error && <div className="notice-bar" role="status"><Info size={14} /> {detail.error} <button type="button" className="text-command" onClick={detail.reload}>Retry</button></div>}
       {!run.transcriptsAvailable && (
         <div className="notice-bar"><Info size={14} /> Transcripts were not captured for this run. Findings and run metadata are still available.</div>
       )}
 
       <div className={`run-workspace ${inspectorOpen ? "has-inspector" : ""}`}>
-        <SessionRail sessions={detail.data.sessions} liveEvents={liveEvents} onSession={(key) => updateQuery({ tab: "workflow", session: key })} />
+        <SessionRail sessions={workflow} selected={selectedSessionKey} onSession={selectSession} />
 
         <section className="run-stream" aria-label="Review execution stream">
           <div className="run-scroll" ref={streamSticky.scrollRef}>
@@ -313,7 +358,7 @@ export function RunDetailPage() {
           <div className="inspector-content">
             {activeInspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} selectedFinding={selectedFinding} />}
             {activeInspectorTab === "workflow" && <WorkflowTab sessions={workflow} selected={selectedSession}
-              onSession={(key) => updateQuery({ tab: "workflow", session: key })}
+              onSession={selectSession}
               onFinding={(id) => updateQuery({ tab: "findings", finding: id })}
               role={searchParams.get("role") ?? "all"} status={searchParams.get("status") ?? "all"} query={searchParams.get("q") ?? ""}
               onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value })} />}
@@ -326,82 +371,42 @@ export function RunDetailPage() {
   );
 }
 
-function SessionRail({
-  sessions,
-  liveEvents,
-  onSession,
-}: {
-  sessions: SessionRef[];
-  liveEvents: RunEvent[] | null;
+function SessionRail({ sessions, selected, onSession }: {
+  sessions: WorkflowSession[];
+  selected: string | null;
   onSession: (key: string) => void;
 }) {
-  const liveSessions = useMemo(() => {
-    const persisted = new Set(sessions.map((session) => sessionIdentity(session)));
-    return (liveEvents ?? []).filter((event): event is Extract<RunEvent, { kind: "session-start" }> => event.kind === "session-start")
-      .filter((event) => !persisted.has(sessionIdentity(event)));
-  }, [liveEvents, sessions]);
   const grouped = useMemo(() => {
-    const rounds = new Map<number, SessionRef[]>();
+    const rounds = new Map<number, WorkflowSession[]>();
     for (const session of sessions) {
       const round = session.round ?? 0;
       rounds.set(round, [...(rounds.get(round) ?? []), session]);
     }
     return [...rounds.entries()].sort(([a], [b]) => a - b);
   }, [sessions]);
-
-  const jumpTo = (session: SessionRef | { sessionId: string; transcriptFile?: string }): void => {
-    onSession(sessionIdentity(session));
-    const target = document.getElementById(sessionDomId(session));
-    target?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
-
-  return (
-    <aside className="session-rail" aria-label="Review sessions">
-      <div className="session-rail-head">
-        <span><SquareTerminal size={14} /> Sessions</span>
-        <span>{sessions.length + liveSessions.length}</span>
-      </div>
-
-      {grouped.length === 0 && liveSessions.length === 0 && (
-        <div className="sidebar-empty">No session index</div>
-      )}
-
-      {grouped.map(([round, roundSessions]) => (
-        <section className="session-round" key={round}>
-          <div className="session-round-label">{round === 0 ? "Sessions" : `Round ${round}`}</div>
-          {roundSessions.map((session) => (
-            <button key={session.file} type="button" className="session-link" onClick={() => jumpTo(session)}>
-              <span className={`session-role-icon is-${session.sessionKind}`}>
-                {session.sessionKind === "reviewer" ? <CircleDot size={13} /> : <ShieldCheck size={13} />}
-              </span>
-              <span>
-                <strong>{session.displayId ?? (session.sessionKind === "reviewer" ? "Reviewer" : "Verifier")}</strong>
-                <small>{session.file}</small>
-              </span>
-            </button>
-          ))}
-        </section>
-      ))}
-
-      {liveSessions.map((session) => (
-        <button key={session.sessionId} type="button" className="session-link is-live" onClick={() => jumpTo(session)}>
-          <span className="live-dot" />
-          <span><strong>Live session</strong><small>{session.sessionId.slice(0, 8)}</small></span>
-        </button>
-      ))}
-    </aside>
-  );
+  return <aside className="session-rail" aria-label="Review sessions">
+    <div className="session-rail-head"><span><SquareTerminal size={14} /> Sessions</span><span>{sessions.length}</span></div>
+    {sessions.length === 0 && <div className="sidebar-empty">No session index</div>}
+    {grouped.map(([round, roundSessions]) => <section className="session-round" key={round}>
+      <div className="session-round-label">{round === 0 ? "Sessions" : `Round ${round}`}</div>
+      {roundSessions.map((session) => <button key={session.key} type="button"
+        className={`session-link ${session.status === "running" ? "is-live" : ""}`}
+        aria-current={selected === session.key ? "true" : undefined} onClick={() => onSession(session.key)}>
+        <span className={`session-role-icon is-${session.kind}`}>
+          {session.kind === "reviewer" ? <CircleDot size={13} /> : <ShieldCheck size={13} />}
+        </span>
+        <span><strong>{session.label}</strong><small>{session.file ?? session.status}</small></span>
+      </button>)}
+    </section>)}
+  </aside>;
 }
 
 function deriveStatus(
   run: RunDetail["run"] | undefined,
   live: RunDetail["live"] | null,
-  sseStatus: string,
 ): string {
   if (live?.end) return live.end.status;
-  if (run?.status === "running" && run.finishedAt === null) {
-    return sseStatus === "open" || sseStatus === "connecting" ? "running" : "interrupted";
-  }
+  if (run?.status === "running" && run.finishedAt === null) return "running";
   return run?.status ?? "unknown";
 }
 
