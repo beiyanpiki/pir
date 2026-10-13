@@ -41,6 +41,10 @@ function runEnd(end: LiveRunMeta["end"]): LiveRunEnd | null {
   return end ? { ...end } : null;
 }
 
+function terminal(state: ExecutionState): boolean {
+  return state === "completed" || state === "incomplete" || state === "failed";
+}
+
 /** Pure reducer for REST snapshots, SSE events, and transport changes. */
 export function reduceLiveRunProjection(state: LiveRunProjection, action: ProjectionAction): LiveRunProjection {
   if (action.type === "connection") return state.connectionState === action.state ? state : { ...state, connectionState: action.state };
@@ -50,7 +54,7 @@ export function reduceLiveRunProjection(state: LiveRunProjection, action: Projec
     if (run.runId !== state.runId) return state;
     const end = state.end ?? runEnd(live?.end ?? null);
     const executionState: ExecutionState = end?.status as ExecutionState
-      ?? (run.status === "running" && run.finishedAt === null ? "running" : run.status as ExecutionState);
+      ?? (terminal(state.executionState) ? state.executionState : run.status as ExecutionState);
     const rounds = [...new Map([...(manifest?.rounds ?? []), ...state.rounds].map((round) => [round.round, round])).values()]
       .sort((a, b) => a.round - b.round);
     const sessions = state.sessions.slice();
@@ -62,7 +66,10 @@ export function reduceLiveRunProjection(state: LiveRunProjection, action: Projec
       if (existing === -1) sessions.push(meta);
       else sessions[existing] = { ...sessions[existing], ...meta, endedAt: sessions[existing].endedAt ?? meta.endedAt };
     }
-    return { ...state, executionState, end, counts: end?.counts ?? state.counts,
+    const counts = end?.counts ?? (terminal(executionState) && run.finishedAt !== null
+      ? { rounds: run.rounds, candidates: run.candidates, confirmed: run.confirmed, rejected: run.rejected, uncertain: run.uncertain, pending: 0 }
+      : state.counts);
+    return { ...state, executionState, end, counts,
       round: Math.max(state.round, run.rounds, ...rounds.map((item) => item.round)), rounds, sessions,
       lastEventAt: Math.max(state.lastEventAt ?? 0, live?.lastEventAt ?? 0) || null };
   }
@@ -70,7 +77,7 @@ export function reduceLiveRunProjection(state: LiveRunProjection, action: Projec
   const event = action.event;
   if (event.kind === "ready" || event.kind === "unavailable" || event.runId !== state.runId || event.seq <= state.lastSeq) return state;
   const next: LiveRunProjection = { ...state, lastSeq: event.seq, lastEventAt: event.ts };
-  if (event.kind === "run-start" && state.end === null) next.executionState = "running";
+  if (event.kind === "run-start" && !terminal(state.executionState)) next.executionState = "running";
   if (event.kind === "progress") {
     next.phase = event.phase;
     if (event.round !== undefined) next.round = Math.max(next.round, event.round);
@@ -111,6 +118,11 @@ export function reduceLiveRunProjection(state: LiveRunProjection, action: Projec
     next.end = state.end;
     next.counts = state.end.counts;
     next.round = state.end.counts.rounds;
+    next.phase = "done";
+  } else if (terminal(state.executionState) && event.kind !== "run-end") {
+    next.executionState = state.executionState;
+    next.counts = state.counts;
+    next.round = state.round;
     next.phase = "done";
   }
   return next;
