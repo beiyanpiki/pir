@@ -44,11 +44,12 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
     const controller = new AbortController();
     let cancelled = false;
     const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    // A different resource invalidates the held data immediately, so a late
+    // response cannot render under another URL. A reload of the same resource
+    // (live recalibration) and a plain filter or page change both keep the
+    // last snapshot visible instead of flashing an empty panel.
     const identityChanged = loadedIdentity.current !== identityKey;
     loadedIdentity.current = identityKey;
-    // A different resource invalidates the held data immediately. This
-    // prevents a late response from briefly rendering data for another URL,
-    // while a plain filter or page change keeps the current rows mounted.
     if (identityChanged) setData(null);
     setError(null);
     setLoading(true);
@@ -95,7 +96,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   return { data, error, loading, stale: settledKey !== resourceKey, reload };
 }
 
-export type SseStatus = "idle" | "connecting" | "open" | "unavailable" | "closed" | "error";
+export type SseStatus = "idle" | "connecting" | "open" | "unavailable" | "closed" | "error" | "unauthorized";
 
 /**
  * Server-sent events over fetch-streaming (so the Authorization header rides
@@ -110,6 +111,7 @@ export function useRunEvents(
   const [status, setStatus] = useState<SseStatus>("idle");
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!enabled || runId === null) {
@@ -137,13 +139,17 @@ export function useRunEvents(
             headers: token ? { authorization: `Bearer ${token}` } : {},
             signal: controller.signal,
           });
+          if (!active) return;
           if (!response.ok || !response.body) {
             if (response.status === 401) {
-              if (active) setStatus("error");
+              setStatus("unauthorized");
+              navigate("/login", {
+                replace: true,
+                state: { from: `${window.location.pathname}${window.location.search}${window.location.hash}` },
+              });
               return;
             }
-            if (active) setStatus("unavailable");
-            return;
+            throw new ApiError("Live stream could not connect", response.status);
           }
 
           const { EventSourceParserStream } = await import("eventsource-parser/stream");
@@ -166,8 +172,11 @@ export function useRunEvents(
               const event = JSON.parse(frame.data) as RunEvent;
               if (event.kind === "ready") {
                 setStatus("open");
+                onEventRef.current(event);
               } else if (event.kind === "unavailable") {
                 setStatus("unavailable");
+                onEventRef.current(event);
+                await reader.cancel();
                 return;
               } else {
                 onEventRef.current(event);
@@ -194,7 +203,7 @@ export function useRunEvents(
       active = false;
       controller.abort();
     };
-  }, [runId, enabled]);
+  }, [runId, enabled, navigate]);
 
   return status;
 }
