@@ -23,13 +23,13 @@ export function RunsPage() {
   const statusFilter = STATUSES.includes(searchParams.get("status") ?? "") ? searchParams.get("status")! : "all";
   const modeFilter = MODES.includes(searchParams.get("mode") ?? "") ? searchParams.get("mode")! : "all";
   const query = searchParams.get("q") ?? "";
-  const updateUrl = (updates: Record<string, string | number | null>): void => {
+  const updateUrl = (updates: Record<string, string | number | null>, replace = false): void => {
     const next = new URLSearchParams(searchParams);
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === "" || (key === "offset" && Number(value) === 0) || (key === "status" && value === "all") || (key === "mode" && value === "all")) next.delete(key);
       else next.set(key, String(value));
     }
-    setSearchParams(next);
+    setSearchParams(next, { replace });
   };
   const runs = useApi<RunsResponse>(
     (signal) => apiGet<RunsResponse>(`/api/projects/${projectId}/runs?limit=${PAGE_SIZE}&offset=${offset}${statusFilter !== "all" ? `&status=${statusFilter}` : ""}${modeFilter !== "all" ? `&mode=${modeFilter}` : ""}`, signal),
@@ -74,7 +74,7 @@ export function RunsPage() {
         <div><Code2 size={17} /><span><small>Project ID</small><strong title={projectId}>{projectId.slice(0, 12)}</strong></span></div>
       </section>
       <section className="data-section" aria-label="Review runs">
-        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={query} onChange={(value) => updateUrl({ q: value, offset: 0 })} label="Search this page" /></div>
+        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={query} onChange={(value) => updateUrl({ q: value, offset: 0 }, true)} label="Search this page" /></div>
         <div className="run-toolbar">
           <div className="segmented-control" role="group" aria-label="Filter runs by status">{STATUSES.map((status) => (
             <button key={status} type="button" aria-pressed={statusFilter === status} className={statusFilter === status ? "is-active" : ""} onClick={() => updateUrl({ status, offset: 0 })}>{status === "all" ? "All runs" : status[0].toUpperCase() + status.slice(1)}</button>

@@ -46,6 +46,41 @@ test("project links update the active sidebar route", async ({ page }) => {
   await expect(page.locator(".sidebar-project.is-active")).toContainText("Project B");
 });
 
+test("overview polling preserves expanded navigation while the refresh is pending", async ({ page }) => {
+  let overviewRequests = 0;
+  let refreshing = false;
+  let release;
+  const pending = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/overview", async (route) => {
+    overviewRequests += 1;
+    if (refreshing) await pending;
+    await route.fulfill({ json: { projects, active: [] } });
+  });
+  await page.goto(`/runs/${projectA}/${runA}`);
+  await expect(page.getByRole("button", { name: "Collapse Project A" })).toBeVisible();
+  await page.getByRole("button", { name: "Collapse Project A" }).click();
+  await page.getByRole("button", { name: "Expand Project B" }).click();
+  await expect(page.locator(`.sidebar-run[href='/runs/${projectB}/${runB}']`)).toBeVisible();
+  const initialRequests = overviewRequests;
+  refreshing = true;
+  await page.waitForTimeout(15_500);
+  await expect.poll(() => overviewRequests).toBeGreaterThan(initialRequests);
+  await expect(page.getByRole("button", { name: "Expand Project A" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Collapse Project B" })).toBeVisible();
+  await expect(page.locator(".sidebar-loading")).toHaveCount(0);
+  release();
+  await expect(page.getByRole("button", { name: "Collapse Project B" })).toBeVisible();
+});
+
+test("typing run search replaces history so Back returns to the prior page", async ({ page }) => {
+  await page.goto("/projects");
+  await page.locator(`.sidebar-project-link[href='/projects/${projectA}']`).click();
+  await page.getByRole("searchbox", { name: "Search this page" }).fill("scope");
+  await expect(page).toHaveURL(/q=scope/);
+  await page.goBack();
+  await expect(page).toHaveURL("http://127.0.0.1:5174/projects");
+});
+
 test("run navigation isolates transcripts with identical file names", async ({ page }) => {
   await page.route("**/api/runs/*/*", (route) => {
     const runId = new URL(route.request().url()).pathname.split("/")[4];

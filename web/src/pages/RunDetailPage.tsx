@@ -90,7 +90,7 @@ export function RunDetailPage() {
       background.forEach((element) => { element.inert = false; });
       inspectorOpenerRef.current?.focus();
     };
-  }, [inspectorOpen, narrowInspector]);
+  }, [inspectorOpen, narrowInspector, detail.data !== null && !detail.error]);
 
   // Live events arrive over SSE only (the REST detail ships metadata, not the
   // replay buffer), so switching runs must reset the sequence cursor — a stale

@@ -22,6 +22,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const lastResourceKey = useRef<string | null>(null);
   const [tick, setTick] = useState(0);
   const navigate = useNavigate();
   const resourceKey = JSON.stringify(deps);
@@ -30,11 +31,13 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
     const controller = new AbortController();
     let cancelled = false;
     const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const resourceChanged = lastResourceKey.current !== resourceKey;
+    lastResourceKey.current = resourceKey;
     // A route change invalidates the previous resource immediately. This
     // prevents a late response from briefly rendering data for another URL.
-    setData(null);
+    if (resourceChanged) setData(null);
     setError(null);
-    setLoadedKey(resourceKey);
+    if (resourceChanged) setLoadedKey(resourceKey);
     setLoading(true);
     fetcher(controller.signal)
       .then((result) => {
