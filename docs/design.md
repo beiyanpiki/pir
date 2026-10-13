@@ -351,7 +351,9 @@ dropped seed repeats it. That is the documented tradeoff of the opt-in; a
 per-project queue lane would remove it if serve ever grows one.
 
 Built-in `frontend`, `golang` and `typescript` packs activate from marker files
-at the selected head, or from `--plugins`. Each provides separate reviewer and
+at the selected head, or from `--plugins`. Markers are repo-relative literal
+paths; a leading `**/` matches at any depth (root included) and a whole-segment
+`*` matches one directory level. Each provides separate reviewer and
 verifier guidance for change and audit modes. A pack without audit variants
 can be detected for an audit but its change guidance is withheld.
 

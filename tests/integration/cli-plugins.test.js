@@ -85,8 +85,9 @@ test("pir plugins list activates frontend by next.config.ts at HEAD", async () =
   try {
     repo.write("package.json", '{ "name": "web", "dependencies": { "next": "15.0.0" } }\n');
     repo.write("next.config.ts", "const config = {};\nexport default config;\n");
+    repo.write("web/vite.config.ts", "import { defineConfig } from 'vite';\nexport default defineConfig({});\n");
     repo.write("app/page.tsx", "export default function Page() { return <p>hi</p>; }\n");
-    repo.commit("add next app");
+    repo.commit("add next app with a nested vite workspace");
 
     const json = await pir(["plugins", "list", "--json", "--cwd", repo.dir]);
     const parsed = JSON.parse(json.stdout);

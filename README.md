@@ -198,9 +198,10 @@ change reviews; audits are bounded by work units and the optional
 list of built-in packs to override detection. The shipped Frontend, Go and
 TypeScript packs support both modes; the frontend pack auto-activates on
 framework markers (`next.config.*`, `nuxt.config.*`, `svelte.config.*`,
-`astro.config.*`, `angular.json`, `vite.config.*`, `index.html`) and covers
-web UIs built with React/Next, Vue/Nuxt, Svelte and alike — plain SPA repos
-without any of those markers can pass `--plugins frontend` explicitly.
+`astro.config.*`, `angular.json`, `vite.config.*`, `index.html`) matched at
+any repository depth, and covers web UIs built with React/Next, Vue/Nuxt,
+Svelte and alike — plain SPA repos without any of those markers can pass
+`--plugins frontend` explicitly.
 
 Verification is serial by default. `--verify-concurrency <n>` (1–8, default
 1; `PIR_VERIFY_CONCURRENCY` env when the flag is absent) runs that many

@@ -1,12 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import {
   GUIDANCE_BUDGET_CHARS,
   detectPacks,
   loadBuiltInPacks,
+  loadLanguagePack,
   pluginsDir,
   renderGuidance,
   resolveLanguagePacks,
@@ -74,11 +76,12 @@ test("built-in frontend pack loads with a valid manifest and guidance within bud
   assert.ok(frontend, `frontend pack present among: ${packs.map((p) => p.name).join(", ")}`);
   assert.equal(frontend.title, "Frontend");
   assert.match(frontend.version, /^\d+\.\d+\.\d+$/);
-  // Framework configs and the vite SPA entry; never a bare package.json.
-  for (const marker of ["next.config.ts", "nuxt.config.ts", "svelte.config.js", "astro.config.mjs", "vite.config.ts", "index.html"]) {
+  // Framework configs and the vite SPA entry, matched at any repo depth.
+  for (const marker of ["**/next.config.ts", "**/nuxt.config.ts", "**/svelte.config.js", "**/astro.config.mjs", "**/vite.config.ts", "**/index.html"]) {
     assert.ok(frontend.markerFiles.includes(marker), `marker ${marker} present`);
   }
-  assert.ok(!frontend.markerFiles.includes("package.json"), "package.json is not a frontend marker");
+  assert.ok(frontend.markerFiles.every((marker) => marker.startsWith("**/")), "frontend markers match at any repo depth");
+  assert.ok(!frontend.markerFiles.includes("**/package.json"), "package.json is not a frontend marker");
   assert.deepEqual(frontend.extensions, ["vue", "svelte", "astro", "css", "scss"]);
   assert.match(frontend.reviewerGuidance, /^# Frontend review directions/);
   assert.match(frontend.reviewerGuidance, /## Hydration and the server\/client boundary/);
@@ -116,6 +119,31 @@ test("frontend and typescript packs co-activate without truncating each other", 
       ? ["## Tests this diff touches", /No reachable path, no finding\./]
       : ["Accessibility: confirm the element lacks every accessible path", /prefer uncertain over confirmed when tooling-dependent/];
     assert.ok(rendered.includes(tails[0]) && tails[1].test(rendered), `${role} both packs' tails intact`);
+  }
+});
+
+test("marker glob rules: leading '**/' depth prefix allowed, stray globs are release bugs", () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "pir-pack-glob-"));
+  const writePack = (markers) => {
+    const dir = path.join(scratch, `pack-${markers.length}-${markers[0].replace(/[^a-z]+/g, "")}`);
+    mkdirSync(path.join(dir, "guidance"), { recursive: true });
+    writeFileSync(path.join(dir, "plugin.json"), JSON.stringify({
+      name: "scratch-pack",
+      title: "Scratch",
+      version: "1.0.0",
+      detect: { markerFiles: markers },
+      guidance: { reviewer: "guidance/reviewer.md", verifier: "guidance/verifier.md" },
+    }));
+    writeFileSync(path.join(dir, "guidance", "reviewer.md"), "# Scratch review directions\n");
+    writeFileSync(path.join(dir, "guidance", "verifier.md"), "# Scratch verification playbooks\n");
+    return dir;
+  };
+  try {
+    assert.doesNotThrow(() => loadLanguagePack(writePack(["go.mod", "**/vite.config.ts", "apps/*/vite.config.ts"])));
+    assert.throws(() => loadLanguagePack(writePack(["**/a/**/b.ts"])), /leading '\*\*\/' depth prefix/);
+    assert.throws(() => loadLanguagePack(writePack(["vite*.ts"])), /whole path segment/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
 });
 
@@ -203,6 +231,18 @@ test("detectPacks activates frontend by framework markers, not package.json alon
     assert.ok(frontend, "next.config.ts at head activates frontend");
     assert.equal(frontend.activation, "auto");
     assert.match(frontend.version, /^\d+\.\d+\.\d+$/);
+
+    // Monorepo layout: the only frontend marker sits one directory down.
+    const repo2 = createTempGitRepo("pir-plugins-frontend-sub-");
+    try {
+      repo2.write("package.json", '{ "name": "monorepo" }\n');
+      repo2.write("web/vite.config.ts", "import { defineConfig } from 'vite';\nexport default defineConfig({});\n");
+      const subHead = repo2.commit("frontend in a subdirectory");
+      const subdirActive = await detectPacks(repo2.dir, subHead, packs);
+      assert.ok(subdirActive.find((p) => p.name === "frontend"), "vite.config.ts one level down activates frontend");
+    } finally {
+      repo2.cleanup();
+    }
   } finally {
     repo.cleanup();
   }

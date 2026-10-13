@@ -1,11 +1,34 @@
-import { readFileAtCommit } from "../changes/git.js";
+import { listFilesAtCommit, readFileAtCommit } from "../changes/git.js";
 import { renderGuidance } from "./loader.js";
 import type { ActivePack, LanguagePack, LanguagePackRun, PluginSelection } from "./types.js";
 
+/**
+ * Glob marker semantics (validated in the loader): a leading double-star
+ * slash prefix matches at any depth, root included; a star as a whole
+ * segment matches one directory level.
+ */
+function markerRegExp(marker: string): RegExp {
+  const depthAny = marker.startsWith("**/");
+  const body = depthAny ? marker.slice(3) : marker;
+  const pattern = body
+    .split("/")
+    .map((seg) => (seg === "*" ? "[^/]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .join("/");
+  return new RegExp(`^${depthAny ? "(?:.*/)?" : ""}${pattern}$`);
+}
+
 /** True when any marker file exists at the pinned commit. */
 async function packMatches(repoRoot: string, commit: string, pack: LanguagePack): Promise<boolean> {
+  let tree: string[] | null = null;
   for (const marker of pack.markerFiles) {
-    if ((await readFileAtCommit(repoRoot, commit, marker)) !== null) return true;
+    if (!marker.includes("*")) {
+      if ((await readFileAtCommit(repoRoot, commit, marker)) !== null) return true;
+      continue;
+    }
+    // One tree listing shared by every glob marker of this pack.
+    tree ??= await listFilesAtCommit(repoRoot, commit);
+    const re = markerRegExp(marker);
+    if (tree.some((path) => re.test(path))) return true;
   }
   return false;
 }

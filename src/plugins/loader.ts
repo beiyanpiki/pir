@@ -25,11 +25,23 @@ function expectStringArray(value: unknown, field: string): string[] {
   return value as string[];
 }
 
-/** Marker paths are repo-relative git paths: no traversal, no absolute form. */
+/**
+ * Marker paths are repo-relative git paths: no traversal, no absolute form.
+ * A leading double-star slash prefix ("**" + "/") matches at any depth (root
+ * included); a whole-segment star matches exactly one directory level. Stray
+ * globs are release bugs.
+ */
 function expectRepoRelative(paths: string[], field: string): string[] {
   for (const p of paths) {
     if (p.startsWith("/") || p.includes("\\") || p.split("/").includes("..") || p.includes("\0")) {
       throw new Error(`language pack field ${field} must be repo-relative paths, got: ${p}`);
+    }
+    const body = p.startsWith("**/") ? p.slice(3) : p;
+    if (body.includes("**")) {
+      throw new Error(`language pack field ${field}: '**' is only allowed as the leading '**/' depth prefix, got: ${p}`);
+    }
+    if (body.split("/").some((seg) => seg.includes("*") && seg !== "*")) {
+      throw new Error(`language pack field ${field}: '*' must be a whole path segment, got: ${p}`);
     }
   }
   return paths;
