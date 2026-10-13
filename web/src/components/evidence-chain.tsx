@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { CircleCheck, Code2, Copy, ShieldAlert } from "lucide-react";
 import { MessageResponse } from "./ai-elements/message";
@@ -6,7 +7,21 @@ import { codeLanguage } from "./code-lang";
 import type { FindingView } from "../types";
 
 function CopyText({ text, label }: { text: string; label: string }) {
-  return <button type="button" className="icon-button" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => void navigator.clipboard.writeText(text)}><Copy size={14} /></button>;
+  const [message, setMessage] = useState<string | null>(null);
+  const copy = async (): Promise<void> => {
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else {
+        const field = document.createElement("textarea");
+        field.value = text; field.style.position = "fixed"; field.style.opacity = "0";
+        document.body.append(field); field.select();
+        try { if (!document.execCommand("copy")) throw new Error("Copy unavailable"); }
+        finally { field.remove(); }
+      }
+      setMessage("Copied");
+    } catch { setMessage("Copy unavailable. Select and copy the text manually."); }
+  };
+  return <><button type="button" className="icon-button" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => void copy()}><Copy size={14} /></button>{message && <span role="status">{message}</span>}</>;
 }
 
 export function EvidenceChain({ finding }: { finding: FindingView }) {

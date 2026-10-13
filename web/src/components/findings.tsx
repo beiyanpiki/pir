@@ -45,6 +45,11 @@ export function FindingsTab({
     (!query || `${finding.title} ${finding.displayId}`.toLowerCase().includes(query.toLowerCase())) &&
     (severity === "all" || finding.severity === severity),
   ), [sorted, showAll, severity, status, query, selected]);
+  const windowed = useMemo(() => {
+    const rows = visible.slice(0, visibleLimit);
+    const target = sorted.find((finding) => finding.displayId === selected);
+    return target && !rows.includes(target) ? [target, ...rows] : rows;
+  }, [visible, visibleLimit, sorted, selected]);
   const reported = useMemo(() => sorted.filter((finding) => REPORTED.has(finding.status)).length, [sorted]);
 
   if (findings.items.length === 0) {
@@ -90,7 +95,7 @@ export function FindingsTab({
       </div>
 
       <div className="finding-list">
-        {visible.slice(0, visibleLimit).map((finding) => (
+        {windowed.map((finding) => (
           <FindingRow key={`${projectId}/${runId}/${finding.id}`} selected={selected === finding.displayId} onSelect={() => { const next = new URLSearchParams(params); next.set("finding", finding.displayId); setParams(next); }} projectId={projectId} runId={runId} summary={finding} />
         ))}
         {visibleLimit < visible.length && <button type="button" className="text-command" onClick={() => setVisibleLimit((n) => n + 50)}>Show more findings ({visible.length - visibleLimit} remaining)</button>}
