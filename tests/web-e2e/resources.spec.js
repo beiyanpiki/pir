@@ -90,12 +90,15 @@ test("run navigation isolates transcripts with identical file names", async ({ p
     const runId = new URL(route.request().url()).pathname.split("/")[4];
     route.fulfill({ json: transcript(runId === runA ? "Goal from run A" : "Goal from run B") });
   });
-  await page.goto(`/runs/${projectA}/${runA}`);
+  // Transcripts live on the Workflow view; switching runs must not leak them.
+  await page.goto(`/runs/${projectA}/${runA}?tab=workflow`);
   await expect(page.getByText("Goal from run A", { exact: true })).toBeVisible();
   await page.locator(`.sidebar-run[href='/runs/${projectA}/${runB}']`).click();
+  await page.getByRole("tab", { name: /Workflow/ }).click();
   await expect(page.getByText("Goal from run B", { exact: true })).toBeVisible();
   await expect(page.getByText("Goal from run A", { exact: true })).toHaveCount(0);
   await page.locator(`.sidebar-run[href='/runs/${projectA}/${runA}']`).click();
+  await page.getByRole("tab", { name: /Workflow/ }).click();
   await expect(page.getByText("Goal from run A", { exact: true })).toBeVisible();
   await expect(page.getByText("Goal from run B", { exact: true })).toHaveCount(0);
 });
@@ -167,13 +170,13 @@ test(`inspector traps Tab and restores focus at ${width}px`, async ({ page }) =>
   const dialog = page.getByRole("dialog", { name: "Review inspector" });
   await expect(dialog).toBeVisible();
   await expect(dialog).toHaveAttribute("aria-modal", "true");
-  const firstTab = dialog.getByRole("tab", { name: "Findings" });
   const close = dialog.getByRole("button", { name: "Close inspector" });
-  await expect(firstTab).toBeFocused();
+  await expect(close).toBeFocused();
+  // Tab and Shift+Tab wrap inside the drawer instead of reaching the page.
   await page.keyboard.press("Shift+Tab");
   await expect(close).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(firstTab).toBeFocused();
+  await expect(close).toBeFocused();
   await expect(page.locator(".workspace-topbar")).toHaveJSProperty("inert", true);
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
@@ -182,19 +185,19 @@ test(`inspector traps Tab and restores focus at ${width}px`, async ({ page }) =>
 });
 }
 
-test("closing the desktop inspector restores the stream width", async ({ page }) => {
+test("docking the desktop inspector narrows the main panel and closing it restores the width", async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 });
   await page.goto(`/runs/${projectA}/${runA}`);
   const inspector = page.getByRole("complementary", { name: "Review inspector" });
-  const stream = page.getByRole("region", { name: "Review execution stream" });
+  const primary = page.getByRole("tabpanel");
+  await expect(inspector).toBeHidden();
+  const closed = (await primary.boundingBox()).width;
+  await page.getByRole("button", { name: "Open inspector" }).click();
   await expect(inspector).toBeVisible();
-  await expect(inspector.getByRole("button", { name: "Close inspector", includeHidden: true })).toBeHidden();
-  const initial = await stream.boundingBox();
+  await expect.poll(async () => (await primary.boundingBox()).width).toBeLessThan(closed - 300);
   await page.locator(".run-header").getByRole("button", { name: "Close inspector" }).click();
   await expect(inspector).toBeHidden();
-  await expect.poll(async () => (await stream.boundingBox()).width).toBeGreaterThan(initial.width + 300);
-  await page.getByRole("button", { name: "Open inspector" }).click();
-  await expect.poll(async () => (await stream.boundingBox()).width).toBe(initial.width);
+  await expect.poll(async () => (await primary.boundingBox()).width).toBe(closed);
 });
 
 test("mobile project, run list, and detail stay within the viewport", async ({ page }) => {
