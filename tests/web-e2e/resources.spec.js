@@ -216,3 +216,25 @@ test("mobile project, run list, and detail stay within the viewport", async ({ p
   expect(bounds.x).toBeGreaterThanOrEqual(0);
   expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
 });
+
+test("offset correction and pagination preserve history and keyboard focus", async ({ page }) => {
+  await page.route("**/api/projects/*/runs?*", async (route) => {
+    const url = new URL(route.request().url());
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    route.fulfill({ json: { runs: [run(runA), run(runB, "audit")], total: offset === 0 ? 51 : 2 } });
+  });
+  await page.goto(`/projects/${projectA}?offset=50`);
+  await expect(page.getByRole("status", { name: "1–2 of 2 runs" })).toBeHidden();
+  await expect(page.getByRole("button", { name: "Older runs" })).toBeDisabled();
+  await page.goto(`/projects/${projectA}`);
+  const older = page.getByRole("button", { name: "Older runs" });
+  await expect(older).toBeEnabled();
+  await older.focus();
+  await expect(older).toBeFocused();
+  await older.click();
+  await expect(page).toHaveURL(/offset=50/);
+  await expect(older).toBeFocused();
+  await expect(page.locator(".run-table")).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/projects\/a{64}$/);
+});

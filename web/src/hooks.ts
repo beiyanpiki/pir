@@ -37,7 +37,7 @@ export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: un
     // prevents a late response from briefly rendering data for another URL.
     if (resourceChanged) setData(null);
     setError(null);
-    if (resourceChanged) setLoadedKey(resourceKey);
+    setLoadedKey(resourceKey);
     setLoading(true);
     fetcher(controller.signal)
       .then((result) => {

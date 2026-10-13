@@ -48,7 +48,7 @@ export function RunsPage() {
   const refresh = (): void => { runs.reload(); overview.reload(); };
 
   useEffect(() => {
-    if (runs.data && offset > 0 && offset >= total) updateUrl({ offset: total > 0 ? Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE : 0 });
+    if (runs.data && offset > 0 && offset >= total) updateUrl({ offset: total > 0 ? Math.floor((total - 1) / PAGE_SIZE) * PAGE_SIZE : 0 }, true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs.data, total, offset]);
 
@@ -105,7 +105,7 @@ export function RunsPage() {
             })}</tbody>
           </table>
         </div>}
-        {runs.data && total > 0 && <div className="pagination"><span className="pagination-range">{offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of {total} runs</span><button className="icon-button" type="button" disabled={offset === 0 || runs.loading} aria-label="Newer runs" title="Newer runs" onClick={() => updateUrl({ offset: Math.max(0, offset - PAGE_SIZE) })}><ChevronLeft size={17} /></button><span>{page} / {pages}</span><button className="icon-button" type="button" disabled={offset + PAGE_SIZE >= total || runs.loading} aria-label="Older runs" title="Older runs" onClick={() => updateUrl({ offset: offset + PAGE_SIZE })}><ChevronRight size={17} /></button></div>}
+        {runs.data && total > 0 && <div className="pagination"><span className="pagination-range">{offset + 1}-{Math.min(offset + PAGE_SIZE, total)} of {total} runs</span><button className="icon-button" type="button" disabled={offset === 0} aria-label="Newer runs" title="Newer runs" onClick={() => updateUrl({ offset: Math.max(0, offset - PAGE_SIZE) })}><ChevronLeft size={17} /></button><span>{page} / {pages}</span><button className="icon-button" type="button" disabled={offset + PAGE_SIZE >= total} aria-label="Older runs" title="Older runs" onClick={() => updateUrl({ offset: offset + PAGE_SIZE })}><ChevronRight size={17} /></button></div>}
       </section>
     </div>
   );
