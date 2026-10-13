@@ -392,3 +392,5 @@ Model evaluation is under `tests/eval/` and requires provider access.
 ## License
 
 [MIT](LICENSE) © 2026 Xin Gao
+
+The run Workflow view filters live and archived sessions, keeps session and finding links in the URL, and shows runtime-to-project finding IDs. Connection health is separate from execution status; selecting history pauses live scrolling until Jump to latest.

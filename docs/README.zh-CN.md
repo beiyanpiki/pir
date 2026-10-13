@@ -255,3 +255,5 @@ npm test
 ## 许可
 
 [MIT](../LICENSE) © 2026 Xin Gao
+
+运行的 Workflow 视图支持筛选实时和归档会话，并将会话、finding 链接保存在 URL 中，展示运行时编号到项目 finding 编号的映射。连接状态与执行状态分别显示；选择历史会话后暂停自动滚动，点击 Jump to latest 恢复。
