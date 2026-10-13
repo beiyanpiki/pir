@@ -175,6 +175,16 @@ test("web api: gzip negotiation, ETag 304, findings split, no live events embed"
     const missing = await requestJson(port, `/api/runs/${projectId}/${runId}/findings/no-such-finding`);
     assert.equal(missing.status, 404);
 
+    // Mode and status are combined before both counting and paginating; a
+    // filtered page must never use the unfiltered collection's total.
+    const changeRuns = await requestJson(port, `/api/projects/${projectId}/runs?mode=change&status=completed`);
+    assert.equal(changeRuns.status, 200);
+    const changeBody = JSON.parse(changeRuns.body.toString("utf8"));
+    assert.equal(changeBody.total, 1);
+    assert.equal(changeBody.runs[0].runId, runId);
+    const auditRuns = await requestJson(port, `/api/projects/${projectId}/runs?mode=audit`);
+    assert.deepEqual(JSON.parse(auditRuns.body.toString("utf8")), { runs: [], total: 0 });
+
     // --- transcript: ETag + 304 revalidation.
     const transcriptUrl = `/api/runs/${projectId}/${runId}/transcript/reviewer-r1.json`;
     const first = await requestJson(port, transcriptUrl, { "accept-encoding": "gzip" });

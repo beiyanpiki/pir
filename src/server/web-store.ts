@@ -303,7 +303,7 @@ function toRunSummary(row: RawRunRow, stateRoot: string, projectId: string): Run
 
 export function listRuns(
   projectId: string,
-  options: { limit?: number; offset?: number; status?: string } = {},
+  options: { limit?: number; offset?: number; status?: string; mode?: "change" | "audit" } = {},
   stateRoot = pirStateBase(),
 ): { runs: RunSummary[]; total: number } | null {
   if (!isValidProjectId(projectId)) return null;
@@ -311,13 +311,16 @@ export function listRuns(
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
   const offset = Math.max(options.offset ?? 0, 0);
   return withDb(dbPath, (db) => {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (options.status) { clauses.push("status = ?"); values.push(options.status); }
+    if (options.mode) { clauses.push("mode = ?"); values.push(options.mode); }
+    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
     const totalRow = db.prepare(
-      options.status ? "SELECT COUNT(*) AS n FROM review_runs WHERE status = ?" : "SELECT COUNT(*) AS n FROM review_runs",
-    ).get(...(options.status ? [options.status] : [])) as { n: number };
-    const rows = (options.status
-      ? db.prepare("SELECT * FROM review_runs WHERE status = ? ORDER BY started_at DESC LIMIT ? OFFSET ?")
-      : db.prepare("SELECT * FROM review_runs ORDER BY started_at DESC LIMIT ? OFFSET ?")
-    ).all(...(options.status ? [options.status] : []), limit, offset) as unknown as RawRunRow[];
+      `SELECT COUNT(*) AS n FROM review_runs${where}`,
+    ).get(...values) as { n: number };
+    const rows = db.prepare(`SELECT * FROM review_runs${where} ORDER BY started_at DESC LIMIT ? OFFSET ?`)
+      .all(...values, limit, offset) as unknown as RawRunRow[];
     return { runs: rows.map((row) => toRunSummary(row, stateRoot, projectId)), total: totalRow?.n ?? 0 };
   });
 }

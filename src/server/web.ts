@@ -278,7 +278,9 @@ export function createWebUi(config: WebUiConfig): WebUi {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       const offset = Number(url.searchParams.get("offset") ?? 0);
       const status = url.searchParams.get("status") ?? undefined;
-      const result = listRuns(parts[1]!, { limit, offset, ...(status ? { status } : {}) }, stateRoot);
+      const rawMode = url.searchParams.get("mode");
+      const mode = rawMode === "change" || rawMode === "audit" ? rawMode : undefined;
+      const result = listRuns(parts[1]!, { limit, offset, ...(status ? { status } : {}), ...(mode ? { mode } : {}) }, stateRoot);
       if (!result) {
         json(req, res, 404, { error: "unknown project" });
         return true;
