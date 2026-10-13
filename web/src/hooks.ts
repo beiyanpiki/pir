@@ -12,23 +12,30 @@ export interface ApiState<T> {
 }
 
 /**
- * Fetch-on-mount with 401 → /login redirection. The fetcher is stored in a
- * ref so callers can pass inline closures without re-triggering loads; the
- * reload counter is the explicit invalidation signal.
+ * Fetch-on-mount with 401 → /login redirection. Each resource identity owns
+ * an AbortController, so route changes cancel work and stale responses cannot
+ * repopulate the next page. The reload counter is the explicit invalidation
+ * signal.
  */
-export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): ApiState<T> {
+export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: unknown[]): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
   const navigate = useNavigate();
+  const resourceKey = JSON.stringify(deps);
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
+    // A route change invalidates the previous resource immediately. This
+    // prevents a late response from briefly rendering data for another URL.
+    setData(null);
+    setError(null);
+    setLoadedKey(resourceKey);
     setLoading(true);
-    fetcherRef.current()
+    fetcher(controller.signal)
       .then((result) => {
         if (!cancelled) {
           setData(result);
@@ -37,23 +44,36 @@ export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): ApiState<
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
         if (cause instanceof ApiError && cause.status === 401) {
-          navigate("/login", { replace: true, state: { from: window.location.pathname } });
+          navigate("/login", {
+            replace: true,
+            state: { from: `${window.location.pathname}${window.location.search}${window.location.hash}` },
+          });
           return;
         }
-        setError(cause instanceof Error ? cause.message : String(cause));
+        if (cause instanceof ApiError) {
+          const label = cause.status === 403 ? "You do not have permission to view this resource." :
+            cause.status === 404 ? "This resource was not found." :
+            cause.status >= 500 ? "The server could not load this resource." : cause.message;
+          setError(label);
+        } else {
+          setError(cause instanceof Error ? cause.message : "Network error. Check your connection and retry.");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
 
   const reload = useCallback(() => setTick((value) => value + 1), []);
-  return { data, error, loading, reload };
+  return loadedKey === resourceKey
+    ? { data, error, loading, reload }
+    : { data: null, error: null, loading: true, reload };
 }
 
 export type SseStatus = "idle" | "connecting" | "open" | "unavailable" | "closed" | "error";

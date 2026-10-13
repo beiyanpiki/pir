@@ -18,7 +18,7 @@ export function ProjectsPage() {
   const [sort, setSort] = useState("recent");
   const [page, setPage] = useState(0);
   const navigate = useNavigate();
-  const overview = useApi<Overview>(() => apiGet<Overview>("/api/overview"), []);
+  const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), []);
   const projects = overview.data?.projects ?? [];
   const active = overview.data?.active ?? [];
 
