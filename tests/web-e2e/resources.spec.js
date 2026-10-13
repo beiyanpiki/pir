@@ -153,6 +153,7 @@ test("closing the desktop inspector restores the stream width", async ({ page })
   const inspector = page.getByRole("complementary", { name: "Review inspector" });
   const stream = page.getByRole("region", { name: "Review execution stream" });
   await expect(inspector).toBeVisible();
+  await expect(inspector.getByRole("button", { name: "Close inspector", includeHidden: true })).toBeHidden();
   const initial = await stream.boundingBox();
   await page.locator(".run-header").getByRole("button", { name: "Close inspector" }).click();
   await expect(inspector).toBeHidden();

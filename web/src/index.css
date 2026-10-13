@@ -3374,7 +3374,7 @@ input {
   font-size: 11px;
   font-weight: 650;
 }
-.inspector-close {
+.inspector-tabs .inspector-close {
   display: none;
   margin-left: auto;
 }
@@ -3408,7 +3408,7 @@ input {
   display: none;
 }
 
-@media (max-width: 1199px) {
+@media (max-width: 1279px) {
   .run-workspace {
     grid-template-columns: 198px minmax(0, 1fr);
   }
@@ -3416,7 +3416,7 @@ input {
     width: min(410px, calc(100vw - 24px));
   }
   .inspector-title,
-  .inspector-close {
+  .inspector-tabs .inspector-close {
     display: inline-flex;
   }
   .inspector-tabs {
@@ -3427,7 +3427,7 @@ input {
   .inspector-tabs button:not(.inspector-close) {
     height: 36px;
   }
-  .inspector-close {
+  .inspector-tabs .inspector-close {
     width: 30px;
     height: 30px;
   }
