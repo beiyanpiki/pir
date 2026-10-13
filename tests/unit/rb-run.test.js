@@ -62,6 +62,8 @@ test("parseOptions: defaults match the scenario-runner surface plus RB flags", (
   assert.equal(parseOptions(["--max-tokens", "unlimited"], {}).maxTokens, "unlimited");
   assert.equal(parseOptions([], { PIR_EVAL_MAX_TOKENS: "UNLIMITED" }).maxTokens, "unlimited");
   assert.equal(parseOptions([], { PIR_EVAL_TASK_CONCURRENCY: "4" }).taskConcurrency, 4);
+  assert.equal(options.resume, false);
+  assert.equal(parseOptions(["--resume"], {}).resume, true);
   assert.throws(() => parseOptions(["--max-tokens", "0"], {}), /positive integer or "unlimited"/);
   assert.throws(() => parseOptions([], { PIR_EVAL_TASK_CONCURRENCY: "0" }), /taskConcurrency must be a positive integer/);
 });

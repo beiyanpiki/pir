@@ -102,6 +102,7 @@ export function parseOptions(argv = [], env = process.env) {
     only: env.PIR_EVAL_RB_ONLY ? env.PIR_EVAL_RB_ONLY.split(",").map((s) => s.trim()).filter(Boolean) : [],
     manifest: env.PIR_EVAL_RB_MANIFEST ?? path.join(RB_DIR, "fixtures/test-set.json"),
     taskConcurrency: env.PIR_EVAL_TASK_CONCURRENCY ?? "1",
+    resume: false,
     json: env.PIR_EVAL_JSON === "1",
   };
   const flags = {
@@ -113,6 +114,7 @@ export function parseOptions(argv = [], env = process.env) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--json") { values.json = true; continue; }
     if (argv[i] === "--help") { values.help = true; continue; }
+    if (argv[i] === "--resume") { values.resume = true; continue; }
     if (argv[i] === "--only") {
       if (!argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
       values.only.push(argv[++i]);
@@ -336,7 +338,7 @@ export function prefilterPirFindings(findings) {
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
-    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N|unlimited] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json]\nEnv: PIR_EVAL_TASK_CONCURRENCY=N runs tasks through an N-worker pool (default 1 = serial);\n--max-tokens unlimited (or PIR_EVAL_MAX_TOKENS=unlimited) omits the token budget entirely.\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
+    console.log("PIR_EVAL=1 node tests/eval/reviewbench/run-rb.js [--round name] [--limit N] [--only <pr_key>]... [--baseline-cli dist/cli/cli.js] [--candidate-cli dist/cli/cli.js] [--model provider/model] [--max-rounds N] [--max-tokens N|unlimited] [--max-findings N] [--task-timeout N] [--repeats N] [--manifest fixtures/test-set.json] [--json] [--resume]\n--resume continues an interrupted round: completed artifacts are reused as-is, only missing ones re-run.\nEnv: PIR_EVAL_TASK_CONCURRENCY=N runs tasks through an N-worker pool (default 1 = serial);\n--max-tokens unlimited (or PIR_EVAL_MAX_TOKENS=unlimited) omits the token budget entirely.\nSee tests/eval/reviewbench/README.md for the protocol, cache, and output layout.");
     return 0;
   }
   if (env.PIR_EVAL !== "1") {
@@ -374,10 +376,27 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
     const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-rb`;
     const roundDir = path.join(RB_OUT_ROOT, roundName);
-    if (existsSync(roundDir)) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name or remove it)`);
+    // --resume: an interrupted round's artifacts are the record — judging
+    // inputs on disk are exactly what the judge consumes, so completed runs
+    // are reused as-is and only missing artifacts re-run. Without the flag
+    // an existing directory stays a hard error (a fresh round must never
+    // silently mix with an old one).
+    let prevRuns = new Map();
+    let startedAt = new Date().toISOString();
+    if (existsSync(roundDir)) {
+      if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume to continue it)`);
+      const summaryPath = path.join(roundDir, "summary.json");
+      const prev = existsSync(summaryPath) ? JSON.parse(readFileSync(summaryPath, "utf8")) : null;
+      if (prev?.startedAt) startedAt = prev.startedAt;
+      for (const task of prev?.tasks ?? []) {
+        for (const row of task.runs ?? []) prevRuns.set(`${task.prKey}|${row.variant}|${row.repeat}`, row);
+      }
+      console.error(`resuming ${roundName}: ${prevRuns.size} recorded runs, completed artifacts are reused as-is`);
+    }
     mkdirSync(roundDir, { recursive: true });
 
-    const summary = { schemaVersion: 1, round: roundName, startedAt: new Date().toISOString(), node: process.version,
+    const summary = { schemaVersion: 1, round: roundName, startedAt, resumedAt: options.resume ? new Date().toISOString() : undefined,
+      node: process.version,
       model: options.model, config, limits: { maxRounds: options.maxRounds, maxTokens: options.maxTokens,
         maxFindings: options.maxFindings, taskTimeoutMs: options.taskTimeoutMs, fetchTimeoutMs: options.fetchTimeoutMs,
         taskConcurrency: options.taskConcurrency },
@@ -410,6 +429,33 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       const taskRow = { prKey: key, repo: entry.repo, prNumber: entry.pr_number, language: entry.language ?? null,
         repoSizeKb: entry.repo_size_kb ?? null, linesAdded: entry.lines_added ?? null, linesRemoved: entry.lines_removed ?? null,
         runs: [] };
+      // Resume: reuse a run iff its judging-input artifact is on disk (only
+      // successful runs write artifacts — error rows never do), so reuse and
+      // re-run decide per run, not per task.
+      const allRunLabels = [];
+      for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
+        for (const variant of variants) allRunLabels.push({ runLabel: `${variant.name}-run${repeat}`, variant, repeat });
+      }
+      const isReused = (label) => options.resume && existsSync(path.join(roundDir, label, `${key}.json`));
+      // Rebuild a reused run's prefilter entry from its artifact, so the
+      // aggregated PREFILTER.md stays complete across resumptions.
+      const reuseRun = (runLabel, variant, repeat) => {
+        const prevRow = prevRuns.get(`${key}|${variant.name}|${repeat}`);
+        taskRow.runs.push({ ...(prevRow ?? { variant: variant.name, repeat, status: "ok" }), reused: true });
+        const goldenFindings = goldenRecallTargets(loadGolden(options.manifest, key));
+        const pirFindings = JSON.parse(readFileSync(path.join(roundDir, runLabel, `${key}.json`), "utf8")).findings
+          .map((f) => ({ message: f.message, paths: [f.file], start_line: f.start_line, end_line: f.end_line }));
+        const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
+        if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
+        prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });
+        console.error(`REUSED ${runLabel} ${key}`);
+      };
+      if (allRunLabels.every(({ runLabel }) => isReused(runLabel))) {
+        for (const { runLabel, variant, repeat } of allRunLabels) reuseRun(runLabel, variant, repeat);
+        summary.tasks.push(taskRow);
+        flushRoundArtifacts();
+        return;
+      }
       let repoDir = null;
       let checkout = null;
       let materializationError = null;
@@ -431,6 +477,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         const order = (repeat + index) % 2 === 0 ? [...variants].reverse() : variants;
         for (const variant of order) {
           const runLabel = `${variant.name}-run${repeat}`;
+          if (isReused(runLabel)) {
+            reuseRun(runLabel, variant, repeat);
+            continue;
+          }
           if (materializationError) {
             taskRow.runs.push({ variant: variant.name, repeat, status: "error", error: `materialization: ${materializationError}` });
             anyError = true;
