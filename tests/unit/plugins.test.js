@@ -243,6 +243,17 @@ test("detectPacks activates frontend by framework markers, not package.json alon
     } finally {
       repo2.cleanup();
     }
+
+    // Non-ASCII path components: ls-tree C-quotes these without -z (dogfood F-162).
+    const repo3 = createTempGitRepo("pir-plugins-frontend-uni-");
+    try {
+      repo3.write("前端/vite.config.ts", "export default {};\n");
+      const uniHead = repo3.commit("frontend under a non-ascii directory");
+      const uniActive = await detectPacks(repo3.dir, uniHead, packs);
+      assert.ok(uniActive.find((p) => p.name === "frontend"), "non-ASCII directory path activates frontend");
+    } finally {
+      repo3.cleanup();
+    }
   } finally {
     repo.cleanup();
   }
