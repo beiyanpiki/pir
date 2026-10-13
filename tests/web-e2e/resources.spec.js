@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }) => {
 test("run filters and pagination survive direct URLs and navigation", async ({ page }) => {
   await page.goto(`/projects/${projectA}?status=completed&mode=audit&q=none&offset=50`);
   await expect(page.getByRole("button", { name: "Audit", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("searchbox", { name: "Search this page" })).toHaveValue("none");
+  await expect(page.getByRole("searchbox", { name: "Search all project runs" })).toHaveValue("none");
   await expect(page).toHaveURL(new RegExp("mode=audit"));
   await expect(page).not.toHaveURL(/offset=/);
   await page.getByRole("button", { name: "All modes" }).click();
@@ -75,7 +75,7 @@ test("overview polling preserves expanded navigation while the refresh is pendin
 test("typing run search replaces history so Back returns to the prior page", async ({ page }) => {
   await page.goto("/projects");
   await page.locator(`.sidebar-project-link[href='/projects/${projectA}']`).click();
-  await page.getByRole("searchbox", { name: "Search this page" }).fill("scope");
+  await page.getByRole("searchbox", { name: "Search all project runs" }).fill("scope");
   await expect(page).toHaveURL(/q=scope/);
   await page.goBack();
   await expect(page).toHaveURL((url) => url.pathname === "/projects");
@@ -300,7 +300,7 @@ test("a failed finding detail offers retry and recovers in the inspector", async
 
 test("typing in the run search keeps every keystroke and lands one URL entry", async ({ page }) => {
   await page.goto(`/projects/${projectA}`);
-  const search = page.getByRole("searchbox", { name: "Search this page" });
+  const search = page.getByRole("searchbox", { name: "Search all project runs" });
   await search.type("scope", { delay: 40 });
   await expect(search).toHaveValue("scope");
   await expect(page).toHaveURL(/q=scope/);
