@@ -259,8 +259,9 @@ test("detectPacks activates frontend by framework markers, not package.json alon
       repo3.cleanup();
     }
 
-    // Directory names with line terminators: matching runs through git
-    // pathspec wildmatch, not a JS regex whose `.` skips terminators (dogfood F-168).
+    // Directory names with line terminators: the basename fast path slices at
+    // the last slash, so terminators in parent components cannot break it
+    // (dogfood F-168).
     const repo4 = createTempGitRepo("pir-plugins-frontend-nl-");
     try {
       repo4.write("we\nb/vite.config.ts", "export default {};\n");
@@ -270,6 +271,33 @@ test("detectPacks activates frontend by framework markers, not package.json alon
     } finally {
       repo4.cleanup();
     }
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("composed glob markers match through the wildmatch fallback (dogfood F-169)", async () => {
+  const repo = createTempGitRepo("pir-plugins-composed-glob-");
+  try {
+    repo.write("we\nb/apps/foo/vite.config.ts", "export default {};\n");
+    repo.write("apps/bar/vite.config.ts", "export default {};\n");
+    const head = repo.commit("composed glob layouts");
+    const pack = {
+      name: "composed",
+      title: "Composed",
+      version: "1.0.0",
+      markerFiles: ["apps/*/vite.config.ts"],
+      extensions: [],
+      reviewerGuidance: "# Composed review directions\n",
+      verifierGuidance: "# Composed verification playbooks\n",
+    };
+    const segmentActive = await detectPacks(repo.dir, head, [pack]);
+    assert.equal(segmentActive.length, 1, "whole-segment star matches one directory level");
+
+    // Depth prefix crossing a line-terminator directory pins the s flag.
+    const deep = { ...pack, name: "composed-deep", markerFiles: ["**/apps/*/vite.config.ts"] };
+    const deepActive = await detectPacks(repo.dir, head, [deep]);
+    assert.equal(deepActive.length, 1, "depth prefix crosses the newline directory");
   } finally {
     repo.cleanup();
   }
