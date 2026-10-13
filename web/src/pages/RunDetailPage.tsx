@@ -199,7 +199,7 @@ export function RunDetailPage() {
       const target = document.getElementById(sessionAnchor(selectedSessionKey));
       if (!target) return false;
       const scroll = streamSticky.scrollRef.current;
-      if (scroll) scroll.scrollTo({ top: target.offsetTop, behavior: "auto" });
+      if (scroll) scroll.scrollTo({ top: target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop, behavior: "instant" });
       else target.scrollIntoView({ block: "start" });
       return true;
     };
@@ -214,7 +214,7 @@ export function RunDetailPage() {
     updateQuery({ tab: "workflow", session: key });
     const target = document.getElementById(sessionAnchor(key));
     const scroll = streamSticky.scrollRef.current;
-    if (target && scroll) scroll.scrollTo({ top: target.offsetTop, behavior: "auto" });
+    if (target && scroll) scroll.scrollTo({ top: target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop, behavior: "instant" });
     else target?.scrollIntoView({ block: "start" });
   };
   useEffect(() => {
