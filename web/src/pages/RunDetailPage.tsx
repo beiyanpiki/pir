@@ -131,8 +131,20 @@ export function RunDetailPage() {
       // opener may be detached: fall back to the current toggle instead of
       // dropping focus onto the body.
       const opener = inspectorOpenerRef.current;
-      if (opener?.isConnected) opener.focus();
-      else document.querySelector<HTMLElement>(".run-header-actions button")?.focus();
+      if (opener?.isConnected) {
+        opener.focus();
+      } else {
+        // A run change closes the drawer while the next page is still
+        // loading: wait briefly for its toggle instead of dropping focus on
+        // the body. Bounded so a navigation away cannot spin forever.
+        let attempts = 0;
+        const restore = (): void => {
+          const toggle = document.querySelector<HTMLElement>(".run-header-actions button");
+          if (toggle) toggle.focus();
+          else if (attempts++ < 60) requestAnimationFrame(restore);
+        };
+        restore();
+      }
     };
   }, [inspectorOpen, narrowInspector, detail.data !== null && !detail.error]);
 

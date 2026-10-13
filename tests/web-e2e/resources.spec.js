@@ -278,21 +278,24 @@ test("drawer focus returns to the toggle when history swaps the run underneath",
   await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe("BUTTON");
 });
 
-test("a failed finding detail offers retry and keeps the error state", async ({ page }) => {
+test("a failed finding detail offers retry and recovers in the inspector", async ({ page }) => {
   const summary = { id: "f1", displayId: "F-1", title: "Off-by-one", category: "logic", severity: "P1", status: "confirmed", round: 1, createdAt: 1, evidenceCount: 1, confidence: 0.8 };
   const detail = { ...summary, claim: "The loop overruns by one.", trigger: "diff", featureKey: null, entityKey: null, anchors: [], evidence: [], memoryMatches: [], verifierRationale: "checked", relatedSessions: [] };
   let failing = true;
   await page.route("**/api/runs/*/*", (route) => route.fulfill({ json: { run: run(runA), findings: { items: [summary], total: 1 }, sessions: [], manifest: null, transcriptsAvailable: false } }));
-  await page.route("**/api/runs/*/*/findings/f1", (route) => failing
+  // The workbench links findings by display id, so mock that path.
+  await page.route("**/api/runs/*/*/findings/*", (route) => failing
     ? route.fulfill({ status: 500, json: { error: "boom" } })
     : route.fulfill({ json: detail }));
-  await page.goto(`/runs/${projectA}/${runA}`);
-  const row = page.locator(".finding-row").first();
-  await row.getByRole("button").first().click();
-  await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
+  await page.goto(`/runs/${projectA}/${runA}?tab=findings`);
+  // The workbench inspector owns the evidence, so its failure state carries
+  // the retry control.
+  const inspector = page.getByRole("complementary", { name: "Review inspector" });
+  await page.locator(".finding-row").first().getByRole("button").click();
+  await expect(inspector.getByRole("button", { name: "Retry" })).toBeVisible();
   failing = false;
-  await row.getByRole("button", { name: "Retry" }).click();
-  await expect(page.getByText("The loop overruns by one.")).toBeVisible();
+  await inspector.getByRole("button", { name: "Retry" }).click();
+  await expect(inspector.getByText("The loop overruns by one.")).toBeVisible();
 });
 
 test("typing in the run search keeps every keystroke and lands one URL entry", async ({ page }) => {
