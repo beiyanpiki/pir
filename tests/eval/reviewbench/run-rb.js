@@ -284,6 +284,15 @@ async function mirrorRunToState(runDir, runId, env) {
           insertRow("findings", { ...finding, display_id: `F-${(n?.n ?? 0) + 1}` });
           for (const ev of src.all("SELECT * FROM finding_evidence WHERE finding_id = ?", finding.id)) insertRow("finding_evidence", ev);
         }
+        // Transcripts live next to the run's private DB (runTranscriptDir);
+        // copy them into the shared root so the web explorer can render the
+        // sessions. Also mirrored from disk for runs completed before this
+        // step existed, via sync-transcripts.js.
+        const srcTranscripts = path.join(path.dirname(scratchDb), "transcripts", runId);
+        const dstTranscripts = path.join(stateRoot, project.id, "transcripts", runId);
+        if (existsSync(srcTranscripts) && !existsSync(dstTranscripts)) {
+          cpSync(srcTranscripts, dstTranscripts, { recursive: true });
+        }
         return true;
       } finally {
         dst.close();
