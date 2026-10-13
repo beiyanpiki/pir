@@ -32,7 +32,7 @@ export function CoverageTab({ coverage }: { coverage?: CoverageView | null }) {
       <div className="coverage-grid">{AUDIT_KEYS.map(([key, label]) => <div key={key}><span>{label}</span><strong>{String(summary[key])}</strong></div>)}</div>
     </section>
     {coverage.units.length > 0 && <section className="inspector-section"><div className="inspector-section-title"><Layers3 size={14} /> Review units</div><div className="unit-list">{coverage.units.map((unit) => <div className="unit-row" key={unit.id}><span className={`unit-state is-${unit.state}`} aria-label={unit.state}>{unit.state === "reviewed" ? <CheckCircle2 size={14} /> : <CircleDashed size={14} />}</span><div><strong>{unit.id} · {unit.state}</strong><small>{unit.module || "No module"} · {unit.files} files · {unit.attempts} attempts</small>{unit.reason && <p>{unit.reason}</p>}</div></div>)}</div></section>}
-    <FileCoverageFiles files={coverage.files.map((file) => ({ path: file.path, covered: file.rangesReviewed, total: file.rangesTotal }))} />
+    <section className="inspector-section"><h2 className="inspector-section-title">File coverage</h2>{coverage.files.map((file) => <div className="unit-row" key={file.path}><code>{file.path}</code><span>{file.state} · {file.rangesReviewed}/{file.rangesTotal} ranges</span>{file.reason && <p>{file.reason}</p>}</div>)}</section>
   </div>;
 }
 

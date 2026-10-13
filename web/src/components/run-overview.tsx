@@ -3,15 +3,15 @@ import { Activity, Gauge, Info, ShieldAlert } from "lucide-react";
 import { fmtCost, fmtCount, fmtDuration, fmtTime } from "../format";
 import type { CoverageView, RunDetail, RunEvent } from "../types";
 
-export function RunOverview({ detail, coverage, events, execution, connection }: {
+export function RunOverview({ detail, coverage, events, execution, connection, pendingCount }: {
   detail: RunDetail; coverage: CoverageView | null; events: RunEvent[] | null;
-  execution: string; connection: string;
+  execution: string; connection: string; pendingCount?: number | null;
 }) {
   const { run, manifest } = detail;
   const latest = (events ?? []).filter((e) => e.kind === "progress" || e.kind === "run-end").slice(-5).reverse();
   const ended = new Set((events ?? []).filter((e) => e.kind === "session-end").map((e) => e.kind === "session-end" ? e.sessionId : ""));
   const current = (events ?? []).filter((e) => e.kind === "session-start" && !ended.has(e.sessionId)).at(-1);
-  const pending = manifest?.rounds?.at(-1)?.pending;
+  const pending = pendingCount ?? manifest?.rounds?.at(-1)?.pending;
   const verdict = run.runVerdict ?? "unknown";
   const recordedVerdict = run.runVerdict ?? manifest?.runVerdict;
   return <div className="run-overview inspector-stack">

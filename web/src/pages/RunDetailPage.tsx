@@ -11,7 +11,6 @@ import {
   Code2,
   Coins,
   FileSearch,
-  Gauge,
   Info,
   ListTree,
   RefreshCw,
@@ -29,14 +28,16 @@ import { LiveBadge, ModeBadge, StatusBadge } from "../components/badges";
 import { SessionTimeline } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
+import { RunOverview } from "../components/run-overview";
+import { FindingInspector } from "../components/finding-inspector";
 import { RunDetails } from "../components/run-details";
 import { WorkflowTab } from "../components/workflow";
 import { PageError } from "../components/page-controls";
 import { InspectorToggle } from "../layout/WorkspaceShell";
-import type { ActiveRunView, ProjectSummary, RunDetail, RunEvent } from "../types";
+import type { ActiveRunView, CoverageView, ProjectSummary, RunDetail, RunEvent } from "../types";
 import { useStickToBottom } from "use-stick-to-bottom";
 
-type InspectorTab = "findings" | "workflow" | "coverage" | "details";
+type InspectorTab = "overview" | "findings" | "workflow" | "coverage" | "details";
 
 interface Overview {
   projects: ProjectSummary[];
@@ -47,7 +48,7 @@ export function RunDetailPage() {
   const { projectId = "", runId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get("tab");
-  const inspectorTab: InspectorTab = requestedTab === "workflow" || requestedTab === "coverage" || requestedTab === "details" ? requestedTab : "findings";
+  const inspectorTab: InspectorTab = requestedTab === "findings" || requestedTab === "workflow" || requestedTab === "coverage" || requestedTab === "details" ? requestedTab : "overview";
   const selectedSession = searchParams.get("session");
   const selectedFinding = searchParams.get("finding");
   const updateQuery = useCallback((changes: Record<string, string | null>) => {
@@ -60,12 +61,15 @@ export function RunDetailPage() {
       return next;
     });
   }, [setSearchParams]);
-  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [narrowInspector, setNarrowInspector] = useState(() => window.innerWidth < 1280);
   const inspectorRef = useRef<HTMLElement | null>(null);
   const inspectorOpenerRef = useRef<HTMLElement | null>(null);
   const detail = useApi<RunDetail>((signal) => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`, signal), [projectId, runId]);
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
+  const coverage = useApi<CoverageView>((signal) => apiGet(`/api/runs/${projectId}/${runId}/coverage`, signal), [projectId, runId]);
+  useEffect(() => { setInspectorOpen(inspectorTab === "findings" && Boolean(selectedFinding)); }, [projectId, runId, selectedFinding, inspectorTab]);
+
   const run = detail.data?.run;
   const live = detail.data?.live ?? null;
   const [liveEvents, setLiveEvents] = useState<RunEvent[] | null>(null);
@@ -100,11 +104,14 @@ export function RunDetailPage() {
     if (!inspectorOpen || !narrowInspector) return;
     const inspector = inspectorRef.current;
     if (!inspector) return;
+    // Only a real element can receive focus back; the body means the page was
+    // replaced under an open drawer, so keep the opener we already saved.
     const active = document.activeElement;
     if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) {
       inspectorOpenerRef.current = active;
     }
-    const background = document.querySelectorAll<HTMLElement>(".workspace-topbar, .workspace-sidebar, .run-header, .run-context-strip, .notice-bar, .session-rail, .run-stream");
+    const background = document.querySelectorAll<HTMLElement>(".workspace-topbar, .workspace-sidebar, .run-header, .run-context-strip, .notice-bar, .session-rail, .run-stream, .run-tabs, .run-primary");
+    const priorInert = [...background].map((element) => element.inert);
     background.forEach((element) => { element.inert = true; });
     const focusable = (): HTMLElement[] => [...inspector.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
     (focusable()[0] ?? inspector).focus();
@@ -119,7 +126,7 @@ export function RunDetailPage() {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      background.forEach((element) => { element.inert = false; });
+      background.forEach((element, index) => { element.inert = priorInert[index]; });
       // A run change can replace the page under the drawer, so the saved
       // opener may be detached: fall back to the current toggle instead of
       // dropping focus onto the body.
@@ -198,9 +205,8 @@ export function RunDetailPage() {
     const jump = (): boolean => {
       const target = document.getElementById(sessionAnchor(selectedSessionKey));
       if (!target) return false;
-      const scroll = streamSticky.scrollRef.current;
+      const scroll = document.querySelector<HTMLElement>(".run-scroll");
       if (scroll) scroll.scrollTo({ top: target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop, behavior: "instant" });
-      else target.scrollIntoView({ block: "start" });
       return true;
     };
     if (jump()) return;
@@ -208,14 +214,13 @@ export function RunDetailPage() {
     const observer = new MutationObserver(() => { if (jump()) observer.disconnect(); });
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [selectedSessionKey, runId, stopScroll]);
+  }, [selectedSessionKey, runId, stopScroll, inspectorTab]);
   const selectSession = (key: string): void => {
     stopScroll();
     updateQuery({ tab: "workflow", session: key });
     const target = document.getElementById(sessionAnchor(key));
-    const scroll = streamSticky.scrollRef.current;
+    const scroll = document.querySelector<HTMLElement>(".run-scroll");
     if (target && scroll) scroll.scrollTo({ top: target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop, behavior: "instant" });
-    else target?.scrollIntoView({ block: "start" });
   };
   useEffect(() => {
     if (inspectorTab !== "findings" || !selectedFinding) return;
@@ -241,8 +246,16 @@ export function RunDetailPage() {
   const duration = live && live.end === null
     ? now - live.startedAt
     : (run.durationMs ?? (run.finishedAt !== null ? run.finishedAt - run.startedAt : null));
-  const isAudit = run.mode === "audit";
-  const activeInspectorTab = inspectorTab === "coverage" && !isAudit ? "findings" : inspectorTab;
+  const activeInspectorTab = inspectorTab;
+  const projectedDetail: RunDetail = { ...detail.data, run: { ...run, status: displayStatus, confirmed, rejected, uncertain, rounds,
+    candidates: counts?.candidates ?? run.candidates,
+    incomplete: projection.end ? projection.end.status === "incomplete" : run.incomplete,
+    stoppedBecause: projection.end?.stoppedBecause ?? run.stoppedBecause,
+    durationMs: projection.end?.durationMs ?? duration,
+    totalTokens: projection.end?.usage?.totalTokens ?? run.totalTokens,
+    cost: projection.end?.usage?.cost ?? run.cost,
+  } };
+  const selectFinding = (id: string): void => { updateQuery({ tab: "findings", finding: id }); setInspectorOpen(true); };
   return (
     <div className="run-page">
       <header className="run-header">
@@ -287,89 +300,39 @@ export function RunDetailPage() {
         <div className="notice-bar"><Info size={14} /> Transcripts were not captured for this run. Findings and run metadata are still available.</div>
       )}
 
-      <div className={`run-workspace ${inspectorOpen ? "has-inspector" : ""}`}>
-        <SessionRail sessions={workflow} selected={selectedSessionKey} onSession={selectSession} />
-
-        <section className="run-stream" aria-label="Review execution stream">
-          <div className="run-scroll" ref={streamSticky.scrollRef}>
-            <div className="stream-column" ref={streamSticky.contentRef}>
-              {liveEvents && <ActivityLog events={liveEvents} />}
-              <SessionTimeline
-                projectId={projectId}
-                runId={runId}
-                sessions={detail.data.sessions}
-                liveEvents={liveEvents}
-                awaitingLive={awaitingLive}
-                preferPersisted={manifest !== null && projection.executionState !== "running"}
-              />
+      <nav className="run-tabs" role="tablist" aria-label="Review views" onKeyDown={(event) => {
+        const tabs: InspectorTab[] = ["overview", "findings", "workflow", "coverage", "details"];
+        const index = tabs.indexOf(activeInspectorTab);
+        const next = event.key === "ArrowRight" ? (index + 1) % tabs.length : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+        if (next === null) return; event.preventDefault(); updateQuery({ tab: tabs[next] });
+        event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]")[next]?.focus();
+      }}>
+        {(["overview", "findings", "workflow", "coverage", "details"] as const).map((tab) => <button key={tab} type="button" role="tab" id={`run-tab-${tab}`} aria-controls="run-panel" aria-selected={activeInspectorTab === tab} tabIndex={activeInspectorTab === tab ? 0 : -1} onClick={() => updateQuery({ tab })}>{tab[0].toUpperCase() + tab.slice(1)}{tab === "findings" ? ` (${projectedDetail.findings.total})` : ""}</button>)}
+      </nav>
+      <div className={`run-workspace review-workbench ${activeInspectorTab === "workflow" ? "has-session-rail" : ""} ${inspectorOpen ? "has-inspector" : ""}`}>
+        {activeInspectorTab === "workflow" && <SessionRail sessions={workflow} selected={selectedSessionKey} onSession={selectSession} />}
+        <section className={`run-primary ${activeInspectorTab === "workflow" ? "run-stream" : ""}`} id="run-panel" role="tabpanel" aria-labelledby={`run-tab-${activeInspectorTab}`}>
+          <div className="run-scroll" ref={activeInspectorTab === "workflow" ? streamSticky.scrollRef : undefined}>
+            <div className="stream-column" ref={activeInspectorTab === "workflow" ? streamSticky.contentRef : undefined}>
+              {activeInspectorTab === "overview" && <RunOverview detail={projectedDetail} coverage={coverage.data} events={liveEvents} execution={displayStatus} connection={sseStatus} pendingCount={counts?.pending} />}
+              {activeInspectorTab === "findings" && <FindingsTab key={`${projectId}/${runId}`} projectId={projectId} runId={runId} findings={detail.data.findings} selectedFinding={selectedFinding} onInspect={selectFinding} />}
+              {activeInspectorTab === "coverage" && (coverage.loading && !coverage.data ? <p role="status">Loading coverage…</p> : coverage.error ? <PageError error={coverage.error} retry={coverage.reload} /> : <CoverageTab coverage={coverage.data} />)}
+              {activeInspectorTab === "details" && <RunDetails detail={projectedDetail} />}
+              {activeInspectorTab === "workflow" && <>
+                <WorkflowTab sessions={workflow} selected={selectedSessionKey} onSession={selectSession} onFinding={selectFinding}
+                  role={searchParams.get("role") ?? "all"} status={searchParams.get("status") ?? "all"} query={searchParams.get("q") ?? ""}
+                  onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value })} />
+                {liveEvents && <ActivityLog events={liveEvents} />}
+                <SessionTimeline projectId={projectId} runId={runId} sessions={detail.data.sessions} liveEvents={liveEvents} awaitingLive={awaitingLive} preferPersisted={manifest !== null && projection.executionState !== "running"} />
+              </>}
             </div>
           </div>
-          {!streamSticky.isAtBottom && (
-            <button
-              type="button"
-              className="icon-button stream-jump-latest"
-              aria-label="Jump to latest"
-              title="Jump to latest"
-              onClick={() => void streamSticky.scrollToBottom({ animation: "smooth" })}
-            >
-              <ArrowDown size={15} />
-            </button>
-          )}
+          {activeInspectorTab === "workflow" && !streamSticky.isAtBottom && <button type="button" className="icon-button stream-jump-latest" aria-label="Jump to latest" onClick={() => void streamSticky.scrollToBottom({ animation: "smooth" })}><ArrowDown size={15} /></button>}
         </section>
-
         {inspectorOpen && narrowInspector && <button className="inspector-scrim" type="button" aria-label="Close inspector" onClick={() => setInspectorOpen(false)} />}
-
-        <aside ref={inspectorRef} className={`run-inspector ${inspectorOpen ? "is-open" : ""}`} aria-label="Review inspector" role={narrowInspector && inspectorOpen ? "dialog" : "complementary"} aria-modal={narrowInspector && inspectorOpen ? true : undefined} tabIndex={-1}>
-          <div className="inspector-tabs" role="tablist" aria-label="Inspector views">
-            <span className="inspector-title">Inspect</span>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeInspectorTab === "findings"}
-              className={activeInspectorTab === "findings" ? "is-active" : ""}
-              onClick={() => updateQuery({ tab: "findings" })}
-            >
-              <ShieldAlert size={14} /> Findings <span>{detail.data.findings.total}</span>
-            </button>
-            <button type="button" role="tab" aria-selected={activeInspectorTab === "workflow"}
-              className={activeInspectorTab === "workflow" ? "is-active" : ""}
-              onClick={() => updateQuery({ tab: "workflow" })}>
-              <ListTree size={14} /> Workflow <span>{workflow.length}</span>
-            </button>
-            {isAudit && (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeInspectorTab === "coverage"}
-                className={activeInspectorTab === "coverage" ? "is-active" : ""}
-                onClick={() => updateQuery({ tab: "coverage" })}
-              >
-                <Gauge size={14} /> Coverage
-              </button>
-            )}
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeInspectorTab === "details"}
-              className={activeInspectorTab === "details" ? "is-active" : ""}
-              onClick={() => updateQuery({ tab: "details" })}
-            >
-              <Info size={14} /> Details
-            </button>
-            <button className="icon-button inspector-close" type="button" aria-label="Close inspector" title="Close inspector" onClick={() => setInspectorOpen(false)}>
-              <X size={16} />
-            </button>
-          </div>
-          <div className="inspector-content">
-            {activeInspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} selectedFinding={selectedFinding} />}
-            {activeInspectorTab === "workflow" && <WorkflowTab sessions={workflow} selected={selectedSession}
-              onSession={selectSession}
-              onFinding={(id) => updateQuery({ tab: "findings", finding: id })}
-              role={searchParams.get("role") ?? "all"} status={searchParams.get("status") ?? "all"} query={searchParams.get("q") ?? ""}
-              onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value })} />}
-            {activeInspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
-            {activeInspectorTab === "details" && <RunDetails detail={detail.data} />}
-          </div>
+        <aside id="run-inspector" ref={inspectorRef} hidden={!inspectorOpen} className={`run-inspector ${inspectorOpen ? "is-open" : ""}`} aria-label="Review inspector" role={narrowInspector && inspectorOpen ? "dialog" : "complementary"} aria-modal={narrowInspector && inspectorOpen ? true : undefined} tabIndex={-1}>
+          <header className="inspector-tabs"><h2 className="inspector-title">{selectedFinding ? `Evidence ${selectedFinding}` : "Run context"}</h2><button className="icon-button inspector-close" type="button" aria-label="Close inspector" onClick={() => setInspectorOpen(false)}><X size={16} /></button></header>
+          <div className="inspector-content">{selectedFinding ? <FindingInspector key={`${projectId}/${runId}/${selectedFinding}`} projectId={projectId} runId={runId} findingId={selectedFinding} /> : <RunDetails detail={projectedDetail} />}</div>
         </aside>
       </div>
     </div>

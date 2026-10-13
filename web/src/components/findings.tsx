@@ -19,14 +19,16 @@ export function FindingsTab({
   runId,
   findings,
   selectedFinding,
+  onInspect,
 }: {
   projectId: string;
   runId: string;
   findings: { items: FindingSummary[]; total: number };
   selectedFinding?: string | null;
+  onInspect?: (id: string) => void;
 }) {
   const [params, setParams] = useSearchParams();
-  const selected = params.get("finding");
+  const selected = selectedFinding ?? params.get("finding");
   const [showAll, setShowAll] = useState(false);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -96,7 +98,7 @@ export function FindingsTab({
 
       <div className="finding-list">
         {windowed.map((finding) => (
-          <FindingRow key={`${projectId}/${runId}/${finding.id}`} selected={selected === finding.displayId} onSelect={() => { const next = new URLSearchParams(params); next.set("finding", finding.displayId); setParams(next); }} projectId={projectId} runId={runId} summary={finding} />
+          <FindingRow key={`${projectId}/${runId}/${finding.id}`} selected={selected === finding.displayId} onInspect={onInspect} onSelect={() => { if (onInspect) { onInspect(finding.displayId); return; } const next = new URLSearchParams(params); next.set("finding", finding.displayId); setParams(next); }} projectId={projectId} runId={runId} summary={finding} />
         ))}
         {visibleLimit < visible.length && <button type="button" className="text-command" onClick={() => setVisibleLimit((n) => n + 50)}>Show more findings ({visible.length - visibleLimit} remaining)</button>}
         {visible.length === 0 && (
@@ -115,7 +117,7 @@ type DetailState =
   | { phase: "error" }
   | { phase: "ready"; detail: FindingView };
 
-function FindingRow({ projectId, runId, summary, selected, onSelect }: { projectId: string; runId: string; summary: FindingSummary; selected: boolean; onSelect: () => void }) {
+function FindingRow({ projectId, runId, summary, selected, onSelect, onInspect }: { projectId: string; runId: string; summary: FindingSummary; selected: boolean; onSelect: () => void; onInspect?: (id: string) => void }) {
   const [open, setOpen] = useState(selected);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
@@ -133,6 +135,8 @@ function FindingRow({ projectId, runId, summary, selected, onSelect }: { project
   // first expand — 100+ findings stay a few-KB list until a row is opened.
   useEffect(() => {
     if (!open) return;
+    // The workbench inspector owns the detail when a row delegates to it.
+    if (onInspect) return;
     // Collapsing and re-expanding the same finding reuses what is already
     // loaded; only a new finding, an explicit retry or a failure refetches.
     if (loadedFor === detailKey) return;
@@ -153,7 +157,7 @@ function FindingRow({ projectId, runId, summary, selected, onSelect }: { project
 
   return (
     <article id={`finding-${summary.displayId}`} className={`finding-row ${accentClass} ${open ? "is-open" : ""}`}>
-      <button className="finding-summary" type="button" aria-expanded={open} onClick={() => { if (!open) onSelect(); setOpen((value) => !value); }}>
+      <button className="finding-summary" type="button" aria-expanded={onInspect ? selected : open} onClick={() => { if (onInspect) { onSelect(); return; } if (!open) onSelect(); setOpen((value) => !value); }}>
         <ChevronRight size={14} className="finding-chevron" />
         <span className="finding-title">
           <strong>{summary.title}</strong>
@@ -165,7 +169,7 @@ function FindingRow({ projectId, runId, summary, selected, onSelect }: { project
         </span>
       </button>
 
-      {open && (
+      {open && !onInspect && (
         <div className="finding-detail">
           {detail?.phase === "loading" && (
             <div className="py-4 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading finding…</div>

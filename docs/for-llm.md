@@ -632,3 +632,5 @@ the same for every host agent.
 
 For implementation details, use [design.md](design.md) and
 [review-loop.md](review-loop.md).
+
+`GET /api/runs/:projectId/:runId/coverage` is additive and mode-specific: `available:true` Change payloads contain hunk/file summaries; Audit payloads contain batch/file summaries, units, file ranges and target. Missing artifacts return `available:false` with `not-recorded` or `unavailable`. Run summaries add verifier model, verdict, completeness, stop reason and update time; finding DTOs add confidence and related sessions. Existing archives are read without migrations or writes.

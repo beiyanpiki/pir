@@ -257,3 +257,5 @@ npm test
 [MIT](../LICENSE) © 2026 Xin Gao
 
 运行的 Workflow 视图支持筛选实时和归档会话，并将会话、finding 链接保存在 URL 中，展示运行时编号到项目 finding 编号的映射。连接状态与执行状态分别显示；选择历史会话后暂停自动滚动，点击 Jump to latest 恢复。
+
+Run 页面按 Overview、Findings、Workflow、Coverage 和 Details 组织。Overview 分开显示执行状态与观察连接，并解释完整性和已记录结论。Finding 证据在桌面 Inspector 或窄屏模态抽屉中展开，来源 session 链接可直达 Workflow。Change Coverage 统计 diff hunk；Audit Coverage 从只读 ledger 展示工作单元和文件状态。旧 Run 缺失的覆盖数据会明确显示未记录。
