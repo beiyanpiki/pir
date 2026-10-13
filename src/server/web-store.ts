@@ -326,7 +326,7 @@ function toRunSummary(row: RawRunRow, stateRoot: string, projectId: string): Run
     cost: manifest?.usage?.cost ?? null,
     transcriptsAvailable: existsSync(path.join(stateRoot, projectId, "transcripts", row.id)),
     verifierModel: manifest?.verifierModel ?? null,
-    runVerdict: manifest?.incomplete ? "incomplete" : manifest?.runVerdict === "correct" ? "clean" : manifest?.runVerdict === "incorrect" ? "incorrect" : manifest?.runVerdict ? "unknown" : null,
+    runVerdict: manifest?.incomplete ? "incomplete" : manifest?.runVerdict === "correct" ? "clean" : manifest?.runVerdict === "incorrect" ? "incorrect" : manifest?.runVerdict === "correct-with-findings" || manifest?.runVerdict === "needs-review" ? manifest.runVerdict : manifest?.runVerdict ? "unknown" : null,
     incomplete: manifest?.incomplete ?? row.status === "incomplete",
     stoppedBecause: manifest?.stoppedBecause ?? row.notes ?? null,
     lastUpdatedAt: row.updated_at ?? manifest?.finishedAt ?? row.finished_at ?? row.started_at,
@@ -457,8 +457,10 @@ function findingSummaries(
   const total = (db.prepare("SELECT COUNT(*) AS n FROM findings WHERE run_id = ?").get(runId) as { n: number }).n;
   const limit = options.limit !== undefined ? Math.min(Math.max(options.limit, 1), 500) : -1;
   const offset = options.offset !== undefined ? Math.max(options.offset, 0) : 0;
+  const columns = (db.prepare("PRAGMA table_info(findings)").all() as Array<{ name: string }>);
+  const confidence = columns.some((column) => column.name === "confidence") ? "confidence" : "NULL AS confidence";
   const rows = db
-    .prepare(`SELECT * FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
+    .prepare(`SELECT id, display_id, title, category, severity, status, round, created_at, ${confidence} FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
     .all(runId, limit, offset) as unknown as RawSummaryRow[];
   const counts = new Map<string, number>();
   for (const row of db

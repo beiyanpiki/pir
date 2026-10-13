@@ -13,6 +13,7 @@ export function RunOverview({ detail, coverage, events, execution, connection }:
   const current = (events ?? []).filter((e) => e.kind === "session-start" && !ended.has(e.sessionId)).at(-1);
   const pending = manifest?.rounds?.at(-1)?.pending;
   const verdict = run.runVerdict ?? "unknown";
+  const recordedVerdict = run.runVerdict ?? manifest?.runVerdict;
   return <div className="run-overview inspector-stack">
     <section className="inspector-section"><h2 className="inspector-section-title"><Info size={16} /> Review scope</h2><dl className="detail-list">
       <div><dt>Mode</dt><dd>{run.mode === "audit" ? "Repository snapshot audit" : "Change review"}</dd></div>
@@ -24,7 +25,7 @@ export function RunOverview({ detail, coverage, events, execution, connection }:
       <div><dt>Current phase</dt><dd>{latest[0] && latest[0].kind === "progress" ? `${latest[0].phase}: ${latest[0].message}` : execution === "running" ? "Awaiting progress" : "Execution ended"}</dd></div>
       <div><dt>Current session</dt><dd>{current?.kind === "session-start" ? `${current.sessionKind} · round ${current.round ?? "unknown"}${current.unitId ? ` · unit ${current.unitId}` : ""}` : "None recorded"}</dd></div>
     </dl></section>
-    <section className="inspector-section"><h2 className="inspector-section-title"><ShieldAlert size={16} /> Conclusion</h2><p className={`verdict-description is-${verdict}`}>{verdict === "clean" ? "No reported defects in the recorded review." : verdict === "incorrect" ? "Confirmed high severity defects make this change incorrect." : verdict === "incomplete" ? "Review incomplete: some checks or verifications remain unfinished." : "No conclusive run verdict was recorded."}</p>
+    <section className="inspector-section"><h2 className="inspector-section-title"><ShieldAlert size={16} /> Conclusion</h2><p className={`verdict-description is-${verdict}`}>{verdict === "incomplete" ? "Review incomplete: some checks or verifications remain unfinished." : recordedVerdict === "correct-with-findings" ? "Review concluded with confirmed findings below the incorrect verdict threshold." : recordedVerdict === "needs-review" ? "Review needs further assessment: uncertain findings remain." : verdict === "clean" ? "No reported defects in the recorded review." : verdict === "incorrect" ? "Confirmed high severity defects make this change incorrect." : verdict === "incomplete" ? "Review incomplete: some checks or verifications remain unfinished." : "No conclusive run verdict was recorded."}</p>
       <p>Execution completion only means the review stopped. It does not establish that the code is free of defects.</p>
       <div className="coverage-grid"><div><span>Confirmed</span><strong>{run.confirmed}</strong></div><div><span>Uncertain</span><strong>{run.uncertain}</strong></div><div><span>Pending</span><strong>{pending ?? "Unknown"}</strong></div></div>
       <p><strong>Completeness:</strong> {run.incomplete ? "Incomplete" : manifest?.incomplete === false ? "Complete" : "Unknown"}</p><p><strong>Stop reason:</strong> {run.stoppedBecause ?? "Not recorded"}</p>
