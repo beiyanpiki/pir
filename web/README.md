@@ -43,6 +43,21 @@ or anything if the server runs tokenless on loopback).
 Production output is built into `../dist/web` (`npm run build` from the repo
 root chains it); `pir serve` serves it statically with SPA fallback.
 
+## Navigation and recovery
+
+The run list stores status, mode, search, and pagination in the URL. Route changes cancel pending loads, and Retry reloads failed pages. Authentication returns to the original path, query, and fragment. Below 1280px, the run inspector opens as a modal drawer: Tab stays inside, Escape closes it, and focus returns to the opener. On desktop, closing the inspector gives its space back to the timeline.
+
+## Browser regressions
+
+Run these commands from the repository root. Playwright uses its managed Chromium, installed for the version in the lockfile. The suite mocks the API, so no running pir server or model credentials are needed.
+
+```bash
+npx playwright install --with-deps chromium
+npm run test:web:e2e
+```
+
+Coverage includes route cancellation, transcript identity, error retries, deep-link login recovery, drawer focus, desktop width, and mobile overflow. Failure screenshots and traces are written to `test-results/web-artifacts`; the HTML report is in `test-results/web-report`. CI installs Chromium before running the same command.
+
 ## Data sources
 
 - `GET /api/overview` — projects + active runs
