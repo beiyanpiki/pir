@@ -67,3 +67,13 @@ test("angle collector IDs resolve through runtime IDs to durable findings", asyn
   assert.deepEqual(result[0].findingMappings, [{ from: "F-1", to: "F-99" }]);
   assert.deepEqual(workflowSessions([{ ...base, kind: "session-start", sessionId: "s", sessionKind: "verifier", role: "v", model: null, prompt: "p", displayId: "F-1" }], [])[0].findingIds, []);
 });
+
+test("terminal REST calibration survives older SSE replay and running snapshots", () => {
+  let state = createLiveRunProjection("r1");
+  const run = { runId: "r1", status: "completed", finishedAt: 100, rounds: 2, candidates: 3, confirmed: 2, rejected: 1, uncertain: 0 };
+  state = reduceLiveRunProjection(state, { type: "detail", detail: { run, manifest: null } });
+  state = reduceLiveRunProjection(state, { type: "event", event: { ...base, kind: "run-start", mode: "change", base: "b", head: "h", model: null } });
+  state = reduceLiveRunProjection(state, { type: "detail", detail: { run: { ...run, status: "running", finishedAt: null }, manifest: null } });
+  assert.equal(state.executionState, "completed");
+  assert.equal(state.counts.confirmed, 2);
+});

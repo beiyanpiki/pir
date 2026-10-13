@@ -121,6 +121,7 @@ export function useRunEvents(
     const controller = new AbortController();
     let active = true;
     let attempts = 0;
+    const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
 
     const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => {
       const timer = setTimeout(resolve, milliseconds);
@@ -145,7 +146,7 @@ export function useRunEvents(
               setStatus("unauthorized");
               navigate("/login", {
                 replace: true,
-                state: { from: `${window.location.pathname}${window.location.search}${window.location.hash}` },
+                state: { from },
               });
               return;
             }
