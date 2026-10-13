@@ -3746,3 +3746,38 @@ input {
 .run-stream .diff-count.is-delete {
   color: var(--session-code-delete);
 }
+
+@media (min-width: 1280px) {
+  .run-workspace:not(.has-inspector) {
+    grid-template-columns: 198px minmax(0, 1fr);
+  }
+  .run-workspace:not(.has-inspector) .run-inspector {
+    display: none;
+  }
+}
+
+@media (min-width: 681px) and (max-width: 1279px) {
+  .run-workspace {
+    grid-template-columns: 198px minmax(0, 1fr);
+  }
+  .run-inspector {
+    position: fixed;
+    z-index: 60;
+    top: 48px;
+    right: 0;
+    bottom: 0;
+    display: none;
+    width: min(410px, calc(100vw - 24px));
+    border-left: 1px solid var(--border);
+    box-shadow: -18px 0 55px rgba(0, 0, 0, 0.38);
+  }
+  .run-inspector.is-open { display: flex; }
+  .inspector-scrim {
+    position: fixed;
+    inset: 48px 0 0;
+    z-index: 55;
+    display: block;
+    border: 0;
+    background: rgba(0, 0, 0, 0.48);
+  }
+}
