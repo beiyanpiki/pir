@@ -276,30 +276,42 @@ test("detectPacks activates frontend by framework markers, not package.json alon
   }
 });
 
-test("composed glob markers match through the wildmatch fallback (dogfood F-169)", async () => {
+test("composed glob markers match through the wildmatch fallback (dogfood F-169, F-171)", async () => {
+  const mkPack = (name, markerFiles) => ({
+    name,
+    title: name,
+    version: "1.0.0",
+    markerFiles,
+    extensions: [],
+    reviewerGuidance: "# Composed review directions\n",
+    verifierGuidance: "# Composed verification playbooks\n",
+  });
+  // Newline-parent fixture holds the ONLY marker path, so hitting it at all
+  // requires the depth prefix's `.*` to cross the terminator (the s flag);
+  // dropping the flag leaves nothing else to match (dogfood F-171).
   const repo = createTempGitRepo("pir-plugins-composed-glob-");
   try {
     repo.write("we\nb/apps/foo/vite.config.ts", "export default {};\n");
-    repo.write("apps/bar/vite.config.ts", "export default {};\n");
-    const head = repo.commit("composed glob layouts");
-    const pack = {
-      name: "composed",
-      title: "Composed",
-      version: "1.0.0",
-      markerFiles: ["apps/*/vite.config.ts"],
-      extensions: [],
-      reviewerGuidance: "# Composed review directions\n",
-      verifierGuidance: "# Composed verification playbooks\n",
-    };
-    const segmentActive = await detectPacks(repo.dir, head, [pack]);
-    assert.equal(segmentActive.length, 1, "whole-segment star matches one directory level");
-
-    // Depth prefix crossing a line-terminator directory pins the s flag.
-    const deep = { ...pack, name: "composed-deep", markerFiles: ["**/apps/*/vite.config.ts"] };
-    const deepActive = await detectPacks(repo.dir, head, [deep]);
-    assert.equal(deepActive.length, 1, "depth prefix crosses the newline directory");
+    const head = repo.commit("newline parent is the only layout");
+    const deep = await detectPacks(repo.dir, head, [mkPack("composed-deep", ["**/apps/*/vite.config.ts"])]);
+    assert.equal(deep.length, 1, "depth prefix crosses the newline directory (pins the s flag)");
+    const rootOnly = await detectPacks(repo.dir, head, [mkPack("composed-root", ["apps/*/vite.config.ts"])]);
+    assert.equal(rootOnly.length, 0, "a marker without the depth prefix stays root-anchored");
   } finally {
     repo.cleanup();
+  }
+
+  const repo2 = createTempGitRepo("pir-plugins-composed-seg-");
+  try {
+    repo2.write("apps/bar/vite.config.ts", "export default {};\n");
+    repo2.write("apps/bar/other.config.ts", "export default {};\n");
+    const head2 = repo2.commit("plain one-level layout");
+    const segment = await detectPacks(repo2.dir, head2, [mkPack("composed-seg", ["apps/*/vite.config.ts"])]);
+    assert.equal(segment.length, 1, "whole-segment star matches one directory level");
+    const wrongName = await detectPacks(repo2.dir, head2, [mkPack("composed-wrong", ["apps/*/vite.config.mts"])]);
+    assert.equal(wrongName.length, 0, "whole-segment star does not widen the filename");
+  } finally {
+    repo2.cleanup();
   }
 });
 
