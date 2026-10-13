@@ -106,6 +106,7 @@ type DetailState =
 function FindingRow({ projectId, runId, summary }: { projectId: string; runId: string; summary: FindingSummary }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<DetailState | null>(null);
+  const [retry, setRetry] = useState(0);
   const accentClass =
     summary.severity === "P0" ? "is-p0" :
     summary.severity === "P1" ? "is-p1" :
@@ -114,20 +115,20 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
   // The heavy fields (claim prose, evidence excerpts, rationale) load on
   // first expand — 100+ findings stay a few-KB list until a row is opened.
   useEffect(() => {
-    if (!open || detail !== null) return;
-    let cancelled = false;
+    if (!open) return;
+    const controller = new AbortController();
     setDetail({ phase: "loading" });
-    fetchFindingDetail(projectId, runId, summary.id)
+    fetchFindingDetail(projectId, runId, summary.id, controller.signal)
       .then((full) => {
-        if (!cancelled) setDetail({ phase: "ready", detail: full });
+        setDetail({ phase: "ready", detail: full });
       })
-      .catch(() => {
-        if (!cancelled) setDetail({ phase: "error" });
+      .catch((cause) => {
+        if (!(cause instanceof DOMException && cause.name === "AbortError")) setDetail({ phase: "error" });
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [open, detail, projectId, runId, summary.id]);
+  }, [open, projectId, runId, summary.id, retry]);
 
   return (
     <article className={`finding-row ${accentClass} ${open ? "is-open" : ""}`}>
@@ -149,7 +150,7 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
             <div className="py-4 text-center text-muted-foreground"><span className="pir-mini-spinner" /> loading finding…</div>
           )}
           {detail?.phase === "error" && (
-            <div className="empty-state is-compact">Could not load finding {summary.displayId}.</div>
+            <div className="empty-state is-compact">Could not load finding {summary.displayId}. <button className="text-command" type="button" onClick={() => setRetry((value) => value + 1)}>Retry</button></div>
           )}
           {detail?.phase === "ready" && <FindingDetail finding={detail.detail} />}
         </div>
