@@ -243,3 +243,26 @@ test("web ui: sse streams live run events and rejects unknown runs", async (t) =
   const afterBody = await after.json();
   assert.equal(afterBody.active.length, 0);
 });
+
+test("web ui: run lists still serve archives written before the mode column", async (t) => {
+  const { base, root } = await withWebServer(t);
+  const auth = { authorization: `Bearer ${WEB_TOKEN}` };
+  const store = SqliteStore.open(path.join(root, PROJECT_ID, "memory.sqlite"));
+  // Pre-v5 archives have no review_runs.mode column and were never migrated.
+  store.run("ALTER TABLE review_runs DROP COLUMN mode");
+  store.close();
+  const list = async (suffix) => {
+    const response = await fetch(`${base}/api/projects/${PROJECT_ID}/runs${suffix}`, { headers: auth });
+    return { status: response.status, body: await response.json() };
+  };
+  const all = await list("");
+  assert.equal(all.status, 200);
+  assert.equal(all.body.total, 1);
+  assert.ok(all.body.runs.every((run) => run.mode === "change"));
+  const change = await list("?mode=change");
+  assert.equal(change.status, 200);
+  assert.equal(change.body.total, 1);
+  const audit = await list("?mode=audit");
+  assert.equal(audit.status, 200, "an audit filter on a pre-v5 archive is empty, not a 404");
+  assert.equal(audit.body.total, 0);
+});

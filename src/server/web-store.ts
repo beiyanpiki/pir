@@ -281,7 +281,8 @@ function toRunSummary(row: RawRunRow, stateRoot: string, projectId: string): Run
   const manifest = manifestFor(stateRoot, projectId, row.id);
   return {
     runId: row.id,
-    mode: row.mode,
+    // Pre-v5 archives predate the audit mode; every recorded run is a change.
+    mode: typeof row.mode === "string" ? row.mode : "change",
     base: row.base,
     head: row.head,
     startedAt: row.started_at,
@@ -314,7 +315,18 @@ export function listRuns(
     const clauses: string[] = [];
     const values: string[] = [];
     if (options.status) { clauses.push("status = ?"); values.push(options.status); }
-    if (options.mode) { clauses.push("mode = ?"); values.push(options.mode); }
+    if (options.mode) {
+      // Archives written before migration v5 have no mode column; they are all
+      // change reviews, so an audit filter is empty rather than a 404.
+      const hasMode = (db.prepare("PRAGMA table_info(review_runs)").all() as Array<{ name: string }>)
+        .some((column) => column.name === "mode");
+      if (!hasMode) {
+        if (options.mode === "audit") return { runs: [], total: 0 };
+      } else {
+        clauses.push("mode = ?");
+        values.push(options.mode);
+      }
+    }
     const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
     const totalRow = db.prepare(
       `SELECT COUNT(*) AS n FROM review_runs${where}`,
