@@ -139,3 +139,11 @@ test("change-mode verifier prompt steers call-site enumeration to find_* (#68)",
   assert.doesNotMatch(withoutIndex, /find_callers/);
   assert.match(withoutIndex, /Structural index unavailable: rely on pinned read_code\/search_text\/get_change/);
 });
+
+test("change-mode reviewer prompt steers call-site enumeration to find_* (#68)", () => {
+  const withIndex = reviewerPrompt({ base: "0000", head: "1111", mergeBase: "2222", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack, structuralQueries: true });
+  assert.match(withIndex, /find_symbol for the qualified name, then find_callers \/ find_callees \/ find_references/);
+  assert.match(withIndex, /Confirm each candidate with pinned read_code/);
+  const withoutIndex = reviewerPrompt({ base: "0000", head: "1111", mergeBase: "2222", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack, structuralQueries: false });
+  assert.doesNotMatch(withoutIndex, /find_callers/);
+});
