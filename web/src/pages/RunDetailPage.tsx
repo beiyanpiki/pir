@@ -198,7 +198,9 @@ export function RunDetailPage() {
     const jump = (): boolean => {
       const target = document.getElementById(sessionAnchor(selectedSessionKey));
       if (!target) return false;
-      target.scrollIntoView({ block: "start" });
+      const scroll = streamSticky.scrollRef.current;
+      if (scroll) scroll.scrollTo({ top: target.offsetTop, behavior: "auto" });
+      else target.scrollIntoView({ block: "start" });
       return true;
     };
     if (jump()) return;
@@ -210,7 +212,10 @@ export function RunDetailPage() {
   const selectSession = (key: string): void => {
     stopScroll();
     updateQuery({ tab: "workflow", session: key });
-    document.getElementById(sessionAnchor(key))?.scrollIntoView({ block: "start" });
+    const target = document.getElementById(sessionAnchor(key));
+    const scroll = streamSticky.scrollRef.current;
+    if (target && scroll) scroll.scrollTo({ top: target.offsetTop, behavior: "auto" });
+    else target?.scrollIntoView({ block: "start" });
   };
   useEffect(() => {
     if (inspectorTab !== "findings" || !selectedFinding) return;
