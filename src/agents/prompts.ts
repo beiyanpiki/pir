@@ -178,6 +178,7 @@ export function reviewerPrompt(input: {
     "PROCESS",
     "Start with get_change, then investigate highest-risk changed behavior first. Trace the minimal causal slice: changed logic, reachable trigger, affected caller/callee or invariant, and concrete impact. Expand only to resolve a specific uncertainty; do not exhaustively read the repository or every document.",
     "Use read_code at head and merge-base (base only when needed), search_text and relevant find_* queries to prove change attribution. Actively seek counter-evidence: guards, callers, tests, contracts or alternate paths that would disprove the claim.",
+    ...(input.structuralQueries ? [structuralEnumerationLine] : []),
     "For each distinct defect, record_candidate only after grounding its trigger, impact and changed cause in code you read. Anchors may be relevant unchanged files. Head line numbers are preferred; an entirely deleted file uses merge-base lines, explicitly identified in evidence. Evidence excerpts may be concise; describe their causal relevance.",
     "Reuse facts and previous coverage. Do not repeat identical research without new evidence or an unresolved question. Stop when the useful evidence runs out; unresolved uncertainty belongs in finish_round, not a speculative finding. Do not propose fixes.",
     "Severity measures impact and urgency (P0 critical, P1 high, P2 normal, P3 low), not confidence. A conditional trigger does not by itself lower severity; weak evidence is not a low-severity finding. " + severityCalibrationLine,
