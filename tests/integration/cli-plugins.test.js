@@ -80,6 +80,31 @@ test("pir plugins list activates typescript by tsconfig.json at HEAD", async () 
   }
 });
 
+test("pir plugins list activates frontend by next.config.ts at HEAD", async () => {
+  const repo = createTempGitRepo("pir-plugins-fe-");
+  try {
+    repo.write("package.json", '{ "name": "web", "dependencies": { "next": "15.0.0" } }\n');
+    repo.write("next.config.ts", "const config = {};\nexport default config;\n");
+    repo.write("app/page.tsx", "export default function Page() { return <p>hi</p>; }\n");
+    repo.commit("add next app");
+
+    const json = await pir(["plugins", "list", "--json", "--cwd", repo.dir]);
+    const parsed = JSON.parse(json.stdout);
+    const frontend = parsed.data.packs.find((p) => p.name === "frontend");
+    assert.ok(frontend, "frontend pack listed");
+    assert.equal(frontend.active, true);
+    assert.equal(frontend.activation, "auto");
+    const typescript = parsed.data.packs.find((p) => p.name === "typescript");
+    assert.equal(typescript.active, false, "no tsconfig.json in this fixture");
+
+    const text = await pir(["plugins", "list", "--cwd", repo.dir]);
+    assert.match(text.stdout, /frontend@\d+\.\d+\.\d+ \(Frontend\)/);
+    assert.match(text.stdout, /\[active\]/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("pir plugins list reports inactive packs in a non-Go repo", async () => {
   const repo = createTempGitRepo("pir-plugins-nongo-");
   try {
@@ -109,7 +134,7 @@ test("unknown plugins subcommand and --plugins names are usage errors", async ()
     const badPack = await pirExpectFail(["find", "--plugins", "bogus", "--cwd", repo.dir]);
     assert.equal(badPack.code, 2);
     assert.match(badPack.stderr, /unknown --plugins pack\(s\): bogus/);
-    assert.match(badPack.stderr, /available: golang/);
+    assert.match(badPack.stderr, /available: frontend, golang, typescript/);
 
     const noValue = await pirExpectFail(["find", "--plugins"]);
     assert.equal(noValue.code, 2);

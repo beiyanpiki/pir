@@ -68,6 +68,54 @@ test("built-in typescript pack loads with a valid manifest and guidance within b
   }
 });
 
+test("built-in frontend pack loads with a valid manifest and guidance within budget", () => {
+  const packs = loadBuiltInPacks();
+  const frontend = packs.find((pack) => pack.name === "frontend");
+  assert.ok(frontend, `frontend pack present among: ${packs.map((p) => p.name).join(", ")}`);
+  assert.equal(frontend.title, "Frontend");
+  assert.match(frontend.version, /^\d+\.\d+\.\d+$/);
+  // Framework configs and the vite SPA entry; never a bare package.json.
+  for (const marker of ["next.config.ts", "nuxt.config.ts", "svelte.config.js", "astro.config.mjs", "vite.config.ts", "index.html"]) {
+    assert.ok(frontend.markerFiles.includes(marker), `marker ${marker} present`);
+  }
+  assert.ok(!frontend.markerFiles.includes("package.json"), "package.json is not a frontend marker");
+  assert.deepEqual(frontend.extensions, ["vue", "svelte", "astro", "css", "scss"]);
+  assert.match(frontend.reviewerGuidance, /^# Frontend review directions/);
+  assert.match(frontend.reviewerGuidance, /## Hydration and the server\/client boundary/);
+  assert.match(frontend.reviewerGuidance, /## XSS and client-side secrets/);
+  assert.match(frontend.reviewerGuidance, /## Performance \(reachable hot paths only\)/);
+  assert.match(frontend.verifierGuidance, /^# Frontend verification playbooks/);
+  assert.match(frontend.verifierGuidance, /Config gate/);
+  assert.match(frontend.reviewerAuditGuidance, /^# Frontend audit directions/);
+  assert.match(frontend.verifierAuditGuidance, /^# Frontend audit verification playbooks/);
+  assert.ok(!frontend.reviewerAuditGuidance.includes("this change"), "audit reviewer guidance must not leak change attribution");
+  assert.ok(!frontend.verifierAuditGuidance.includes("this change"), "audit verifier guidance must not leak change attribution");
+  for (const role of ["reviewer", "verifier"]) {
+    const rendered = renderGuidance([{ pack: frontend, activation: "auto" }], role);
+    assert.ok(!rendered.includes("TRUNCATED"), `${role} guidance must not truncate (got ${rendered.length} chars)`);
+    assert.ok(rendered.length <= GUIDANCE_BUDGET_CHARS, `${role} guidance within budget`);
+  }
+});
+
+test("frontend and typescript packs co-activate without truncating each other", () => {
+  // Every framework web repo matches both marker sets; the shared single
+  // pool used to cut whichever pack rendered first mid-section.
+  const packs = loadBuiltInPacks();
+  const frontend = packs.find((pack) => pack.name === "frontend");
+  const typescript = packs.find((pack) => pack.name === "typescript");
+  for (const role of ["reviewer", "verifier"]) {
+    const rendered = renderGuidance([
+      { pack: frontend, activation: "auto" },
+      { pack: typescript, activation: "auto" },
+    ], role);
+    assert.ok(!rendered.includes("TRUNCATED"), `${role} co-render must not truncate (got ${rendered.length} chars)`);
+    assert.ok(rendered.includes(`[frontend@${frontend.version}, auto]`), "frontend section present");
+    assert.ok(rendered.includes(`[typescript@${typescript.version}, auto]`), "typescript section present");
+    assert.ok(rendered.includes("## XSS and client-side secrets"), "frontend tail intact");
+    assert.match(rendered, /No reachable path, no finding\./, "typescript tail intact");
+  }
+});
+
 test("renderGuidance returns empty string without packs and truncates over budget", () => {
   assert.equal(renderGuidance([], "reviewer"), "");
   const verbose = {
@@ -131,6 +179,27 @@ test("detectPacks activates by marker file at the pinned head commit, not the wo
     assert.ok(golang, "go.mod at head activates golang even when the working tree lost it");
     assert.equal(golang.activation, "auto");
     assert.match(golang.version, /^\d+\.\d+\.\d+$/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("detectPacks activates frontend by framework markers, not package.json alone", async () => {
+  const packs = loadBuiltInPacks();
+  const repo = createTempGitRepo("pir-plugins-frontend-detect-");
+  try {
+    repo.write("package.json", '{ "name": "web", "dependencies": { "next": "15.0.0" } }\n');
+    const plainHead = repo.commit("node project without framework config");
+    const before = await detectPacks(repo.dir, plainHead, packs);
+    assert.equal(before.some((p) => p.name === "frontend"), false, "package.json alone does not activate frontend");
+
+    repo.write("next.config.ts", "import type { NextConfig } from 'next';\nconst config: NextConfig = {};\nexport default config;\n");
+    const head = repo.commit("add next config");
+    const active = await detectPacks(repo.dir, head, packs);
+    const frontend = active.find((p) => p.name === "frontend");
+    assert.ok(frontend, "next.config.ts at head activates frontend");
+    assert.equal(frontend.activation, "auto");
+    assert.match(frontend.version, /^\d+\.\d+\.\d+$/);
   } finally {
     repo.cleanup();
   }
