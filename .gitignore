@@ -8,3 +8,4 @@ dist/
 tests/eval/reviewbench/.cache/
 tests/eval/rb-out/
 tests/web-e2e/test-results/
+test-results/
