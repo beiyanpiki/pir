@@ -9,8 +9,8 @@ export default defineConfig({
   testMatch: "*.spec.js",
   workers: 1,
   retries: 0,
-  reporter: [["list"], ["html", { outputFolder: path.join(root, process.env.PIR_WEB_REPORT_DIR ?? "test-results/web-report"), open: "never" }]],
-  outputDir: path.join(root, process.env.PIR_WEB_ARTIFACT_DIR ?? "test-results/web-artifacts"),
+  reporter: [["list"], ["html", { outputFolder: process.env.PIR_WEB_REPORT_DIR ?? "/tmp/pir-web-live-report", open: "never" }]],
+  outputDir: process.env.PIR_WEB_ARTIFACT_DIR ?? "/tmp/pir-web-live-artifacts",
   use: {
     baseURL: `http://127.0.0.1:${process.env.PIR_WEB_TEST_PORT ?? "5174"}`,
     browserName: "chromium",

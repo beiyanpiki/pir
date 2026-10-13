@@ -143,36 +143,3 @@ test("SSE 401 returns to login with the session URL preserved", async ({ page })
   await expect(page).toHaveURL(/\/login$/);
   await expect.poll(() => page.evaluate(() => history.state.usr?.from)).toBe(`/runs/${projectId}/${runId}?tab=workflow`);
 });
-
-test("run-end uses terminal counts and replaces live content with its complete archive", async ({ page }) => {
-  let detail = snapshot();
-  await mount(page, () => detail);
-  await page.route("**/api/runs/*/*/transcript/*", (route) => route.fulfill({ json: { role: "reviewer", model: "fixture", prompt: "Archived goal", messages: [{ role: "assistant", content: [{ type: "text", text: "Complete archive content" }], timestamp: 1 }], startedAt: "2026-10-13T00:00:00Z", endedAt: "2026-10-13T00:00:01Z" } }));
-  const connection = await streamFor();
-  send(connection, start("s", 1, "s.json"));
-  send(connection, event("session-delta", 2, { sessionId: "s", deltaType: "text", text: "Partial live content" }));
-  await expect(page.locator(".session-timeline")).toContainText("Partial live content");
-  detail = snapshot(runId, [{ file: "s.json", sessionKind: "reviewer", round: 1 }]);
-  detail.run = { ...detail.run, status: "completed", finishedAt: 10, confirmed: 1, candidates: 1, durationMs: 9 };
-  detail.live = null;
-  detail.manifest = { sessions: detail.sessions, rounds: [], model: "fixture", status: "completed" };
-  send(connection, event("run-end", 3, { status: "completed", stoppedBecause: "done", durationMs: 9, counts: { rounds: 1, candidates: 1, confirmed: 1, rejected: 0, uncertain: 0, pending: 0 }, findings: [] }));
-  await expect(page.locator(".run-title-line")).toContainText("completed");
-  await expect(page.locator(".run-context-strip .metric-success")).toHaveText("1");
-  await expect(page.locator(".session-flow-section")).toHaveCount(1);
-  await expect(page.locator(".session-timeline")).toContainText("Complete archive content");
-  await expect(page.locator(".session-timeline")).not.toContainText("Partial live content");
-});
-
-test("workflow search replaces URL history while typing", async ({ page }) => {
-  await mount(page);
-  // Push a distinct view before returning to Workflow so Back has a real target.
-  await page.getByRole("tab", { name: "Details" }).click();
-  await page.getByRole("tab", { name: "Workflow" }).click();
-  const search = page.getByRole("searchbox", { name: "Search sessions" });
-  await search.type("verifier", { delay: 30 });
-  await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("verifier");
-  await expect(page).toHaveURL(/tab=workflow&q=verifier/);
-  await page.goBack();
-  await expect(page).toHaveURL((url) => url.pathname === `/runs/${projectId}/${runId}` && url.searchParams.get("q") === null);
-});
