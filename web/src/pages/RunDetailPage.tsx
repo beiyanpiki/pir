@@ -71,7 +71,10 @@ export function RunDetailPage() {
     if (!inspectorOpen || !narrowInspector) return;
     const inspector = inspectorRef.current;
     if (!inspector) return;
-    inspectorOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) {
+      inspectorOpenerRef.current = active;
+    }
     const background = document.querySelectorAll<HTMLElement>(".workspace-topbar, .workspace-sidebar, .run-header, .run-context-strip, .notice-bar, .session-rail, .run-stream");
     background.forEach((element) => { element.inert = true; });
     const focusable = (): HTMLElement[] => [...inspector.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
@@ -88,7 +91,12 @@ export function RunDetailPage() {
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       background.forEach((element) => { element.inert = false; });
-      inspectorOpenerRef.current?.focus();
+      // A run change can replace the page under the drawer, so the saved
+      // opener may be detached: fall back to the current toggle instead of
+      // dropping focus onto the body.
+      const opener = inspectorOpenerRef.current;
+      if (opener?.isConnected) opener.focus();
+      else document.querySelector<HTMLElement>(".run-header-actions button")?.focus();
     };
   }, [inspectorOpen, narrowInspector, detail.data !== null && !detail.error]);
 

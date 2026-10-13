@@ -258,3 +258,36 @@ test("paging refreshes the rows in place so the pager keeps keyboard focus", asy
   await expect(page.locator(".run-table")).toContainText("audit");
   await expect(older).toBeFocused();
 });
+
+test("drawer focus returns to the toggle when history swaps the run underneath", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.goto(`/runs/${projectA}/${runA}`);
+  await page.locator(`.sidebar-run[href='/runs/${projectA}/${runB}']`).click();
+  await expect(page.locator(".run-header h1")).toHaveText("cccccccc…dddddddd");
+  await page.getByRole("button", { name: "Open inspector" }).click();
+  await expect(page.getByRole("dialog", { name: "Review inspector" })).toBeVisible();
+  // Browser history can swap the run while the modal drawer is open, which
+  // unmounts the opener the trap saved.
+  await page.goBack();
+  await expect(page.locator(".run-header h1")).toHaveText("cccccccc…dddddddd");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Review inspector" })).toBeHidden();
+  await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe("BUTTON");
+});
+
+test("a failed finding detail offers retry and keeps the error state", async ({ page }) => {
+  const summary = { id: "f1", displayId: "F-1", title: "Off-by-one", category: "logic", severity: "P1", status: "confirmed", round: 1, createdAt: 1, evidenceCount: 1, confidence: 0.8 };
+  const detail = { ...summary, claim: "The loop overruns by one.", trigger: "diff", featureKey: null, entityKey: null, anchors: [], evidence: [], memoryMatches: [], verifierRationale: "checked", relatedSessions: [] };
+  let failing = true;
+  await page.route("**/api/runs/*/*", (route) => route.fulfill({ json: { run: run(runA), findings: { items: [summary], total: 1 }, sessions: [], manifest: null, transcriptsAvailable: false } }));
+  await page.route("**/api/runs/*/*/findings/f1", (route) => failing
+    ? route.fulfill({ status: 500, json: { error: "boom" } })
+    : route.fulfill({ json: detail }));
+  await page.goto(`/runs/${projectA}/${runA}`);
+  const row = page.locator(".finding-row").first();
+  await row.getByRole("button").first().click();
+  await expect(row.getByRole("button", { name: "Retry" })).toBeVisible();
+  failing = false;
+  await row.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("The loop overruns by one.")).toBeVisible();
+});

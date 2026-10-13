@@ -106,7 +106,9 @@ type DetailState =
 function FindingRow({ projectId, runId, summary }: { projectId: string; runId: string; summary: FindingSummary }) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<DetailState | null>(null);
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
+  const detailKey = `${projectId}/${runId}/${summary.id}`;
   const accentClass =
     summary.severity === "P0" ? "is-p0" :
     summary.severity === "P1" ? "is-p1" :
@@ -116,11 +118,15 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
   // first expand — 100+ findings stay a few-KB list until a row is opened.
   useEffect(() => {
     if (!open) return;
+    // Collapsing and re-expanding the same finding reuses what is already
+    // loaded; only a new finding, an explicit retry or a failure refetches.
+    if (loadedFor === detailKey) return;
     const controller = new AbortController();
     setDetail({ phase: "loading" });
     fetchFindingDetail(projectId, runId, summary.id, controller.signal)
       .then((full) => {
         setDetail({ phase: "ready", detail: full });
+        setLoadedFor(detailKey);
       })
       .catch((cause) => {
         if (!(cause instanceof DOMException && cause.name === "AbortError")) setDetail({ phase: "error" });
@@ -128,7 +134,7 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
     return () => {
       controller.abort();
     };
-  }, [open, projectId, runId, summary.id, retry]);
+  }, [open, projectId, runId, summary.id, retry, loadedFor, detailKey]);
 
   return (
     <article className={`finding-row ${accentClass} ${open ? "is-open" : ""}`}>
