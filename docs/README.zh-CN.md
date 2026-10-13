@@ -143,7 +143,7 @@ pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
 ```
 
-`--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Go 和 TypeScript 包均支持 find 与 audit。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
+`--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Frontend、Go 和 TypeScript 包均支持 find 与 audit。前端包按框架 marker（`next.config.*`、`nuxt.config.*`、`svelte.config.*`、`astro.config.*`、`angular.json`、`vite.config.*`、`index.html`）自动激活，覆盖 React/Next、Vue/Nuxt、Svelte 等 Web UI——没有任何 marker 的纯 SPA 仓库可显式传 `--plugins frontend`。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
 
 验证默认串行。`--verify-concurrency <n>`（1–8，默认 1；未传 flag 时读 `PIR_VERIFY_CONCURRENCY` 环境变量）让每轮验证排空最多并行运行 n 个 verifier 会话，find 与 audit 均适用。即使验证并发竞争，报告的 findings 数也不会超过 `--max-findings`，且 findings 顺序保持确定。
 

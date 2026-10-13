@@ -218,7 +218,7 @@ Limits:
 | `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |
 | `--angles a,b\|all` | experimental (F1, default off, find-only): round 1 fans out one specialized reviewer session per angle (correctness, concurrency, security, contracts, performance) instead of one general session; capped at 4 parallel sessions and shrunk by remaining token/wall-clock budget; later rounds stay general with the merged focus; cross-angle near-duplicates (same entity, near-identical claim) collapse and finding ids are reassigned uniquely |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
-| `--plugins auto\|none\|golang,typescript` | `auto`, detected at selected head |
+| `--plugins auto\|none\|frontend,golang,typescript` | `auto`, detected at selected head |
 | `--no-sync-index` | skip optional codegraph index synchronization |
 
 `PIR_CODEGRAPH=1` (server/serve deployments) makes throwaway-worktree reviews
