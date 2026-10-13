@@ -161,6 +161,32 @@ test("isolated loader ignores malicious global, ancestor and project resources, 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("tool prompt snippets render into the isolated system prompt (SDK skips them under customPrompt)", () => {
+  const withSnippets = buildReviewSystemPrompt("code reviewer", [
+    "find_symbol: locate a qualified name via the structural index",
+    "find_callers: enumerate approximate call sites",
+  ]);
+  assert.match(withSnippets, /AVAILABLE REVIEW TOOLS/);
+  assert.match(withSnippets, /- find_symbol: locate a qualified name via the structural index/);
+  assert.match(withSnippets, /- find_callers: enumerate approximate call sites/);
+  assert.equal(buildReviewSystemPrompt("code reviewer").includes("AVAILABLE REVIEW TOOLS"), false);
+  const toolWith = {
+    name: "find_symbol", description: "d", promptSnippet: "find_symbol: locate a qualified name",
+    parameters: { type: "object", properties: {} }, execute: async () => ({ text: "x" }),
+  };
+  const toolWithout = {
+    name: "get_project_memory", description: "d",
+    parameters: { type: "object", properties: {} }, execute: async () => ({ text: "x" }),
+  };
+  const options = createIsolatedSessionOptions(config("/not-read/project", { tools: [toolWith, toolWithout] }), {
+    agentDir: "/not-read/global", modelRuntime: runtime, model, thinkingLevel: "off",
+  });
+  const prompt = options.resourceLoader.getSystemPrompt();
+  assert.match(prompt, /- find_symbol: locate a qualified name/);
+  assert.doesNotMatch(prompt, /get_project_memory/);
+  assert.equal(prompt, buildReviewSystemPrompt("code reviewer", ["find_symbol: locate a qualified name"]));
+});
+
 test("configuration is explicit, memory-only, read-only, and keeps collector tools serial", async () => {
   const custom = {
     name: "finish_round", description: "Finish after collecting evidence",
