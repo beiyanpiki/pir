@@ -108,10 +108,10 @@ Usage:
                       performance — or "all". Capped at 4 parallel sessions,
                       budget-guarded; later rounds stay general
   --plugins <list>    language packs injecting language-specific review
-                      directions (golang and typescript ship today; more
-                      packs follow): comma-separated names, "none" to
-                      disable, or "auto" to detect from marker files at
-                      head (default)
+                      directions (frontend, golang and typescript ship
+                      today; more packs follow): comma-separated names,
+                      "none" to disable, or "auto" to detect from marker
+                      files at head (default)
   --no-sync-index     skip codegraph index sync
   --detach            remote only: submit as an async job and return
                       immediately (#53; see Remote mode)`,
