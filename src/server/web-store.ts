@@ -576,7 +576,7 @@ export function findingById(
     view.relatedSessions = (manifest?.sessions ?? []).flatMap<FindingView["relatedSessions"][number]>((session) => {
       const key = `persisted:${session.file}`;
       const mapped = session.findingIdMap?.find((entry) => entry.to === view.displayId);
-      const legacy = !session.findingIdMap && session.idMap?.find((entry) => entry.to === view.displayId);
+      const legacy = session.findingIdMap ? undefined : session.idMap?.find((entry) => entry.to === view.displayId);
       if (session.sessionKind === "verifier" && (mapped || (!session.findingIdMap && session.displayId === view.displayId))) return [{ sessionKey: key, relation: "verification" as const }];
       if (session.sessionKind === "reviewer" && (mapped || legacy)) {
         const originalDisplayId = mapped ? session.idMap?.find((entry) => entry.to === mapped.from)?.from ?? mapped.from : legacy!.from;
