@@ -358,13 +358,23 @@ export function listRuns(
         params.push(options.mode);
       }
     }
-    const rows = db.prepare(`SELECT * FROM review_runs WHERE ${clauses.join(" AND ")} ORDER BY started_at DESC, id DESC`)
-      .all(...params) as unknown as RawRunRow[];
+    const where = clauses.join(" AND ");
     const needle = options.q?.trim().toLowerCase();
-    const filtered = rows.map((row) => toRunSummary(row, stateRoot, projectId)).filter((run) => !needle || [
-      run.runId, run.mode, run.status, run.base, run.head, run.model, run.stoppedBecause, run.notes,
-    ].some((value) => value?.toLowerCase().includes(needle)));
-    return { runs: filtered.slice(offset, offset + limit), total: filtered.length };
+    if (needle) {
+      // Search spans manifest-derived fields (model, stop reason) that the
+      // table cannot answer, so this path intentionally scans the project's
+      // run history; plain navigation below stays a SQL window.
+      const all = db.prepare(`SELECT * FROM review_runs WHERE ${where} ORDER BY started_at DESC, id DESC`)
+        .all(...params) as unknown as RawRunRow[];
+      const filtered = all.map((row) => toRunSummary(row, stateRoot, projectId)).filter((run) => [
+        run.runId, run.mode, run.status, run.base, run.head, run.model, run.stoppedBecause, run.notes,
+      ].some((value) => value?.toLowerCase().includes(needle)));
+      return { runs: filtered.slice(offset, offset + limit), total: filtered.length };
+    }
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM review_runs WHERE ${where}`).get(...params) as { n: number }).n;
+    const rows = db.prepare(`SELECT * FROM review_runs WHERE ${where} ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as unknown as RawRunRow[];
+    return { runs: rows.map((row) => toRunSummary(row, stateRoot, projectId)), total };
   });
 }
 

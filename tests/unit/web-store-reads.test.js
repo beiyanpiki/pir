@@ -81,3 +81,41 @@ test("legacy archive without findings.confidence: project findings and run compa
     repo.cleanup();
   }
 });
+
+test("listRuns pages in SQL without a query and keeps manifest-field search", async () => {
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "pir-webstore-state-"));
+  const heads = [1, 2, 3, 4, 5].map((n) => `h${n}`.padEnd(40, "x"));
+  const { repo, memory, projectId, projectDir, runs } = await seedProject(stateRoot, heads);
+  // A manifest-only field: model lives in the run.json transcript manifest,
+  // never in the review_runs table.
+  const manifestDir = path.join(projectDir, "transcripts", runs[2].id);
+  mkdirSync(manifestDir, { recursive: true });
+  writeFileSync(
+    path.join(manifestDir, "run.json"),
+    `${JSON.stringify({ schemaVersion: 1, runId: runs[2].id, model: "search-model-xyz" })}\n`,
+  );
+  memory.close();
+
+  try {
+    const allIds = runs.map((run) => run.id);
+    const page1 = listRuns(projectId, { limit: 2, offset: 0 }, stateRoot);
+    assert.equal(page1.total, 5);
+    assert.equal(page1.runs.length, 2);
+    const page2 = listRuns(projectId, { limit: 2, offset: 2 }, stateRoot);
+    assert.equal(page2.runs.length, 2);
+    const page3 = listRuns(projectId, { limit: 2, offset: 4 }, stateRoot);
+    assert.equal(page3.runs.length, 1);
+    const pagedIds = [...page1.runs, ...page2.runs, ...page3.runs].map((run) => run.runId);
+    assert.deepEqual([...pagedIds].sort(), [...allIds].sort());
+
+    // Search keeps its broader reach: table columns and manifest fields.
+    const byHead = listRuns(projectId, { q: "h3" }, stateRoot);
+    assert.deepEqual(byHead.runs.map((run) => run.runId), [runs[2].id]);
+    const byModel = listRuns(projectId, { q: "model-xyz" }, stateRoot);
+    assert.deepEqual(byModel.runs.map((run) => run.runId), [runs[2].id]);
+    assert.equal(byModel.total, 1);
+  } finally {
+    rmSync(stateRoot, { recursive: true, force: true });
+    repo.cleanup();
+  }
+});
