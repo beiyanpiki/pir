@@ -358,13 +358,23 @@ export function listRuns(
         params.push(options.mode);
       }
     }
-    const rows = db.prepare(`SELECT * FROM review_runs WHERE ${clauses.join(" AND ")} ORDER BY started_at DESC, id DESC`)
-      .all(...params) as unknown as RawRunRow[];
+    const where = clauses.join(" AND ");
     const needle = options.q?.trim().toLowerCase();
-    const filtered = rows.map((row) => toRunSummary(row, stateRoot, projectId)).filter((run) => !needle || [
-      run.runId, run.mode, run.status, run.base, run.head, run.model, run.stoppedBecause, run.notes,
-    ].some((value) => value?.toLowerCase().includes(needle)));
-    return { runs: filtered.slice(offset, offset + limit), total: filtered.length };
+    if (needle) {
+      // Search spans manifest-derived fields (model, stop reason) that the
+      // table cannot answer, so this path intentionally scans the project's
+      // run history; plain navigation below stays a SQL window.
+      const all = db.prepare(`SELECT * FROM review_runs WHERE ${where} ORDER BY started_at DESC, id DESC`)
+        .all(...params) as unknown as RawRunRow[];
+      const filtered = all.map((row) => toRunSummary(row, stateRoot, projectId)).filter((run) => [
+        run.runId, run.mode, run.status, run.base, run.head, run.model, run.stoppedBecause, run.notes,
+      ].some((value) => value?.toLowerCase().includes(needle)));
+      return { runs: filtered.slice(offset, offset + limit), total: filtered.length };
+    }
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM review_runs WHERE ${where}`).get(...params) as { n: number }).n;
+    const rows = db.prepare(`SELECT * FROM review_runs WHERE ${where} ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as unknown as RawRunRow[];
+    return { runs: rows.map((row) => toRunSummary(row, stateRoot, projectId)), total };
   });
 }
 
@@ -460,6 +470,16 @@ interface RawSummaryRow {
 
 const FINDINGS_ORDER = "ORDER BY severity, created_at";
 
+/**
+ * Select expression for findings.confidence. Archives written before
+ * migration v7 lack the column and the web store opens memory.sqlite
+ * read-only without migrating, so the column must be probed, never assumed.
+ */
+function confidenceSelect(db: DatabaseSync): string {
+  const columns = db.prepare("PRAGMA table_info(findings)").all() as Array<{ name: string }>;
+  return columns.some((column) => column.name === "confidence") ? "confidence" : "NULL AS confidence";
+}
+
 /** Collapsed-row summaries for one run: one small query pair, no heavy text. */
 function findingSummaries(
   db: DatabaseSync,
@@ -469,8 +489,7 @@ function findingSummaries(
   const total = (db.prepare("SELECT COUNT(*) AS n FROM findings WHERE run_id = ?").get(runId) as { n: number }).n;
   const limit = options.limit !== undefined ? Math.min(Math.max(options.limit, 1), 500) : -1;
   const offset = options.offset !== undefined ? Math.max(options.offset, 0) : 0;
-  const columns = (db.prepare("PRAGMA table_info(findings)").all() as Array<{ name: string }>);
-  const confidence = columns.some((column) => column.name === "confidence") ? "confidence" : "NULL AS confidence";
+  const confidence = confidenceSelect(db);
   const rows = db
     .prepare(`SELECT id, display_id, title, category, severity, status, round, created_at, ${confidence} FROM findings WHERE run_id = ? ${FINDINGS_ORDER} LIMIT ? OFFSET ?`)
     .all(runId, limit, offset) as unknown as RawSummaryRow[];
@@ -717,7 +736,7 @@ export function listProjectFindings(
     }
     const where = clauses.join(" AND ");
     const total = (db.prepare(`SELECT COUNT(*) AS n FROM findings f WHERE ${where}`).get(...args) as { n: number }).n;
-    const rows = db.prepare(`SELECT f.id, f.run_id, f.display_id, f.fingerprint, f.title, f.category, f.severity, f.status, f.confidence, f.anchors, f.round, f.created_at, f.updated_at,
+    const rows = db.prepare(`SELECT f.id, f.run_id, f.display_id, f.fingerprint, f.title, f.category, f.severity, f.status, ${confidenceSelect(db)}, f.anchors, f.round, f.created_at, f.updated_at,
         (SELECT COUNT(*) FROM finding_evidence e WHERE e.finding_id = f.id) AS evidence_count
       FROM findings f WHERE ${where} ORDER BY f.created_at DESC, f.id DESC LIMIT ? OFFSET ?`)
       .all(...args, boundedLimit(options.limit, 50, 200), boundedOffset(options.offset)) as unknown as Array<RawSummaryRow & { evidence_count: number }>;
@@ -769,7 +788,7 @@ export function compareRuns(projectId: string, leftRunId: string, rightRunId: st
     const rightRow = db.prepare("SELECT * FROM review_runs WHERE project_id = ? AND id = ?").get(projectId, rightRunId) as unknown as RawRunRow | undefined;
     if (!leftRow || !rightRow) return null;
     const read = (runId: string): Map<string, ComparisonFinding> => {
-      const rows = db.prepare("SELECT id, run_id, display_id, fingerprint, title, status, severity, confidence, anchors FROM findings WHERE project_id = ? AND run_id = ? ORDER BY created_at DESC, id DESC")
+      const rows = db.prepare(`SELECT id, run_id, display_id, fingerprint, title, status, severity, ${confidenceSelect(db)}, anchors FROM findings WHERE project_id = ? AND run_id = ? ORDER BY created_at DESC, id DESC`)
         .all(projectId, runId) as unknown as Array<{
           id: string; run_id: string; display_id: string; fingerprint: string; title: string;
           status: string; severity: string; confidence: number | null; anchors: string;
