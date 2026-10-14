@@ -163,3 +163,16 @@ test("run-end uses terminal counts and replaces live content with its complete a
   await expect(page.locator(".session-timeline")).toContainText("Complete archive content");
   await expect(page.locator(".session-timeline")).not.toContainText("Partial live content");
 });
+
+test("workflow search replaces URL history while typing", async ({ page }) => {
+  await mount(page);
+  // Push a distinct view before returning to Workflow so Back has a real target.
+  await page.getByRole("tab", { name: "Details" }).click();
+  await page.getByRole("tab", { name: "Workflow" }).click();
+  const search = page.getByRole("searchbox", { name: "Search sessions" });
+  await search.type("verifier", { delay: 30 });
+  await expect(page.getByRole("searchbox", { name: "Search sessions" })).toHaveValue("verifier");
+  await expect(page).toHaveURL(/tab=workflow&q=verifier/);
+  await page.goBack();
+  await expect(page).toHaveURL((url) => url.pathname === `/runs/${projectId}/${runId}` && url.searchParams.get("q") === null);
+});

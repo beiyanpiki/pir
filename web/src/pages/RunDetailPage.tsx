@@ -50,7 +50,7 @@ export function RunDetailPage() {
   const inspectorTab: InspectorTab = requestedTab === "workflow" || requestedTab === "coverage" || requestedTab === "details" ? requestedTab : "findings";
   const selectedSession = searchParams.get("session");
   const selectedFinding = searchParams.get("finding");
-  const updateQuery = useCallback((changes: Record<string, string | null>) => {
+  const updateQuery = useCallback((changes: Record<string, string | null>, replace = false) => {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
       for (const [key, value] of Object.entries(changes)) {
@@ -58,7 +58,7 @@ export function RunDetailPage() {
         else next.set(key, value);
       }
       return next;
-    });
+    }, { replace });
   }, [setSearchParams]);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
   const [narrowInspector, setNarrowInspector] = useState(() => window.innerWidth < 1280);
@@ -366,7 +366,7 @@ export function RunDetailPage() {
               onSession={selectSession}
               onFinding={(id) => updateQuery({ tab: "findings", finding: id })}
               role={searchParams.get("role") ?? "all"} status={searchParams.get("status") ?? "all"} query={searchParams.get("q") ?? ""}
-              onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value })} />}
+              onFilter={(key, value) => updateQuery({ [key]: value === "all" || value === "" ? null : value }, key === "q")} />}
             {activeInspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
             {activeInspectorTab === "details" && <RunDetails detail={detail.data} />}
           </div>

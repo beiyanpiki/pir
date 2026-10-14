@@ -4,6 +4,7 @@ import path from "node:path";
 import { findIssues, auditIssues } from "../../dist/core/supervisor.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
+import { readFileSync } from "node:fs";
 
 /**
  * Model-free harness for the parallel verification drain: a scripted session
@@ -465,6 +466,30 @@ test("parallel drain (audit): maxFindings reservation holds under concurrency", 
     assert.equal(outcome.findings.length, 2);
     assert.ok(outcome.findings.every((row) => row.status === "confirmed"));
   } finally {
+    fx.cleanup();
+  }
+});
+
+test("parallel drain (audit): transcripts map runtime ids to durable project ids", async () => {
+  const savedTranscripts = process.env.PIR_TRANSCRIPTS;
+  process.env.PIR_TRANSCRIPTS = "1";
+  const list = candidates(2);
+  const fx = await auditFixture();
+  try {
+    const outcome = await fx.run(
+      new DrainHarness({ reviewer: auditReviewerRecording(list), verifier: verifierConfirming("src/a/util.ts") }),
+      { verifyConcurrency: 2 },
+    );
+    const manifest = JSON.parse(readFileSync(path.join(outcome.transcriptDir ?? "", "run.json"), "utf8"));
+    const reviewer = manifest.sessions.find((entry) => entry.sessionKind === "reviewer");
+    assert.ok(reviewer?.findingIdMap?.length, "audit reviewer records finding ids");
+    assert.ok(reviewer.findingIdMap.some((mapping) => mapping.from !== mapping.to), "transcript id differs from the project-scoped durable id");
+    for (const mapping of reviewer.findingIdMap) {
+      assert.ok(outcome.findings.some((finding) => finding.displayId === mapping.to), "mapping targets a durable finding");
+    }
+  } finally {
+    if (savedTranscripts === undefined) delete process.env.PIR_TRANSCRIPTS;
+    else process.env.PIR_TRANSCRIPTS = savedTranscripts;
     fx.cleanup();
   }
 });

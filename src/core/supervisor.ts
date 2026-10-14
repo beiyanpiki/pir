@@ -215,11 +215,15 @@ function mapSessionFindingIds(
   refs: RunSessionRef[],
   rows: Array<{ round: number; fingerprint: string; displayId: string }>,
   findings: Array<{ round: number; identity: { fingerprint: string }; displayId?: string }>,
+  runtimeIds: Map<string, string> = new Map(),
 ): void {
   const byIdentity = new Map(rows.map((row) => [`${row.round}:${row.fingerprint}`, row.displayId]));
   const byRuntime = new Map(findings
     .filter((finding) => finding.displayId)
     .map((finding) => [finding.displayId!, byIdentity.get(`${finding.round}:${finding.identity.fingerprint}`)]));
+  const byIdentityOnly = new Map(findings
+    .filter((finding) => finding.identity)
+    .map((finding) => [`${finding.round}:${finding.identity.fingerprint}`, byIdentity.get(`${finding.round}:${finding.identity.fingerprint}`)]));
   for (const ref of refs) {
     const sourceIds = ref.sessionKind === "verifier"
       ? (ref.displayId ? [ref.displayId] : [])
@@ -229,8 +233,16 @@ function mapSessionFindingIds(
         .filter((finding) => finding.round === ref.round)
         .map((finding) => finding.displayId)
         .filter((id): id is string => id !== undefined);
+    // Audit candidates are checkpointed immediately after discovery, so their
+    // sourceIds are durable ids. byRuntime is therefore an identity map; rewrite
+    // its from-side to the collector id captured before persistence.
     const mapped = [...new Set(sourceIds)]
-      .map((from) => ({ from, to: byRuntime.get(from) }))
+      .flatMap((from) => findings
+        .filter((finding) => finding.displayId === from)
+        .map((finding) => {
+          const to = byRuntime.get(from) ?? byIdentityOnly.get(`${finding.round}:${finding.identity.fingerprint}`);
+          return { from: runtimeIds.get(from) ?? from, to };
+        }))
       .filter((entry): entry is { from: string; to: string } => entry.to !== undefined);
     if (mapped.length > 0) ref.findingIdMap = mapped;
   }
@@ -1077,9 +1089,15 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   // discovery session ends; verdicts update the same row, never a re-insert.
   // Keyed by displayId because applyVerdict spreads candidates into new objects.
   const rowByCandidate = new Map<string, FindingRow>();
+  // Collector id by durable project id. applyVerdict creates new verified
+  // objects, so object identity cannot carry the transcript id through the drain.
+  const runtimeIds = new Map<string, string>();
   const persistCandidates = (candidates: CandidateFinding[]): void => {
     for (const candidate of candidates) {
       const row = deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id);
+      // Audit candidates arrive with collector ids (F-Rn) but receive durable
+      // project-scoped ids here. Preserve the transcript id for findingIdMap.
+      if (candidate.displayId !== undefined) runtimeIds.set(row.displayId, candidate.displayId);
       candidate.displayId = row.displayId;
       rowByCandidate.set(row.displayId, row);
     }
@@ -1246,7 +1264,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     const pendingRows = state.pending
       .map((candidate) => candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined)
       .filter((row): row is FindingRow => row !== undefined);
-    mapSessionFindingIds(sessionFiles, [...failureRows, ...pendingRows], [...state.verified, ...state.pending]);
+    mapSessionFindingIds(sessionFiles, [...failureRows, ...pendingRows], [...state.verified, ...state.pending], runtimeIds);
     const failureMessage = error instanceof Error ? error.message : String(error);
     deps.memory.findings.finishRun(run.id, {
       rounds: state.round, candidates: state.known.length,
@@ -1323,7 +1341,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const pendingFindings = state.pending
     .map((candidate) => (candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined))
     .filter((row): row is FindingRow => row !== undefined);
-  mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending]);
+  mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending], runtimeIds);
   const runVerdict = computeRunVerdict(state);
   const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
   sink.runEnded({
