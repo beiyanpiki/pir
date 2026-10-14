@@ -58,7 +58,7 @@ npx playwright install --with-deps chromium
 npm run test:web:e2e
 ```
 
-Coverage includes route cancellation, transcript identity, error retries, deep-link login recovery, drawer focus, desktop width, and mobile overflow. Failure screenshots and traces default to `/tmp/pir-web-live-artifacts`; the HTML report defaults to `/tmp/pir-web-live-report`. Override these with `PIR_WEB_ARTIFACT_DIR` and `PIR_WEB_REPORT_DIR`. `PIR_WEB_BROWSER_PATH` selects an installed Chromium and `PIR_WEB_TEST_PORT` selects the Vite port. CI installs Chromium before running the same command.
+Coverage includes route cancellation, transcript identity, error retries, deep-link login recovery, drawer focus, desktop width, and mobile overflow. Failure screenshots and traces land in `test-results/web-artifacts` and the HTML report in `test-results/web-report`, both under the repository root (open `test-results/web-report/index.html` after a failed run). `PIR_WEB_E2E_PORT` (default 5174) selects the port the dev server binds for the suite; the browser is always Playwright's managed Chromium. CI installs Chromium before running the same command.
 
 ## Data sources
 
