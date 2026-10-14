@@ -409,6 +409,21 @@ export function prefilterPirFindings(findings) {
       start_line: f.anchors[0].startLine, end_line: f.anchors[0].endLine ?? f.anchors[0].startLine }));
 }
 
+/**
+ * Rebuild a reused run's prefilter input from its on-disk artifact so the
+ * aggregated PREFILTER.md matches the never-interrupted round. Artifact rows
+ * written before the `paths` field existed carry only the first anchor, the
+ * one lossy case this fallback keeps working.
+ */
+export function prefilterInputFromArtifactRows(rows) {
+  return rows.map((f) => ({
+    message: f.message,
+    paths: Array.isArray(f.paths) && f.paths.length > 0 ? f.paths : [f.file],
+    start_line: f.start_line,
+    end_line: f.end_line,
+  }));
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
@@ -521,8 +536,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         const prevRow = prevRuns.get(`${key}|${variant.name}|${repeat}`);
         taskRow.runs.push({ ...(prevRow ?? { variant: variant.name, repeat, status: "ok" }), reused: true });
         const goldenFindings = goldenRecallTargets(loadGolden(options.manifest, key));
-        const pirFindings = JSON.parse(readFileSync(path.join(roundDir, runLabel, `${key}.json`), "utf8")).findings
-          .map((f) => ({ message: f.message, paths: [f.file], start_line: f.start_line, end_line: f.end_line }));
+        const artifactRows = JSON.parse(readFileSync(path.join(roundDir, runLabel, `${key}.json`), "utf8")).findings;
+        const pirFindings = prefilterInputFromArtifactRows(artifactRows);
         const prefilterResult = prefilterTask({ goldenFindings, pirFindings, similarity: claimSimilarity });
         if (!prefilterAcc.has(runLabel)) prefilterAcc.set(runLabel, []);
         prefilterAcc.get(runLabel).push({ prKey: key, goldenFindings, pirFindings, result: prefilterResult });

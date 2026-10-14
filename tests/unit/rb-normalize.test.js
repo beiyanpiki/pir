@@ -46,7 +46,7 @@ test("normalizeTask emits the judging-input contract field by field", () => {
   assert.deepEqual(reported.usage, { total_tokens: 1200, time_in_ms: 34000 });
   assert.equal(reported.findings.length, 1);
   const finding = reported.findings[0];
-  assert.deepEqual(Object.keys(finding).sort(), ["end_line", "file", "message", "producer", "start_line"]);
+  assert.deepEqual(Object.keys(finding).sort(), ["end_line", "file", "message", "paths", "producer", "start_line"]);
   assert.equal(finding.producer, "pir");
   assert.equal(finding.file, "src/cache.ts");
   assert.equal(finding.start_line, 10);
@@ -94,6 +94,25 @@ test("paths are normalized to forward slashes without a leading ./", () => {
   const { reported } = normalizeTask({ manifestEntry: manifestEntry(), outcome: outcome(rows) });
   assert.deepEqual(reported.findings.map((f) => f.file), ["src/deep/file.ts", "src/top.ts"]);
   assert.equal(normalizeFilePath("  src/x.ts  "), "src/x.ts");
+});
+
+test("artifact rows carry every anchor path, not just the first", () => {
+  const rows = [
+    findingRow({
+      displayId: "F-1",
+      anchors: [
+        { path: "src/primary.ts", startLine: 10, endLine: 12 },
+        { path: ".\\src\\secondary.ts", startLine: 30 },
+        { path: "src/tertiary.ts", startLine: 40 },
+      ],
+    }),
+    findingRow({ displayId: "F-2", anchors: [{ path: "src/solo.ts", startLine: 1 }] }),
+  ];
+  const { reported } = normalizeTask({ manifestEntry: manifestEntry(), outcome: outcome(rows) });
+  // Resume rebuilds the prefilter input from these rows, so the secondary
+  // anchors must survive (pairScore's path bonus checks all paths).
+  assert.deepEqual(reported.findings[0].paths, ["src/primary.ts", "src/secondary.ts", "src/tertiary.ts"]);
+  assert.deepEqual(reported.findings[1].paths, ["src/solo.ts"]);
 });
 
 test("reported rows without a usable anchor are dropped with a counted, identifiable warning", () => {
