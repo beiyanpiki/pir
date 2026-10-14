@@ -3781,3 +3781,14 @@ input {
     background: rgba(0, 0, 0, 0.48);
   }
 }
+
+.workflow-panel { min-width: 0; }
+.workflow-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.workflow-filters select,
+.workflow-filters input[type="search"] { min-height: 30px; flex: 1 1 128px; }
+.workflow-count { margin: 8px 0; color: var(--muted-foreground); font-size: 12px; }
+.workflow-session { min-width: 0; }
+.workflow-session > button { display: grid; width: 100%; gap: 4px; text-align: left; }
+.workflow-session > button.is-active { border-color: var(--ring); background: var(--accent-muted); }
+.workflow-session code { overflow-wrap: anywhere; }
+.workflow-finding-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

@@ -111,7 +111,7 @@ export function RunsPage() {
         {visibleRuns.length > 0 && <div className="table-scroll" aria-busy={runs.loading}>
           <table className="data-table run-table"><thead><tr><th scope="col">Review</th><th scope="col">Status</th><th scope="col">Findings</th><th scope="col">Started</th><th scope="col" className="num">Duration</th><th scope="col" className="num">Usage</th><th scope="col" aria-label="Open run" /></tr></thead>
             <tbody>{visibleRuns.map((run) => {
-              const status = activeRunIds.has(run.runId) ? "running" : run.status === "running" && run.finishedAt === null ? "interrupted" : run.status;
+              const status = activeRunIds.has(run.runId) && run.finishedAt === null ? "running" : run.status;
               const href = `/runs/${projectId}/${run.runId}`;
               return <tr key={run.runId} className="table-row-clickable" onClick={() => navigate(href)}>
                 <td className="run-primary"><Link className="table-primary-link run-name-cell" to={href}>

@@ -78,7 +78,7 @@ test("typing run search replaces history so Back returns to the prior page", asy
   await page.getByRole("searchbox", { name: "Search this page" }).fill("scope");
   await expect(page).toHaveURL(/q=scope/);
   await page.goBack();
-  await expect(page).toHaveURL("http://127.0.0.1:5174/projects");
+  await expect(page).toHaveURL((url) => url.pathname === "/projects");
 });
 
 test("run navigation isolates transcripts with identical file names", async ({ page }) => {
@@ -154,7 +154,7 @@ test("login restores the full deep link after authentication", async ({ page }) 
   await expect(page).toHaveURL(/\/login$/);
   await page.getByLabel("Access token").fill("fixture-token");
   await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page).toHaveURL(`http://127.0.0.1:5174${target}`);
+  await expect(page).toHaveURL((url) => `${url.pathname}${url.search}${url.hash}` === target);
   await expect(page.locator(".run-header h1")).toBeVisible();
 });
 

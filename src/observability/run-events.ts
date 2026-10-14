@@ -62,6 +62,8 @@ export type RunEvent =
       attempt?: number;
       displayId?: string;
       angle?: string;
+      /** Basename of the persisted transcript, when capture is enabled. */
+      transcriptFile?: string;
       prompt: string;
     }
   | {
@@ -230,6 +232,8 @@ export interface SessionMeta {
   displayId?: string;
   /** F1: the specialized finder angle this reviewer session runs as. */
   angle?: string;
+  /** Basename only; never expose the server's transcript directory. */
+  transcriptFile?: string;
 }
 
 /** Per-session handle handed to reviewer/verifier rounds by the supervisor. */
@@ -303,6 +307,7 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
             ...(meta.attempt !== undefined ? { attempt: meta.attempt } : {}),
             ...(meta.displayId !== undefined ? { displayId: meta.displayId } : {}),
             ...(meta.angle !== undefined ? { angle: meta.angle } : {}),
+            ...(meta.transcriptFile !== undefined ? { transcriptFile: meta.transcriptFile } : {}),
             prompt,
           });
         },
@@ -382,6 +387,7 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
               ...(meta.attempt !== undefined ? { attempt: meta.attempt } : {}),
               ...(meta.displayId !== undefined ? { displayId: meta.displayId } : {}),
               ...(meta.angle !== undefined ? { angle: meta.angle } : {}),
+              ...(meta.transcriptFile !== undefined ? { transcriptFile: meta.transcriptFile } : {}),
               prompt: "",
             });
           }
@@ -410,6 +416,8 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
 
 export interface RunSessionRef {
   file: string;
+  /** Same basename carried by session-start for live/archive reconciliation. */
+  transcriptFile?: string;
   sessionKind: "reviewer" | "verifier";
   round?: number;
   unitId?: string;
@@ -423,6 +431,8 @@ export interface RunSessionRef {
    * F-<round><seq> by construction).
    */
   idMap?: Array<{ from: string; to: string }>;
+  /** Runtime finder/verifier id → persisted project-scoped F-N id. */
+  findingIdMap?: Array<{ from: string; to: string }>;
 }
 
 export interface RunManifest {

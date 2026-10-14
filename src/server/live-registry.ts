@@ -20,6 +20,7 @@ export interface LiveSessionState {
   displayId?: string;
   /** F1: the specialized finder angle this reviewer session runs as. */
   angle?: string;
+  transcriptFile?: string;
   prompt: string;
   startedAt: number;
   endedAt: number | null;
@@ -166,6 +167,7 @@ export class LiveRegistry {
         ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
         ...(event.displayId !== undefined ? { displayId: event.displayId } : {}),
         ...(event.angle !== undefined ? { angle: event.angle } : {}),
+        ...(event.transcriptFile !== undefined ? { transcriptFile: event.transcriptFile } : {}),
         prompt: event.prompt,
         startedAt: event.ts,
         endedAt: null,

@@ -81,6 +81,7 @@ export interface FindingView {
 
 export interface SessionRef {
   file: string;
+  transcriptFile?: string;
   sessionKind: "reviewer" | "verifier" | "unknown";
   round?: number;
   unitId?: string;
@@ -90,6 +91,7 @@ export interface SessionRef {
   angle?: string;
   /** F1: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
   idMap?: Array<{ from: string; to: string }>;
+  findingIdMap?: Array<{ from: string; to: string }>;
 }
 
 export interface FeedbackEventView {

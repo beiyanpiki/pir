@@ -210,6 +210,44 @@ function summarizeFindings(rows: readonly FindingSummarySource[]): RunFindingSum
   }));
 }
 
+/** Attach project-scoped finding ids to each transcript's runtime ids. */
+function mapSessionFindingIds(
+  refs: RunSessionRef[],
+  rows: Array<{ round: number; fingerprint: string; displayId: string }>,
+  findings: Array<{ round: number; identity: { fingerprint: string }; displayId?: string }>,
+  runtimeIds: Map<string, string> = new Map(),
+): void {
+  const byIdentity = new Map(rows.map((row) => [`${row.round}:${row.fingerprint}`, row.displayId]));
+  const byRuntime = new Map(findings
+    .filter((finding) => finding.displayId)
+    .map((finding) => [finding.displayId!, byIdentity.get(`${finding.round}:${finding.identity.fingerprint}`)]));
+  const byIdentityOnly = new Map(findings
+    .filter((finding) => finding.identity)
+    .map((finding) => [`${finding.round}:${finding.identity.fingerprint}`, byIdentity.get(`${finding.round}:${finding.identity.fingerprint}`)]));
+  for (const ref of refs) {
+    const sourceIds = ref.sessionKind === "verifier"
+      ? (ref.displayId ? [ref.displayId] : [])
+      : ref.angle !== undefined
+        ? (ref.idMap?.map((entry) => entry.to) ?? [])
+        : findings
+        .filter((finding) => finding.round === ref.round)
+        .map((finding) => finding.displayId)
+        .filter((id): id is string => id !== undefined);
+    // Audit candidates are checkpointed immediately after discovery, so their
+    // sourceIds are durable ids. byRuntime is therefore an identity map; rewrite
+    // its from-side to the collector id captured before persistence.
+    const mapped = [...new Set(sourceIds)]
+      .flatMap((from) => findings
+        .filter((finding) => finding.displayId === from)
+        .map((finding) => {
+          const to = byRuntime.get(from) ?? byIdentityOnly.get(`${finding.round}:${finding.identity.fingerprint}`);
+          return { from: runtimeIds.get(from) ?? from, to };
+        }))
+      .filter((entry): entry is { from: string; to: string } => entry.to !== undefined);
+    if (mapped.length > 0) ref.findingIdMap = mapped;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared verification drain — the single verification orchestration used by
 // both the change loop and the audit loop.
@@ -280,6 +318,7 @@ async function verifyOne(deps: DrainDeps, candidate: CandidateFinding): Promise<
     transcriptFile: deps.transcriptDir ? path.join(deps.transcriptDir, transcriptName) : undefined,
     onSessionEvent: deps.sink.session({
       sessionKind: "verifier", role: "finding verifier", model, round: deps.round,
+      ...(deps.transcriptDir ? { transcriptFile: transcriptName } : {}),
       ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
     }),
   });
@@ -290,7 +329,7 @@ async function verifyOne(deps: DrainDeps, candidate: CandidateFinding): Promise<
     ...(deps.transcriptDir
       ? {
           transcriptRef: {
-            file: transcriptName, sessionKind: "verifier", round: deps.round,
+            file: transcriptName, transcriptFile: transcriptName, sessionKind: "verifier", round: deps.round,
             ...(candidate.displayId !== undefined ? { displayId: candidate.displayId } : {}),
           },
         }
@@ -515,7 +554,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           // runs, at most 4 at a time — "--angles all" no longer drops the
           // trailing built-in as a fake "budget" cut).
           const refs = roundAngles.map((angle): RunSessionRef => {
-            const ref: RunSessionRef = { file: `reviewer-r${state.round}-${angle.id}.json`, sessionKind: "reviewer", round: state.round, angle: angle.id };
+            const ref: RunSessionRef = { file: `reviewer-r${state.round}-${angle.id}.json`, transcriptFile: `reviewer-r${state.round}-${angle.id}.json`, sessionKind: "reviewer", round: state.round, angle: angle.id };
             if (transcriptDir) sessionFiles.push(ref);
             return ref;
           });
@@ -535,7 +574,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
                   fanoutSize: roundAngles.length,
                   languageGuidance: languagePacks.reviewerGuidance,
                   transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
-                  onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id }),
+                  onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id,
+                    ...(transcriptDir ? { transcriptFile: file } : {}) }),
                 }) };
               } catch (err) {
                 settled[index] = { angleId: angle.id, err };
@@ -681,7 +721,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           };
         } else {
         const reviewerFile = `reviewer-r${state.round}.json`;
-        if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round });
+        if (transcriptDir) sessionFiles.push({ file: reviewerFile, transcriptFile: reviewerFile, sessionKind: "reviewer", round: state.round });
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
           maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
@@ -689,7 +729,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           investigationFeedback: state.investigationFeedback, model: options.model,
           languageGuidance: languagePacks.reviewerGuidance,
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
-          onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round }),
+          onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round,
+            ...(transcriptDir ? { transcriptFile: reviewerFile } : {}) }),
         });
         // Replay the round's coverage evidence the moment it exists: anything
         // throwing later in the round (drain, budget, persistence) must not
@@ -777,8 +818,11 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       for (const hunk of error.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
       for (const read of error.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
     }
-    for (const finding of state.verified) deps.memory.findings.insert(finding, run.id);
-    for (const candidate of state.pending) deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id);
+    const failureRows = [
+      ...state.verified.map((finding) => deps.memory.findings.insert(finding, run.id)),
+      ...state.pending.map((candidate) => deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id)),
+    ];
+    mapSessionFindingIds(sessionFiles, failureRows, [...state.verified, ...state.pending]);
     deps.memory.findings.finishRun(run.id, {
       rounds: state.round, candidates: state.known.length, confirmed: state.verified.filter((f) => f.status === "confirmed").length,
       rejected: state.verified.filter((f) => f.status === "rejected").length, uncertain: state.verified.filter((f) => f.status === "uncertain").length,
@@ -808,6 +852,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     (needsReview && state.stoppedBecause !== "reviewer signaled completion");
   const persisted = state.verified.map((f) => deps.memory.findings.insert(f, run.id));
   const pendingFindings = state.pending.map((candidate) => deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id));
+  mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending]);
   const runVerdict = computeRunVerdict(state);
   const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
   deps.memory.findings.finishRun(run.id, {
@@ -1044,9 +1089,15 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   // discovery session ends; verdicts update the same row, never a re-insert.
   // Keyed by displayId because applyVerdict spreads candidates into new objects.
   const rowByCandidate = new Map<string, FindingRow>();
+  // Collector id by durable project id. applyVerdict creates new verified
+  // objects, so object identity cannot carry the transcript id through the drain.
+  const runtimeIds = new Map<string, string>();
   const persistCandidates = (candidates: CandidateFinding[]): void => {
     for (const candidate of candidates) {
       const row = deps.memory.findings.insert({ ...candidate, status: "candidate", memoryMatches: [] }, run.id);
+      // Audit candidates arrive with collector ids (F-Rn) but receive durable
+      // project-scoped ids here. Preserve the transcript id for findingIdMap.
+      if (candidate.displayId !== undefined) runtimeIds.set(row.displayId, candidate.displayId);
       candidate.displayId = row.displayId;
       rowByCandidate.set(row.displayId, row);
     }
@@ -1133,7 +1184,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       });
       let result: ReviewerRoundResult;
       const reviewerFile = `reviewer-${unit.id}-a${attempt}.json`;
-      if (transcriptDir) sessionFiles.push({ file: reviewerFile, sessionKind: "reviewer", round: state.round, unitId: unit.id, attempt });
+      if (transcriptDir) sessionFiles.push({ file: reviewerFile, transcriptFile: reviewerFile, sessionKind: "reviewer", round: state.round, unitId: unit.id, attempt });
       try {
         result = await runReviewerRound({
           factory: deps.factory, ctx: toolCtx, memoryPack: memoryPack.text, round: state.round,
@@ -1147,6 +1198,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           onSessionEvent: sink.session({
             sessionKind: "reviewer", role: "code reviewer", model: options.model,
             round: state.round, unitId: unit.id, attempt,
+            ...(transcriptDir ? { transcriptFile: reviewerFile } : {}),
           }),
         });
       } catch (error) {
@@ -1208,7 +1260,11 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
       onProgress({ type: "round-end", round: state.round, message: `unit ${unit.id}: ${dedup.fresh.length} new candidates, ${state.pending.length} pending verification` });
     }
   } catch (error) {
-    for (const finding of state.verified) persistVerified(finding);
+    const failureRows = state.verified.map((finding) => persistVerified(finding));
+    const pendingRows = state.pending
+      .map((candidate) => candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined)
+      .filter((row): row is FindingRow => row !== undefined);
+    mapSessionFindingIds(sessionFiles, [...failureRows, ...pendingRows], [...state.verified, ...state.pending], runtimeIds);
     const failureMessage = error instanceof Error ? error.message : String(error);
     deps.memory.findings.finishRun(run.id, {
       rounds: state.round, candidates: state.known.length,
@@ -1285,6 +1341,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const pendingFindings = state.pending
     .map((candidate) => (candidate.displayId ? rowByCandidate.get(candidate.displayId) : undefined))
     .filter((row): row is FindingRow => row !== undefined);
+  mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending], runtimeIds);
   const runVerdict = computeRunVerdict(state);
   const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
   sink.runEnded({

@@ -26,13 +26,18 @@ export function FindingsTab({
   projectId,
   runId,
   findings,
+  selectedFinding,
 }: {
   projectId: string;
   runId: string;
   findings: { items: FindingSummary[]; total: number };
+  selectedFinding?: string | null;
 }) {
   const [showAll, setShowAll] = useState(true);
   const [severity, setSeverity] = useState("all");
+  useEffect(() => {
+    if (selectedFinding) { setShowAll(true); setSeverity("all"); }
+  }, [selectedFinding]);
   const sorted = useMemo(() => [...findings.items].sort((a, b) => {
     const severityDelta = (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
     return severityDelta || a.createdAt - b.createdAt;
@@ -85,7 +90,7 @@ export function FindingsTab({
 
       <div className="finding-list">
         {visible.map((finding) => (
-          <FindingRow key={finding.id} projectId={projectId} runId={runId} summary={finding} />
+          <FindingRow key={finding.id} projectId={projectId} runId={runId} summary={finding} selected={selectedFinding === finding.displayId} />
         ))}
         {visible.length === 0 && (
           <div className="empty-state is-compact">
@@ -103,8 +108,8 @@ type DetailState =
   | { phase: "error" }
   | { phase: "ready"; detail: FindingView };
 
-function FindingRow({ projectId, runId, summary }: { projectId: string; runId: string; summary: FindingSummary }) {
-  const [open, setOpen] = useState(false);
+function FindingRow({ projectId, runId, summary, selected }: { projectId: string; runId: string; summary: FindingSummary; selected: boolean }) {
+  const [open, setOpen] = useState(selected);
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -113,6 +118,9 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
     summary.severity === "P0" ? "is-p0" :
     summary.severity === "P1" ? "is-p1" :
     summary.severity === "P2" ? "is-p2" : "is-p3";
+  useEffect(() => {
+    if (selected) setOpen(true);
+  }, [selected]);
 
   // The heavy fields (claim prose, evidence excerpts, rationale) load on
   // first expand — 100+ findings stay a few-KB list until a row is opened.
@@ -137,7 +145,7 @@ function FindingRow({ projectId, runId, summary }: { projectId: string; runId: s
   }, [open, projectId, runId, summary.id, retry, loadedFor, detailKey]);
 
   return (
-    <article className={`finding-row ${accentClass} ${open ? "is-open" : ""}`}>
+    <article id={`finding-${summary.displayId}`} className={`finding-row ${accentClass} ${open ? "is-open" : ""}`}>
       <button className="finding-summary" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <ChevronRight size={14} className="finding-chevron" />
         <span className="finding-title">

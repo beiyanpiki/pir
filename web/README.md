@@ -47,6 +47,8 @@ root chains it); `pir serve` serves it statically with SPA fallback.
 
 The run list stores status, mode, search, and pagination in the URL. Route changes cancel pending loads, and Retry reloads failed pages. Authentication returns to the original path, query, and fragment. Below 1280px, the run inspector opens as a modal drawer: Tab stays inside, Escape closes it, and focus returns to the opener. On desktop, closing the inspector gives its space back to the timeline.
 
+Live runs display execution and connection separately: a disconnected stream does not mark a review interrupted. The timeline reconnects and recalibrates persisted findings after verifier sessions and rounds finish. Workflow filters, selected sessions, and findings are shareable URL state. Sessions use transcript identity across live and archived views; finding links show runtime-to-project ID mappings. Selecting a historical session pauses following until Jump to latest is used.
+
 ## Browser regressions
 
 Run these commands from the repository root. Playwright uses its managed Chromium, installed for the version in the lockfile. The suite mocks the API, so no running pir server or model credentials are needed.
@@ -56,7 +58,7 @@ npx playwright install --with-deps chromium
 npm run test:web:e2e
 ```
 
-Coverage includes route cancellation, transcript identity, error retries, deep-link login recovery, drawer focus, desktop width, and mobile overflow. Failure screenshots and traces are written to `test-results/web-artifacts`; the HTML report is in `test-results/web-report`. CI installs Chromium before running the same command.
+Coverage includes route cancellation, transcript identity, error retries, deep-link login recovery, drawer focus, desktop width, and mobile overflow. Failure screenshots and traces default to `/tmp/pir-web-live-artifacts`; the HTML report defaults to `/tmp/pir-web-live-report`. Override these with `PIR_WEB_ARTIFACT_DIR` and `PIR_WEB_REPORT_DIR`. `PIR_WEB_BROWSER_PATH` selects an installed Chromium and `PIR_WEB_TEST_PORT` selects the Vite port. CI installs Chromium before running the same command.
 
 ## Data sources
 

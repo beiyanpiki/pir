@@ -194,3 +194,18 @@ test("session events carry the finder angle (F1, dogfood F-129)", () => {
     unsubscribe();
   }
 });
+
+test("session starts expose only the transcript basename, including factory failures", () => {
+  const received = [];
+  const sink = createRunEventSink("run-file", "proj-1");
+  const unsubscribe = onRunEvent((event) => received.push(event));
+  try {
+    sink.session({ sessionKind: "reviewer", role: "code reviewer", transcriptFile: "reviewer-r1.json" }).sessionStarted("prompt");
+    sink.session({ sessionKind: "verifier", role: "finding verifier", transcriptFile: "verifier-r1-F-1.json" }).sessionEnded("factory failed");
+    assert.deepEqual(received.filter((event) => event.kind === "session-start").map((event) => event.transcriptFile), [
+      "reviewer-r1.json", "verifier-r1-F-1.json",
+    ]);
+  } finally {
+    unsubscribe();
+  }
+});
