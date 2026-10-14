@@ -321,7 +321,7 @@ test("web ui: project search, memory, feedback and fingerprint comparison stay r
   const runs = await get('runs?q=prov%2Fm&limit=1&offset=1');
   assert.equal(runs.total, 2); assert.equal(runs.runs.length, 1);
   assert.equal((await get('runs?q=budget&mode=audit')).total, 1);
-  assert.equal((await get('runs?q=no-match')).total, 0);
+  assert.equal((await get('runs?q=' + encodeURIComponent('definitely-no-match-' + Date.now()))).total, 0);
   const findings = await get('findings?q=loop&status=uncertain&severity=P2&limit=1');
   assert.equal(findings.total, 1); assert.equal(findings.findings[0].fingerprint, 'fp'); assert.equal(findings.findings[0].runId, AUDIT_RUN_ID);
   assert.equal((await get('findings?limit=1&offset=1')).findings.length, 1);
