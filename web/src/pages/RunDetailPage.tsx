@@ -29,6 +29,7 @@ import { SessionTimeline } from "../components/session/SessionTimeline";
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import { RunOverview } from "../components/run-overview";
+import { RunHandoff } from "../components/run-handoff";
 import { FindingInspector } from "../components/finding-inspector";
 import { RunDetails } from "../components/run-details";
 import { WorkflowTab } from "../components/workflow";
@@ -312,6 +313,7 @@ export function RunDetailPage() {
         <div className="notice-bar"><Info size={14} /> Transcripts were not captured for this run. Findings and run metadata are still available.</div>
       )}
 
+      <RunHandoff key={`${projectId}/${runId}`} detail={projectedDetail} projectId={projectId} events={liveEvents} connection={sseStatus} />
       <nav className="run-tabs" role="tablist" aria-label="Review views" onKeyDown={(event) => {
         const tabs: InspectorTab[] = ["overview", "findings", "workflow", "coverage", "details"];
         const index = tabs.indexOf(activeInspectorTab);
