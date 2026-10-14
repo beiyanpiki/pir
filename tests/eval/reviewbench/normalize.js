@@ -44,9 +44,16 @@ function buildFinding(row) {
   if (title) message = title;
   if (claim) message = message ? `${message} — ${claim}` : claim;
   if (trigger) message = message ? `${message} Trigger: ${trigger}` : `Trigger: ${trigger}`;
+  // Every anchor path, so a resumed round can rebuild the prefilter input
+  // the fresh path computed from the full finding — the prefilter's path
+  // bonus checks all paths, not just the first anchor.
+  const paths = (Array.isArray(row?.anchors) ? row.anchors : [])
+    .map((candidate) => normalizeFilePath(candidate?.path ?? ""))
+    .filter((candidate) => candidate !== "");
   return {
     producer: "pir",
     file,
+    paths,
     start_line: startLine,
     end_line: endLine,
     message,
