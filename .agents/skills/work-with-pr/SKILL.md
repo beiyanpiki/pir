@@ -1,6 +1,6 @@
 ---
 name: work-with-pr
-description: "Full PR lifecycle for developing pir itself (github.com/beiyanpiki/pir, any worktree of it): implement in an isolated sibling git worktree → local gates (npm typecheck/test + pir-dogfood self-review with findings fixed) → PR to dev following the repo's PR template → CI verification loop on the self-hosted runner → merge commit → worktree cleanup. Splits work into the smallest atomic, independently mergeable PRs and builds independent ones in parallel. Use whenever implementation work on this repo needs to land as a PR: 'create a PR', 'implement and PR', 'implement issue #N', 'land this as a PR', 'split into atomic PRs', '提 PR', '提个 PR 再合并', 'work-with-pr', even when the user just says 'implement X' if PR delivery is implied. NOT for other repositories — there use the plain git/gh flow."
+description: "Full PR lifecycle for developing pir itself (github.com/beiyanpiki/pir, any worktree of it): implement in an isolated sibling git worktree → local gates (npm typecheck/test + pir-dogfood self-review: P0–P2 findings fixed, P3 findings deferred to a backlog file) → PR to dev following the repo's PR template → CI verification loop on the self-hosted runner → merge commit → worktree cleanup. Splits work into the smallest atomic, independently mergeable PRs and builds independent ones in parallel. Use whenever implementation work on this repo needs to land as a PR: 'create a PR', 'implement and PR', 'implement issue #N', 'land this as a PR', 'split into atomic PRs', '提 PR', '提个 PR 再合并', 'work-with-pr', even when the user just says 'implement X' if PR delivery is implied. NOT for other repositories — there use the plain git/gh flow."
 ---
 
 # Work With PR — pir development PR lifecycle
@@ -11,6 +11,8 @@ real-surface QA, a dogfood self-review gate, PR creation against `dev`, an
 unbounded verification loop (CI + dogfood), to merge and worktree cleanup.
 A failing gate sends you back into that PR's worktree to fix and re-QA; you
 keep cycling until every gate passes on the exact code being pushed.
+
+Dogfood findings are severity-gated: only P0/P1/P2 force the fix-and-re-iterate cycle; P3 findings are recorded in a deferral backlog and never fixed inside the loop.
 
 **The unit of delivery is the smallest PR that compiles, passes, and stands
 on its own — not "one task, one PR."** A single task routinely splits into
@@ -164,8 +166,9 @@ Write the PR body in English by explicitly filling this repo's template
   explain it under What & why so a reviewer cannot miss it.
 - **Verification** — build/test status, the model-free tests added, and for
   model-dependent behavior the live verification performed (repo, command,
-  outcome). Include the dogfood review result (findings fixed / clean /
-  skipped-with-reason).
+  outcome). Include the dogfood review result (P0–P2 fixed / clean /
+  skipped-with-reason) and, when applicable, that P3 findings were deferred
+  to `dogfood-p3-backlog.md`.
 - **Docs** — README + docs/README.zh-CN.md for user-facing changes;
   docs/for-llm.md if the deployment surface or JSON contract changed.
 
@@ -205,6 +208,8 @@ push. The loop has no iteration cap — a failing gate is not a
 patch-and-push: route back to Phase 1, where fixes get the same scope
 discipline and, if behavior changed, fresh QA evidence.
 
+**Severity policy: only P0/P1/P2 dogfood findings trigger a fix-and-re-iterate cycle.** Fixing every P3 inside a feature PR bloats the diff and buys extra CI round-trips for low-stakes issues; P3s are recorded in the deferral backlog (Gate B below) and batch-fixed in a dedicated future PR instead.
+
 **Invariant: never push code that has not passed typecheck + tests + a
 dogfood review in exactly that form.**
 
@@ -214,7 +219,8 @@ dogfood review in exactly that form.**
 while true:
   1. Local checks       → npm run typecheck && npm test  (test builds first)
   2. Gate B: dogfood    → review the committed branch diff from this worktree;
-                          findings → Phase 1 fix loop, then back to 1
+                          P0/P1/P2 findings → Phase 1 fix loop, then back to 1;
+                          P3 findings → backlog entry + feedback, no iteration
   3. Push               → git push
   4. Gate A: CI         → wait via background `gh pr checks --watch --fail-fast`;
                           failure → read logs → Phase 1 fix loop → back to 1
@@ -230,30 +236,42 @@ before the first run. Canonical form from inside the worktree:
 ```bash
 npm run build    # review with the code you just wrote, never a stale dist/
 PIR_CONFIG_DIR=/tmp/pir-dogfood-config PIR_NO_WIZARD=1 \
-  node dist/cli/cli.js find --local --json --fail-on P1 \
+  node dist/cli/cli.js find --local --json --fail-on P2 \
   --model 'zai-coding-cn/glm-5.3:max' --base "$BASE_REF"
 ```
 
 `--base "$BASE_REF"` reviews the committed branch diff against the PR's
 base — `origin/dev` for an independent PR, the parent branch for a stacked
 one, so a stacked review sees only its own slice; add `--uncommitted`
-while mid-work. Exit 1 means a P0/P1 finding is present; with `--json`,
+while mid-work. Exit 1 means a P0/P1/P2 finding is present — P3 findings
+exit 0 and never block the gate; with `--json`,
 stdout is pure JSON (`data.findings[]` with `displayId` F-N, `severity`,
 `status`, `claim`, `verifierRationale`, `memoryMatches[]`).
 
-Triage each finding the way you would treat code-review feedback: verify
-it against the code first — neither blind-fix nor blind-dismiss:
+Triage each finding the way you would treat code-review feedback: verify it against the code first — neither blind-fix nor blind-dismiss. Severity decides the disposition:
 
-- **valid** → fix it; commit message suffixed `(dogfood F-N)`; then mark it
-  `feedback F-N fixed --note "…"` (verify-fix refuses until you do) and
-  confirm with `verify-fix F-N` or a re-run;
-- **false positive** → `feedback F-N false-positive --note "…"` so repo
-  memory records the verdict;
-- **intentional** → `feedback F-N expected --note "…"`.
+- **P0/P1/P2, valid** → fix it now: Phase 1 fix, commit message suffixed `(dogfood F-N)`, then mark it `feedback F-N fixed --note "…"` (verify-fix refuses until you do) and confirm with `verify-fix F-N` or a re-run — this is what re-enters the loop;
+- **P3, valid** → do NOT fix it inside this loop: record it and move on with no iteration — append an entry to the deferral backlog (`<main repo dir>/dogfood-p3-backlog.md`, below) and run `feedback F-N accepted-risk --note "deferred to dogfood-p3-backlog.md"` so repo memory carries the verdict too;
+- **false positive** (any severity) → `feedback F-N false-positive --note "…"` so repo memory records the verdict;
+- **intentional** (any severity) → `feedback F-N expected --note "…"`.
 
 All feedback/verify-fix commands use the same env prefix and `--local` as
 the review. Repo memory is a local SQLite keyed by origin + root commit, so
 all worktrees of this repo share it — and dogfooding never syncs it.
+
+### P3 deferral backlog
+
+The backlog is one append-only file, `<main repo dir>/dogfood-p3-backlog.md`, where deferred P3 findings wait for a future batch-fix PR. It lives in the main repo dir — never inside the PR worktree, never committed from a PR branch — because the worktree is deleted in Phase 4, and parallel PRs appending to a committed copy of one shared file would trade deferred findings for merge conflicts. Appending to it is the one sanctioned write to the main repo dir: no branch checkout, no implementation, just the entry.
+
+One entry per finding, one logical line per paragraph:
+
+```markdown
+## F-3 (P3) — one-line claim
+Found 2026-10-14 on `fix/short-slug` (PR #12); anchor `src/cli/foo.ts:42`. <verifier rationale, condensed>.
+Disposition: deferred — batch-fix in a future P3-sweep PR.
+```
+
+A later PR that fixes backlog entries deletes them from the file and suffixes its commits `(dogfood F-N)` as usual — the backlog is the queue, the sweep PR is the drain.
 
 This gate is never skipped because it found issues. The only legitimate
 skip is missing model credentials (no usable id from `models --ids`, or no
@@ -344,7 +362,8 @@ git worktree prune
 - **PR**: #{PR_NUMBER} — {PR_TITLE}
 - **Branch**: {BRANCH} → {BASE_BRANCH}
 - **Iterations**: {N} verification loops
-- **Gates**: CI pass | dogfood {pass (N findings fixed) | SKIPPED (credentials)}
+- **Gates**: CI pass | dogfood {pass (N P0–P2 fixed, M P3 → backlog) | clean | SKIPPED (credentials)}
+- **P3 backlog**: {M entries appended to <main repo dir>/dogfood-p3-backlog.md | none}
 - **Merged**: {yes | no — left for you to merge, as requested}
 - **Worktree**: cleaned up
 ```
@@ -387,7 +406,8 @@ git rebase "$BASE_REF"     # origin/dev, or the parent branch of a stack
 | Pushing without a dogfood pass on exactly that code | Reviewing yourself is this repo's whole point; skips cost real findings later | CRITICAL |
 | Pushing directly to dev | Bypasses PR review entirely | CRITICAL |
 | Pushing fixes without re-running local checks + dogfood | Code changed → previous gates are stale | CRITICAL |
-| Skipping dogfood because it found issues | Findings must be fixed or recorded via `feedback`, never dodged | HIGH |
+| Skipping dogfood because it found issues | Findings must be fixed (P0–P2) or recorded (P3 → backlog + `feedback`), never dodged | HIGH |
+| Fixing P3 dogfood findings inside the verification loop | Scope creep plus extra CI round-trips; P3s are recorded in the backlog and batch-fixed in a dedicated future PR | HIGH |
 | Fixing unrelated code during the verification loop | Scope creep causes new failures | HIGH |
 | Deleting the worktree on failure | User loses the ability to inspect/resume | HIGH |
 | Blindly implementing or dismissing dogfood findings | Each finding gets verified against the code; dismissals are recorded with a reason | MEDIUM |
