@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseOptions, prKey, mirrorUrl, loadManifest, goldenRecallTargets, prefilterPirFindings } from "../eval/reviewbench/run-rb.js";
+import { parseOptions, prKey, mirrorUrl, loadManifest, goldenRecallTargets, prefilterPirFindings, prefilterInputFromArtifactRows } from "../eval/reviewbench/run-rb.js";
 import { normalizeTask } from "../eval/reviewbench/normalize.js";
+import { prefilterTask, PROBABLE_MATCH_THRESHOLD } from "../eval/reviewbench/prefilter.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUN_RB = path.join(HERE, "..", "eval", "reviewbench", "run-rb.js");
@@ -115,6 +116,52 @@ test("prefilterPirFindings population matches what normalizeTask sends the judge
   assert.deepEqual(pir.map((f) => f.start_line), [1, 2]);
   assert.deepEqual(pir.map((f) => f.paths), [["a.ts"], ["b.ts"]]);
   assert.equal(pir[0].message, "T1 — C1 Trigger: G1");
+});
+
+test("resume rebuilds prefilter input with all anchor paths (dogfood F-174)", () => {
+  // A finding whose golden match sits on a secondary anchor: the fresh path
+  // scores the path bonus off every anchor, so a resumed round fed only the
+  // first anchor used to drop below the probable-match threshold.
+  const row = {
+    displayId: "F-1", status: "confirmed",
+    title: "Race in retry", claim: "Counter updates race", trigger: "concurrent flush",
+    anchors: [
+      { path: "src/entry.ts", startLine: 10 },
+      { path: "src/retry.ts", startLine: 20, endLine: 24 },
+    ],
+  };
+  const manifestEntry = { repo: "https://github.com/example/repo", pr_number: 1, base: "b".repeat(40), head: "a".repeat(40) };
+  const { reported } = normalizeTask({ manifestEntry, outcome: { data: { findings: [row] } } });
+  const goldenFindings = [{ file: "src/retry.ts", message: "race on the retry counter", start_line: 20, end_line: 24 }];
+  // Token similarity alone sits just under the threshold: only the anchor
+  // bonus can carry the pair over, which is exactly what the lossy mapping
+  // threw away.
+  const similarity = () => PROBABLE_MATCH_THRESHOLD - 0.05;
+
+  const resumed = prefilterTask({
+    goldenFindings,
+    pirFindings: prefilterInputFromArtifactRows(reported.findings),
+    similarity,
+  });
+  assert.equal(resumed.counts.goldenMatched, 1);
+
+  const lossyLegacyMapping = prefilterTask({
+    goldenFindings,
+    pirFindings: reported.findings.map((f) => ({ message: f.message, paths: [f.file], start_line: f.start_line, end_line: f.end_line })),
+    similarity,
+  });
+  assert.equal(lossyLegacyMapping.counts.goldenMatched, 0);
+});
+
+test("prefilterInputFromArtifactRows falls back to the first anchor for legacy artifacts", () => {
+  const legacyRows = [
+    { producer: "pir", file: "src/only.ts", start_line: 3, end_line: 5, message: "M" },
+    { producer: "pir", file: "src/kept.ts", paths: ["src/kept.ts", "src/extra.ts"], start_line: 7, end_line: 7, message: "N" },
+  ];
+  assert.deepEqual(prefilterInputFromArtifactRows(legacyRows), [
+    { message: "M", paths: ["src/only.ts"], start_line: 3, end_line: 5 },
+    { message: "N", paths: ["src/kept.ts", "src/extra.ts"], start_line: 7, end_line: 7 },
+  ]);
 });
 
 test("goldenRecallTargets keeps tp-labeled golden findings only (judge recall population)", () => {
