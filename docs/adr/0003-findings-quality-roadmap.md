@@ -2,25 +2,25 @@
 
 ## Status
 
-Proposed (2026-10-09; process paragraph, acceptance clause, and the
-Decision §3 measurement amendment dated 2026-10-10, see below). This ADR landed with the plan-only PR that
-introduced the roadmap (D1, #74); the implementation is specified in
-[docs/plans/findings-quality-roadmap.md](../plans/findings-quality-roadmap.md)
-— a development record that is deleted once the series completes — and
-arrives as ordinary PRs against `dev`, tracked in issue #73 (the original
-D1-rooted stacked-PR convention was retired when D1 merged). Each item of
-the decision is binding for that series; items may be individually
-reverted with evidence from the benchmark, in which case this ADR is
-amended.
+**Accepted (2026-10-14).** Proposed 2026-10-09; the implementation series
+(D1–F1) completed as ordinary PRs against `dev`, tracked in issue #73:
+D1 #74, B1 #76, Q1 #78, Q2 #80, Q3 #81, Q4 #83, Q5 #84, C1 #86+#88,
+M1 #87, F1 #90; the B1-baseline recorded via #103. Each item of the
+decision was binding for that series; items may be individually reverted
+with evidence from the benchmark, in which case this ADR is amended.
 
-Acceptance (amended for the B1-baseline deferral — maintainer decision
-recorded in #73): status moves to Accepted once Q1–Q3 have landed under
-the scenario-harness variance gate and the pre-F1 ReviewBench baseline
-era has opened with F1's A/B rows non-regressing. Per-PR ReviewBench
-rows for slices merged before the baseline are waived by the deferral —
-the baseline's dev build already contains those slices, so their
-individual effect is not isolable after the fact; their measurable gate
-is the scenario harness.
+Acceptance (amended twice — the B1-baseline deferral, and the F1 A/B
+waiver of 2026-10-14, both maintainer decisions recorded in #73):
+Q1–Q3 landed under the scenario-harness variance gate; the ReviewBench
+baseline era opened with the 2× test-25 recording of 2026-10-13/14
+(50/50 runs OK; macro run1 GP=95.0% GR=16.6% AP=97.2% AR=24.3%, run2
+GP=91.0% GR=21.5% AP=95.2% AR=28.7%; variance floor GP≥91.0 GR≥16.6
+AP≥95.2 AR≥24.3 — see `tests/eval/reviewbench/RESULTS.md`). F1 merged
+ahead of its A/B rows (#90), and the F1 subset-10 A/B itself was
+**waived by maintainer decision** after the provider's weekly usage
+limit exhausted mid-recording; F1 therefore remains default-off and
+experimental, and a future A/B against the recorded baseline variance
+floor is the standing entry condition for promoting it.
 
 ## Context
 

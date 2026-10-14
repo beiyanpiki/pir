@@ -107,13 +107,13 @@ loader would reject the foreign file).
 
 - **Subset-10 is the iteration face** for behavior-change PRs; the full
   test-25 is reserved for the baseline and release-level claims.
-- **Baseline**: deferred by maintainer decision (issue #73, see the
-  "B1-baseline deferral" note in
-  [docs/plans/findings-quality-roadmap.md](../../../docs/plans/findings-quality-roadmap.md)):
-  the 2× full test-25 runs on dev are recorded before F1's gate, and from
-  then on every behavior PR appends a delta row to `RESULTS.md`. Per-PR
-  rows for slices merged before the baseline are waived — the baseline's
-  dev build already contains them; their gate is the scenario harness.
+- **Baseline**: recorded 2026-10-13/14 (round `baseline-dev-dsv41`, 2×
+  full test-25, 50/50 runs OK — see the Status section and round row in
+  [RESULTS.md](RESULTS.md)). Every behavior PR appends a delta row to
+  `RESULTS.md`, and a "no regression" claim needs both comparison runs no
+  worse than the baseline's worse run. Per-PR rows for slices merged
+  before the baseline are waived — the baseline's dev build already
+  contains them; their gate is the scenario harness.
 - **Variance rule**: a "no regression" claim requires *both* comparison runs
   to be no worse than the baseline's *worse* run.
 - **Judge drift invalidates comparisons**: every RESULTS.md row records the
