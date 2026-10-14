@@ -8,6 +8,7 @@ import { gzipSync } from "node:zlib";
 import {
   findingById,
   listFindings,
+  coverageFor,
   listProjects,
   listRuns,
   readTranscript,
@@ -289,6 +290,16 @@ export function createWebUi(config: WebUiConfig): WebUi {
       return true;
     }
 
+    if (parts[0] === "runs" && parts.length === 4 && parts[3] === "coverage") {
+      const coverage = coverageFor(parts[1]!, parts[2]!, stateRoot);
+      if (!coverage) {
+        json(req, res, 404, { error: "unknown run" });
+        return true;
+      }
+      json(req, res, 200, coverage);
+      return true;
+    }
+
     if (parts[0] === "projects" && parts.length === 3 && parts[2] === "feedback") {
       const limit = Number(url.searchParams.get("limit") ?? 20);
       const result = recentFeedback(parts[1]!, limit, stateRoot);
@@ -351,6 +362,8 @@ export function createWebUi(config: WebUiConfig): WebUi {
           "cache-control": "no-cache",
           etag,
         });
+      }).catch(() => {
+        json(req, res, 500, { error: "transcript could not be read" });
       });
       return true;
     }

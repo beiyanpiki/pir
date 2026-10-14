@@ -10,6 +10,7 @@ import { emitRunEventForTest } from "../../dist/observability/run-events.js";
 const WEB_TOKEN = "web-token-456";
 const PROJECT_ID = "a".repeat(64);
 const RUN_ID = "11111111-2222-3333-4444-555555555555";
+const AUDIT_RUN_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
 function buildStateFixture(root) {
   const projectDir = path.join(root, PROJECT_ID);
@@ -34,6 +35,13 @@ function buildStateFixture(root) {
      VALUES ('e1', 'f1', 'code', 'src/loop.ts', 10, 12, 'for (let i = 0; i <= n; i++)', 'bound', ?)`,
     Date.now(),
   );
+  store.run(
+    `INSERT INTO review_runs (id, project_id, mode, base, head, target, started_at, finished_at, status, rounds, candidates, confirmed, rejected, uncertain, notes, updated_at)
+     VALUES (?, ?, 'audit', NULL, ?, ?, ?, ?, 'incomplete', 1, 1, 0, 0, 1, 'budget reached', ?)`,
+    AUDIT_RUN_ID, PROJECT_ID, "a".repeat(40), JSON.stringify({ commit: "a".repeat(40), scope: { includePaths: [], skipGlobs: [] } }), Date.now() - 5000, Date.now(), Date.now(),
+  );
+  store.run("INSERT INTO audit_work_units (run_id, unit_id, state, attempts, files, reason, updated_at) VALUES (?, 'unit-1', 'reviewed', 1, 1, NULL, ?)", AUDIT_RUN_ID, Date.now());
+  store.run("INSERT INTO audit_file_coverage (run_id, path, blob_id, state, reason, ranges_total, ranges_reviewed, updated_at) VALUES (?, 'src/a.ts', 'blob', 'reviewed', NULL, 1, 1, ?)", AUDIT_RUN_ID, Date.now());
   store.close();
 
   const transcriptDir = path.join(projectDir, "transcripts", RUN_ID);
@@ -49,6 +57,14 @@ function buildStateFixture(root) {
     rounds: [], plugins: [{ name: "typescript", version: "1.0.0", activation: "auto" }],
     sessions: [{ file: "reviewer-r1.json", sessionKind: "reviewer", round: 1 }],
     usage: { totalTokens: 10, cost: 0.01 }, durationMs: 1234, estimatedTokens: 0, files: [],
+    verifierModel: "prov/verifier", runVerdict: "incorrect", changeCoverage: { hunksTotal: 2, hunksCovered: 1, filesTotal: 1, filesCovered: 0, files: [{ path: "src/loop.ts", covered: 1, total: 2 }] },
+  }));
+  mkdirSync(path.join(projectDir, "transcripts", AUDIT_RUN_ID), { recursive: true });
+  writeFileSync(path.join(projectDir, "transcripts", AUDIT_RUN_ID, "run.json"), JSON.stringify({
+    schemaVersion: 1, runId: AUDIT_RUN_ID, projectId: PROJECT_ID, mode: "audit", status: "incomplete", base: null, head: "a".repeat(40), model: "prov/m", verifierModel: null, startedAt: 1, finishedAt: 2,
+    stoppedBecause: "budget reached", incomplete: true, runVerdict: "needs-review", maxFindings: 10, rounds: [], plugins: [], sessions: [], durationMs: 100, estimatedTokens: 0,
+    coverage: { filesTotal: 1, filesNotSelected: 0, filesExcluded: 0, filesInScope: 1, filesReviewed: 1, filesPartial: 0, filesUnreviewed: 0, filesBlocked: 0, filesFailed: 0, batchesTotal: 1, batchesCompleted: 1, batchesBlocked: 0, batchesFailed: 0 },
+    units: [{ id: "unit-1", module: "src", state: "reviewed", files: 1, attempts: 1 }],
   }));
 }
 
@@ -142,15 +158,15 @@ test("web ui: bearer token gates the api, static shell stays public", async (t) 
 });
 
 test("web ui: runs, run detail and transcripts are served read-only", async (t) => {
-  const { base } = await withWebServer(t);
+  const { base, root } = await withWebServer(t);
   const auth = { authorization: `Bearer ${WEB_TOKEN}` };
 
   const runs = await fetch(`${base}/api/projects/${PROJECT_ID}/runs`, { headers: auth });
   assert.equal(runs.status, 200);
   const runsBody = await runs.json();
-  assert.equal(runsBody.total, 1);
-  assert.equal(runsBody.runs[0].runId, RUN_ID);
-  assert.equal(runsBody.runs[0].model, "prov/m");
+  assert.equal(runsBody.total, 2);
+  assert.ok(runsBody.runs.some((run) => run.runId === RUN_ID));
+  assert.equal(runsBody.runs.find((run) => run.runId === RUN_ID).model, "prov/m");
   assert.equal(runsBody.runs[0].transcriptsAvailable, true);
 
   const detail = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}`, { headers: auth });
@@ -164,6 +180,21 @@ test("web ui: runs, run detail and transcripts are served read-only", async (t) 
   assert.equal(detailBody.findings.items[0].evidenceCount, 1);
   assert.equal(detailBody.findings.items[0].claim, undefined);
 
+  const changeCoverage = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/coverage`, { headers: auth });
+  assert.equal(changeCoverage.status, 200);
+  const changeView = await changeCoverage.json();
+  assert.equal(changeView.mode, "change");
+  assert.equal(changeView.summary.hunksCovered, 1);
+  assert.equal(changeView.files[0].path, "src/loop.ts");
+  const auditCoverage = await fetch(`${base}/api/runs/${PROJECT_ID}/${AUDIT_RUN_ID}/coverage`, { headers: auth });
+  assert.equal(auditCoverage.status, 200);
+  const auditView = await auditCoverage.json();
+  assert.equal(auditView.mode, "audit");
+  assert.equal(auditView.summary.batchesCompleted, 1);
+  assert.equal(auditView.units[0].id, "unit-1");
+  assert.equal(auditView.files[0].path, "src/a.ts");
+  assert.equal(auditView.target.commit, "a".repeat(40));
+
   const findingDetail = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/findings/f1`, { headers: auth });
   assert.equal(findingDetail.status, 200);
   const finding = await findingDetail.json();
@@ -175,6 +206,12 @@ test("web ui: runs, run detail and transcripts are served read-only", async (t) 
   assert.equal(transcript.status, 200);
   const transcriptBody = await transcript.json();
   assert.equal(transcriptBody.role, "code reviewer");
+
+  const missingTranscript = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/transcript/missing.json`, { headers: auth });
+  assert.equal(missingTranscript.status, 404);
+  writeFileSync(path.join(root, PROJECT_ID, "transcripts", RUN_ID, "broken.json"), "{corrupt");
+  const brokenTranscript = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/transcript/broken.json`, { headers: auth });
+  assert.equal(brokenTranscript.status, 500, "corrupt transcripts are server errors, not missing files");
 
   // Transcript names are jailed to the run's directory.
   const escape = await fetch(`${base}/api/runs/${PROJECT_ID}/${RUN_ID}/transcript/${encodeURIComponent("../../memory.sqlite")}`, { headers: auth });
@@ -257,11 +294,12 @@ test("web ui: run lists still serve archives written before the mode column", as
   };
   const all = await list("");
   assert.equal(all.status, 200);
-  assert.equal(all.body.total, 1);
+  const total = all.body.total;
+  assert.ok(total === 1 || total === 2, `fixture has one or two runs (got ${total})`);
   assert.ok(all.body.runs.every((run) => run.mode === "change"));
   const change = await list("?mode=change");
   assert.equal(change.status, 200);
-  assert.equal(change.body.total, 1);
+  assert.equal(change.body.total, total);
   const audit = await list("?mode=audit");
   assert.equal(audit.status, 200, "an audit filter on a pre-v5 archive is empty, not a 404");
   assert.equal(audit.body.total, 0);

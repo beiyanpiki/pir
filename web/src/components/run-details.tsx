@@ -89,6 +89,7 @@ export function RunDetails({ detail }: { detail: RunDetail }) {
         </section>
       )}
 
+      <details className="inspector-section"><summary>Recorded metadata</summary><pre>{JSON.stringify(manifest, null, 2)}</pre></details>
       <p className="inspector-note">
         Review sessions run without extensions, skills, hooks, or write tools. Captured transcripts include model turns, reasoning blocks, and tool calls.
       </p>

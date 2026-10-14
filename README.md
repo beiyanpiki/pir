@@ -399,3 +399,5 @@ Model evaluation is under `tests/eval/` and requires provider access.
 [MIT](LICENSE) © 2026 Xin Gao
 
 The run Workflow view filters live and archived sessions, keeps session and finding links in the URL, and shows runtime-to-project finding IDs. Connection health is separate from execution status; selecting history pauses live scrolling until Jump to latest.
+
+Run pages organize review work into Overview, Findings, Workflow, Coverage and Details. Overview distinguishes execution from the observation connection and explains completeness and the recorded verdict. Finding evidence opens in a desktop inspector or a modal drawer on narrower screens; source-session links connect the evidence to Workflow. Change coverage counts diff hunks, while Audit coverage reads work units and file states from the read-only ledger. Older runs display unavailable coverage explicitly.

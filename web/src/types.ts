@@ -41,6 +41,11 @@ export interface RunSummary {
   totalTokens: number | null;
   cost: number | null;
   transcriptsAvailable: boolean;
+  verifierModel: string | null;
+  runVerdict: string | null;
+  incomplete: boolean;
+  stoppedBecause: string | null;
+  lastUpdatedAt: number | null;
 }
 
 export interface FindingEvidence {
@@ -62,6 +67,7 @@ export interface FindingSummary {
   round: number;
   createdAt: number;
   evidenceCount: number;
+  confidence: number | null;
 }
 
 export interface FindingView {
@@ -81,6 +87,8 @@ export interface FindingView {
   verifierRationale: string | null;
   round: number;
   createdAt: number;
+  confidence: number | null;
+  relatedSessions: Array<{ sessionKey: string; relation: "candidate" | "verification"; originalDisplayId?: string }>;
 }
 
 export interface SessionRef {
@@ -134,11 +142,13 @@ export interface RunManifest {
   base: string | null;
   head: string;
   model: string | null;
+  verifierModel?: string | null;
+  runVerdict?: string | null;
   startedAt: number;
   finishedAt: number;
   stoppedBecause: string;
   incomplete: boolean;
-  maxFindings: number;
+  maxFindings: number | null;
   rounds: RoundInfo[];
   plugins: Array<{ name: string; version?: string; activation?: string }>;
   sessions: SessionRef[];
@@ -146,7 +156,8 @@ export interface RunManifest {
   durationMs: number;
   estimatedTokens: number;
   files?: Array<{ path: string; status: string; additions: number; deletions: number }>;
-  coverage?: Record<string, number>;
+  changeCoverage?: ChangeCoverageSummaryView;
+  coverage?: AuditCoverageSummaryView;
   units?: Array<{ id: string; module: string; state: string; reason?: string; files: number; attempts: number }>;
 }
 
@@ -334,3 +345,17 @@ export interface SessionTranscript {
     customTools: string[];
   };
 }
+
+export interface ChangeCoverageFileView { path: string; covered: number; total: number }
+export interface ChangeCoverageSummaryView { hunksTotal: number; hunksCovered: number; filesTotal: number; filesCovered: number; files: ChangeCoverageFileView[] }
+export interface AuditUnitView { id: string; module: string; state: string; reason?: string; files: number; attempts: number }
+export interface AuditFileCoverageView { path: string; blobId: string; state: string; reason?: string; rangesTotal: number; rangesReviewed: number }
+export interface AuditCoverageSummaryView {
+  filesTotal: number; filesNotSelected: number; filesExcluded: number; filesInScope: number;
+  filesReviewed: number; filesPartial: number; filesUnreviewed: number; filesBlocked: number; filesFailed: number;
+  batchesTotal: number; batchesCompleted: number; batchesBlocked: number; batchesFailed: number;
+}
+export type CoverageView =
+  | { mode: "change"; available: true; summary: ChangeCoverageSummaryView; files: ChangeCoverageFileView[] }
+  | { mode: "audit"; available: true; summary: AuditCoverageSummaryView; units: AuditUnitView[]; files: AuditFileCoverageView[]; target: unknown }
+  | { mode: "change" | "audit"; available: false; reason: "not-recorded" | "unavailable" };
