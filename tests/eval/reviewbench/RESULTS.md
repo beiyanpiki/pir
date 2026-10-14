@@ -23,6 +23,14 @@ Notes below; the full trail (capped attempt → zero findings, discarded;
 4-way concurrency → OOM-killed, discarded; key rotation; `--resume`
 reuse of 19 completed runs) is in tracking issue #73.
 
+**F1 subset-10 A/B: waived by maintainer decision (2026-10-14).** The
+A/B round (`f1-angles-ab-dsv41`) was interrupted by the provider's weekly
+usage limit after 4 of 40 runs; rather than wait out the quota, the
+maintainer waived the A/B — F1 stays default-off and experimental, and a
+future A/B against the recorded variance floor (GP≥91.0 GR≥16.6 AP≥95.2
+AR≥24.3) is the entry condition for promoting it. The 4 completed runs
+and the round harness remain in place for that future recording.
+
 **Judge environment deviations (recorded, both inherited by all later
 rows).** The pinned judge checkout (RB `aec7b37` + its own `npm ci`) ships
 pi-coding-agent 0.74.2, which (a) does not send the `x-opencode-session`
