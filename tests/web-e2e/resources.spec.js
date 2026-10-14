@@ -22,9 +22,13 @@ test.beforeEach(async ({ page }) => {
     const filtered = all.filter((item) => (url.searchParams.get("mode") ?? item.mode) === item.mode && (url.searchParams.get("status") ?? item.status) === item.status);
     route.fulfill({ json: { runs: filtered, total: filtered.length } });
   });
-  await page.route("**/api/runs/*/*", (route) => {
-    const parts = new URL(route.request().url()).pathname.split("/");
-    route.fulfill({ json: detail(parts[4]) });
+  await page.route("**/api/runs/*/*/coverage", (route) => route.fulfill({ json: { mode: "change", available: false, reason: "not-recorded" } }));
+  await page.route("**/api/runs/*/*", async (route) => {
+    const url = new URL(route.request().url());
+    // Do not swallow the suffix routes (coverage, findings, transcripts).
+    if (url.pathname.split("/").length > 5) return route.fallback();
+    const runId = url.pathname.split("/")[4];
+    route.fulfill({ json: detail(runId) });
   });
 });
 
@@ -106,6 +110,7 @@ test("run navigation isolates transcripts with identical file names", async ({ p
 test("a delayed run response is cancelled when navigating to the next run", async ({ page }) => {
   let release;
   const pending = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/runs/*/*/coverage", (route) => route.fulfill({ json: { mode: "change", available: false, reason: "not-recorded" } }));
   await page.route("**/api/runs/*/*", async (route) => {
     const runId = new URL(route.request().url()).pathname.split("/")[4];
     if (runId === runA) {
@@ -133,7 +138,9 @@ for (const [status, message] of [
 ]) {
   test(`run errors (${status || "network"}) offer a working retry`, async ({ page }) => {
     let failing = true;
-    await page.route(`**/api/runs/${projectA}/${runA}`, (route) => {
+    await page.route(`**/api/runs/${projectA}/${runA}`, async (route) => {
+      const parts = new URL(route.request().url()).pathname.split("/");
+      if (parts.length > 5) return route.fallback();
       if (!failing) return route.fulfill({ json: detail(runA) });
       return status ? route.fulfill({ status, json: { error: "Fixture failure" } }) : route.abort("failed");
     });

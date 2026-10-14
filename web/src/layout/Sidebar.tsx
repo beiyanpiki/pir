@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   Activity,
@@ -142,9 +142,54 @@ function ProjectNode({
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const location = useLocation();
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 900px)").matches);
   const [query, setQuery] = useState("");
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), []);
   usePollingReload(overview.reload, 15_000);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 900px)");
+    const update = () => setNarrow(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!open || !narrow) return;
+    const sidebar = sidebarRef.current;
+    if (!sidebar) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const background = document.querySelectorAll<HTMLElement>(".workspace-topbar, .workspace-main");
+    const priorInert = new Map([...background].map((element) => [element, element.inert]));
+    background.forEach((element) => { element.inert = true; });
+    const focusable = () => [...sidebar.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]")]
+      .filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+    (focusable()[0] ?? sidebar).focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const nodes = focusable();
+      if (nodes.length === 0) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === nodes[0]) {
+        event.preventDefault(); nodes[nodes.length - 1].focus();
+      } else if (!event.shiftKey && document.activeElement === nodes[nodes.length - 1]) {
+        event.preventDefault(); nodes[0].focus();
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      background.forEach((element) => { element.inert = priorInert.get(element) ?? false; });
+      opener?.focus();
+    };
+  }, [open, narrow]);
 
   const runMatch = /^\/runs\/([^/]+)\/([^/]+)$/.exec(location.pathname);
   const projectMatch = /^\/projects\/([^/]+)$/.exec(location.pathname);
@@ -164,7 +209,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
   }, [projects, query]);
 
   return (
-    <aside className={`workspace-sidebar ${open ? "is-open" : ""}`} aria-label="Projects and review runs">
+    <aside ref={sidebarRef} className={`workspace-sidebar ${open ? "is-open" : ""}`} aria-label="Projects and review runs" role={open && narrow ? "dialog" : "complementary"} aria-modal={open && narrow ? true : undefined} inert={narrow && !open} tabIndex={-1}>
       <div className="sidebar-head">
         <div>
           <div className="sidebar-eyebrow">Workspace</div>
@@ -216,6 +261,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
           <Search size={14} />
           <input
             type="search"
+            aria-label="Filter projects"
             value={query}
             placeholder="Filter projects"
             onChange={(event) => setQuery(event.target.value)}
