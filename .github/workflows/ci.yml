@@ -29,16 +29,19 @@ jobs:
       - run: npm test
       - name: Install fixed Chromium
         env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+          # runner.tool_cache persists across jobs on this runner; runner.temp
+          # is wiped between jobs, so browsers stored there re-download every
+          # run (~280 MiB from the Playwright CDN).
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.tool_cache }}/ms-playwright
         run: |
-          npx playwright install chromium
-          # The self-hosted runner user cannot sudo for apt. Headless-shell is
-          # enough for this suite; a genuinely missing system library should
-          # fail the browser test itself, not a privileged package step.
-          npx playwright install chromium --only-shell || true
+          # Headless-shell only: the suite runs headless and never launches
+          # full Chromium, which would be another ~167 MiB per cold cache.
+          # Still no sudo/apt — a genuinely missing system library must fail
+          # the browser test itself, not this privileged-free step.
+          npx playwright install chromium --only-shell
       - name: Web browser regression tests
         env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.tool_cache }}/ms-playwright
         run: npm run test:web:e2e
       - name: Upload web browser artifacts
         if: failure()
