@@ -151,16 +151,16 @@ function TranscriptSessionSection({
 
   useEffect(() => {
     if (!near || transcript !== undefined) return;
-    let cancelled = false;
-    fetchTranscript(projectId, runId, session.file)
+    const controller = new AbortController();
+    fetchTranscript(projectId, runId, session.file, controller.signal)
       .then((data) => {
-        if (!cancelled) setTranscript(data);
+        setTranscript(data);
       })
-      .catch(() => {
-        if (!cancelled) setTranscript(null);
+      .catch((cause) => {
+        if (!(cause instanceof DOMException && cause.name === "AbortError")) setTranscript(null);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [projectId, runId, session.file, near, transcript]);
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import {
   Activity,
   ChevronDown,
@@ -70,18 +70,19 @@ function ProjectRuns({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     setRuns(null);
     setError(null);
-    apiGet<{ runs: RunSummary[] }>(`/api/projects/${projectId}/runs?limit=6`)
+    apiGet<{ runs: RunSummary[] }>(`/api/projects/${projectId}/runs?limit=6`, controller.signal)
       .then((data) => {
-        if (!cancelled) setRuns(data.runs);
+        setRuns(data.runs);
       })
       .catch((cause) => {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
+        setError(cause instanceof Error ? cause.message : String(cause));
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [projectId]);
 
@@ -141,13 +142,13 @@ function ProjectNode({
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const location = useLocation();
-  const params = useParams();
   const [query, setQuery] = useState("");
-  const overview = useApi<Overview>(() => apiGet<Overview>("/api/overview"), []);
+  const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), []);
   usePollingReload(overview.reload, 15_000);
 
-  const runMatch = /^\/runs\/([0-9a-f]{64})\/([\w-]+)$/.exec(location.pathname);
-  const activeProjectId = runMatch?.[1] ?? params.projectId;
+  const runMatch = /^\/runs\/([^/]+)\/([^/]+)$/.exec(location.pathname);
+  const projectMatch = /^\/projects\/([^/]+)$/.exec(location.pathname);
+  const activeProjectId = runMatch?.[1] ?? projectMatch?.[1];
   const activeRunId = runMatch?.[2];
 
   const projects = overview.data?.projects ?? [];

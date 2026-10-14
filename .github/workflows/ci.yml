@@ -27,6 +27,28 @@ jobs:
       # Model-free suite: supervisor loop, memory contracts, CLI, HTTPS server
       # (uses fake codegraph binaries and scripted agent sessions).
       - run: npm test
+      - name: Install fixed Chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+        run: |
+          npx playwright install chromium
+          # The self-hosted runner user cannot sudo for apt. Headless-shell is
+          # enough for this suite; a genuinely missing system library should
+          # fail the browser test itself, not a privileged package step.
+          npx playwright install chromium --only-shell || true
+      - name: Web browser regression tests
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright
+        run: npm run test:web:e2e
+      - name: Upload web browser artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-browser-artifacts
+          path: |
+            test-results/web-artifacts
+            test-results/web-report
+          if-no-files-found: ignore
 
   # The npm package behind `npx github:beiyanpiki/pir` and
   # `npm i -g github:beiyanpiki/pir` (no npm registry publish): pack the

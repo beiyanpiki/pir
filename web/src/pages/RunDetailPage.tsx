@@ -29,6 +29,7 @@ import { SessionTimeline, sessionDomId } from "../components/session/SessionTime
 import { FindingsTab } from "../components/findings";
 import { CoverageTab } from "../components/coverage";
 import { RunDetails } from "../components/run-details";
+import { PageError } from "../components/page-controls";
 import { InspectorToggle } from "../layout/WorkspaceShell";
 import type { ActiveRunView, ProjectSummary, RunDetail, RunEvent, SessionRef } from "../types";
 import { useStickToBottom } from "use-stick-to-bottom";
@@ -43,9 +44,13 @@ interface Overview {
 export function RunDetailPage() {
   const { projectId = "", runId = "" } = useParams();
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("findings");
-  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1200);
-  const detail = useApi<RunDetail>(() => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`), [projectId, runId]);
-  const overview = useApi<Overview>(() => apiGet<Overview>("/api/overview"), [projectId]);
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth >= 1280);
+  const [narrowInspector, setNarrowInspector] = useState(() => window.innerWidth < 1280);
+  const inspectorRef = useRef<HTMLElement | null>(null);
+  const inspectorOpenerRef = useRef<HTMLElement | null>(null);
+  const detail = useApi<RunDetail>((signal) => apiGet<RunDetail>(`/api/runs/${projectId}/${runId}`, signal), [projectId, runId]);
+  const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
+  const now = useTicker(((detail.data?.run.status === "running" && detail.data.run.finishedAt === null) || (detail.data?.live !== null && detail.data?.live?.end === null)) ? 1000 : 0);
 
   const run = detail.data?.run;
   const live = detail.data?.live ?? null;
@@ -55,6 +60,45 @@ export function RunDetailPage() {
   const pendingLiveEventsRef = useRef<RunEvent[]>([]);
   const liveFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const streamSticky = useStickToBottom({ initial: "smooth", resize: "smooth" });
+
+  useEffect(() => {
+    const update = (): void => setNarrowInspector(window.innerWidth < 1280);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  useEffect(() => {
+    if (!inspectorOpen || !narrowInspector) return;
+    const inspector = inspectorRef.current;
+    if (!inspector) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) {
+      inspectorOpenerRef.current = active;
+    }
+    const background = document.querySelectorAll<HTMLElement>(".workspace-topbar, .workspace-sidebar, .run-header, .run-context-strip, .notice-bar, .session-rail, .run-stream");
+    background.forEach((element) => { element.inert = true; });
+    const focusable = (): HTMLElement[] => [...inspector.querySelectorAll<HTMLElement>("button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])")];
+    (focusable()[0] ?? inspector).focus();
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") { event.preventDefault(); setInspectorOpen(false); return; }
+      if (event.key !== "Tab") return;
+      const nodes = focusable();
+      if (nodes.length === 0) { event.preventDefault(); return; }
+      if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes[nodes.length - 1].focus(); }
+      else if (!event.shiftKey && document.activeElement === nodes[nodes.length - 1]) { event.preventDefault(); nodes[0].focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      background.forEach((element) => { element.inert = false; });
+      // A run change can replace the page under the drawer, so the saved
+      // opener may be detached: fall back to the current toggle instead of
+      // dropping focus onto the body.
+      const opener = inspectorOpenerRef.current;
+      if (opener?.isConnected) opener.focus();
+      else document.querySelector<HTMLElement>(".run-header-actions button")?.focus();
+    };
+  }, [inspectorOpen, narrowInspector, detail.data !== null && !detail.error]);
 
   // Live events arrive over SSE only (the REST detail ships metadata, not the
   // replay buffer), so switching runs must reset the sequence cursor — a stale
@@ -90,7 +134,6 @@ export function RunDetailPage() {
     if (liveFlushTimerRef.current !== null) clearTimeout(liveFlushTimerRef.current);
   }, []);
 
-  const now = useTicker(ongoing ? 1000 : 0);
   const displayStatus = deriveStatus(run, live, sseStatus);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
   // While the SSE replay has not landed yet, hold the stream on a spinner
@@ -101,7 +144,7 @@ export function RunDetailPage() {
     return <div className="page-shell"><div className="loading-state is-page"><span className="pir-mini-spinner" /> Loading review run…</div></div>;
   }
   if (detail.error) {
-    return <div className="page-shell"><div className="error-state is-page">{detail.error}</div></div>;
+    return <div className="page-shell"><PageError error={detail.error} retry={detail.reload} /></div>;
   }
   if (!run || !detail.data) {
     return <div className="page-shell"><div className="empty-state is-page"><FileSearch size={22} /><strong>Run not found</strong></div></div>;
@@ -117,6 +160,7 @@ export function RunDetailPage() {
     ? now - live.startedAt
     : (run.durationMs ?? (run.finishedAt !== null ? run.finishedAt - run.startedAt : null));
   const isAudit = run.mode === "audit";
+  const activeInspectorTab = inspectorTab === "coverage" && !isAudit ? "findings" : inspectorTab;
   return (
     <div className="run-page">
       <header className="run-header">
@@ -156,7 +200,7 @@ export function RunDetailPage() {
         <div className="notice-bar"><Info size={14} /> Transcripts were not captured for this run. Findings and run metadata are still available.</div>
       )}
 
-      <div className="run-workspace">
+      <div className={`run-workspace ${inspectorOpen ? "has-inspector" : ""}`}>
         <SessionRail sessions={detail.data.sessions} liveEvents={liveEvents} />
 
         <section className="run-stream" aria-label="Review execution stream">
@@ -185,16 +229,16 @@ export function RunDetailPage() {
           )}
         </section>
 
-        {inspectorOpen && <button className="inspector-scrim" type="button" aria-label="Close inspector" onClick={() => setInspectorOpen(false)} />}
+        {inspectorOpen && narrowInspector && <button className="inspector-scrim" type="button" aria-label="Close inspector" onClick={() => setInspectorOpen(false)} />}
 
-        <aside className={`run-inspector ${inspectorOpen ? "is-open" : ""}`} aria-label="Review inspector">
+        <aside ref={inspectorRef} className={`run-inspector ${inspectorOpen ? "is-open" : ""}`} aria-label="Review inspector" role={narrowInspector && inspectorOpen ? "dialog" : "complementary"} aria-modal={narrowInspector && inspectorOpen ? true : undefined} tabIndex={-1}>
           <div className="inspector-tabs" role="tablist" aria-label="Inspector views">
             <span className="inspector-title">Inspect</span>
             <button
               type="button"
               role="tab"
-              aria-selected={inspectorTab === "findings"}
-              className={inspectorTab === "findings" ? "is-active" : ""}
+              aria-selected={activeInspectorTab === "findings"}
+              className={activeInspectorTab === "findings" ? "is-active" : ""}
               onClick={() => setInspectorTab("findings")}
             >
               <ShieldAlert size={14} /> Findings <span>{detail.data.findings.total}</span>
@@ -203,8 +247,8 @@ export function RunDetailPage() {
               <button
                 type="button"
                 role="tab"
-                aria-selected={inspectorTab === "coverage"}
-                className={inspectorTab === "coverage" ? "is-active" : ""}
+                aria-selected={activeInspectorTab === "coverage"}
+                className={activeInspectorTab === "coverage" ? "is-active" : ""}
                 onClick={() => setInspectorTab("coverage")}
               >
                 <Gauge size={14} /> Coverage
@@ -213,8 +257,8 @@ export function RunDetailPage() {
             <button
               type="button"
               role="tab"
-              aria-selected={inspectorTab === "details"}
-              className={inspectorTab === "details" ? "is-active" : ""}
+              aria-selected={activeInspectorTab === "details"}
+              className={activeInspectorTab === "details" ? "is-active" : ""}
               onClick={() => setInspectorTab("details")}
             >
               <Info size={14} /> Details
@@ -224,9 +268,9 @@ export function RunDetailPage() {
             </button>
           </div>
           <div className="inspector-content">
-            {inspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} />}
-            {inspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
-            {inspectorTab === "details" && <RunDetails detail={detail.data} />}
+            {activeInspectorTab === "findings" && <FindingsTab projectId={projectId} runId={runId} findings={detail.data.findings} />}
+            {activeInspectorTab === "coverage" && manifest && <CoverageTab manifest={manifest} />}
+            {activeInspectorTab === "details" && <RunDetails detail={detail.data} />}
           </div>
         </aside>
       </div>

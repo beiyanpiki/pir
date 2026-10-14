@@ -7,53 +7,92 @@ export interface ApiState<T> {
   data: T | null;
   error: string | null;
   loading: boolean;
+  /** True while the held data answers a previous resource or query. */
+  stale: boolean;
   /** Bump to refetch; auto-retries after the previous load finished. */
   reload: () => void;
 }
 
+export interface ApiOptions {
+  /**
+   * Deps whose change replaces the resource being displayed. Data is discarded
+   * only for these; every other dep keeps the held data visible while the new
+   * request is in flight, so lists do not unmount (and lose focus) on a simple
+   * filter or page change. Defaults to all deps.
+   */
+  identity?: unknown[];
+}
+
 /**
- * Fetch-on-mount with 401 → /login redirection. The fetcher is stored in a
- * ref so callers can pass inline closures without re-triggering loads; the
- * reload counter is the explicit invalidation signal.
+ * Fetch-on-mount with 401 → /login redirection. Each resource identity owns
+ * an AbortController, so route changes cancel work and stale responses cannot
+ * repopulate the next page. The reload counter is the explicit invalidation
+ * signal.
  */
-export function useApi<T>(fetcher: () => Promise<T>, deps: unknown[]): ApiState<T> {
+export function useApi<T>(fetcher: (signal: AbortSignal) => Promise<T>, deps: unknown[], options: ApiOptions = {}): ApiState<T> {
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const loadedIdentity = useRef<string | null>(null);
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
-  const fetcherRef = useRef(fetcher);
-  fetcherRef.current = fetcher;
   const navigate = useNavigate();
+  const identityKey = JSON.stringify(options.identity ?? deps);
+  const resourceKey = JSON.stringify(deps);
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
+    const from = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const identityChanged = loadedIdentity.current !== identityKey;
+    loadedIdentity.current = identityKey;
+    // A different resource invalidates the held data immediately. This
+    // prevents a late response from briefly rendering data for another URL,
+    // while a plain filter or page change keeps the current rows mounted.
+    if (identityChanged) setData(null);
+    setError(null);
     setLoading(true);
-    fetcherRef.current()
+    fetcher(controller.signal)
       .then((result) => {
         if (!cancelled) {
           setData(result);
           setError(null);
+          setSettledKey(resourceKey);
         }
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
+        if (cause instanceof DOMException && cause.name === "AbortError") return;
         if (cause instanceof ApiError && cause.status === 401) {
-          navigate("/login", { replace: true, state: { from: window.location.pathname } });
+          navigate("/login", {
+            replace: true,
+            state: { from },
+          });
           return;
         }
-        setError(cause instanceof Error ? cause.message : String(cause));
+        if (cause instanceof ApiError) {
+          const label = cause.status === 403 ? "You do not have permission to view this resource." :
+            cause.status === 404 ? "This resource was not found." :
+            cause.status >= 500 ? "The server could not load this resource." : cause.message;
+          setError(label);
+        } else {
+          setError(cause instanceof Error ? cause.message : "Network error. Check your connection and retry.");
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, tick]);
 
   const reload = useCallback(() => setTick((value) => value + 1), []);
-  return { data, error, loading, reload };
+  // Before the effect for a new identity runs, hold the loading state instead
+  // of rendering the previous resource's data under the new URL.
+  if (loadedIdentity.current !== identityKey) return { data: null, error: null, loading: true, stale: false, reload };
+  return { data, error, loading, stale: settledKey !== resourceKey, reload };
 }
 
 export type SseStatus = "idle" | "connecting" | "open" | "unavailable" | "closed" | "error";

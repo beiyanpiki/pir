@@ -318,6 +318,8 @@ to record timelines there. Live timelines cover runs in the serve process; histo
 transcripts also show prompts, tool traffic, and available thinking. See the
 [web guide](web/README.md) for development of the explorer.
 
+Run list filters, search, and pagination stay in the URL so reloads and browser navigation restore the view. Signing in restores the full deep link, including its query and fragment. Failed page loads offer Retry; the run inspector becomes a keyboard-accessible drawer below 1280px and can be closed on desktop to expand the timeline.
+
 ### Recovering runs by URL
 
 When a server accepts an async review, the client writes a receipt to
