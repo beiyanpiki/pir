@@ -335,17 +335,17 @@ function toRunSummary(row: RawRunRow, stateRoot: string, projectId: string): Run
 
 export function listRuns(
   projectId: string,
-  options: { limit?: number; offset?: number; status?: string; mode?: "change" | "audit" } = {},
+  options: { limit?: number; offset?: number; status?: string; mode?: string; q?: string } = {},
   stateRoot = pirStateBase(),
 ): { runs: RunSummary[]; total: number } | null {
   if (!isValidProjectId(projectId)) return null;
   const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
-  const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-  const offset = Math.max(options.offset ?? 0, 0);
+  const limit = boundedLimit(options.limit, 50, 200);
+  const offset = boundedOffset(options.offset);
   return withDb(dbPath, (db) => {
-    const clauses: string[] = [];
-    const values: string[] = [];
-    if (options.status) { clauses.push("status = ?"); values.push(options.status); }
+    const clauses = ["project_id = ?"];
+    const params: Array<string> = [projectId];
+    if (options.status) { clauses.push("status = ?"); params.push(options.status); }
     if (options.mode) {
       // Archives written before migration v5 have no mode column; they are all
       // change reviews, so an audit filter is empty rather than a 404.
@@ -355,17 +355,25 @@ export function listRuns(
         if (options.mode === "audit") return { runs: [], total: 0 };
       } else {
         clauses.push("mode = ?");
-        values.push(options.mode);
+        params.push(options.mode);
       }
     }
-    const where = clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
-    const totalRow = db.prepare(
-      `SELECT COUNT(*) AS n FROM review_runs${where}`,
-    ).get(...values) as { n: number };
-    const rows = db.prepare(`SELECT * FROM review_runs${where} ORDER BY started_at DESC LIMIT ? OFFSET ?`)
-      .all(...values, limit, offset) as unknown as RawRunRow[];
-    return { runs: rows.map((row) => toRunSummary(row, stateRoot, projectId)), total: totalRow?.n ?? 0 };
+    const rows = db.prepare(`SELECT * FROM review_runs WHERE ${clauses.join(" AND ")} ORDER BY started_at DESC, id DESC`)
+      .all(...params) as unknown as RawRunRow[];
+    const needle = options.q?.trim().toLowerCase();
+    const filtered = rows.map((row) => toRunSummary(row, stateRoot, projectId)).filter((run) => !needle || [
+      run.runId, run.mode, run.status, run.base, run.head, run.model, run.stoppedBecause, run.notes,
+    ].some((value) => value?.toLowerCase().includes(needle)));
+    return { runs: filtered.slice(offset, offset + limit), total: filtered.length };
   });
+}
+
+function boundedLimit(value: number | undefined, fallback: number, max: number): number {
+  return Number.isFinite(value) ? Math.min(Math.max(Math.trunc(value!), 1), max) : fallback;
+}
+
+function boundedOffset(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(Math.trunc(value!), 0) : 0;
 }
 
 interface RawFindingRow {
@@ -444,6 +452,10 @@ interface RawSummaryRow {
   round: number;
   created_at: number;
   confidence?: number | null;
+  fingerprint?: string;
+  run_id?: string;
+  anchors?: string;
+  updated_at?: number;
 }
 
 const FINDINGS_ORDER = "ORDER BY severity, created_at";
@@ -683,5 +695,200 @@ export function recentFeedback(projectId: string, limit = 20, stateRoot = pirSta
       id: row.id, ts: row.ts, findingId: row.finding_id, action: row.action, decision: row.decision,
       priority: row.priority, note: row.note, scope: row.scope, target: row.target,
     }));
+  });
+}
+
+/** Search all findings in a project before pagination. Fingerprints are stable across runs. */
+export function listProjectFindings(
+  projectId: string,
+  options: { q?: string; status?: string; severity?: string; runId?: string; limit?: number; offset?: number } = {},
+  stateRoot = pirStateBase(),
+): { findings: FindingSummary[]; total: number } | null {
+  if (!isValidProjectId(projectId) || (options.runId && !/^[\w-]+$/.test(options.runId))) return null;
+  return withDb(path.join(stateRoot, projectId, "memory.sqlite"), (db) => {
+    const clauses = ["f.project_id = ?"];
+    const args: Array<string> = [projectId];
+    if (options.status) { clauses.push("f.status = ?"); args.push(options.status); }
+    if (options.severity) { clauses.push("f.severity = ?"); args.push(options.severity); }
+    if (options.runId) { clauses.push("f.run_id = ?"); args.push(options.runId); }
+    if (options.q?.trim()) {
+      clauses.push("(LOWER(f.title) LIKE ? OR LOWER(f.claim) LIKE ? OR LOWER(f.trigger) LIKE ? OR LOWER(f.display_id) LIKE ? OR LOWER(f.fingerprint) LIKE ?)");
+      args.push(...Array(5).fill(`%${options.q.trim().toLowerCase()}%`) as string[]);
+    }
+    const where = clauses.join(" AND ");
+    const total = (db.prepare(`SELECT COUNT(*) AS n FROM findings f WHERE ${where}`).get(...args) as { n: number }).n;
+    const rows = db.prepare(`SELECT f.id, f.run_id, f.display_id, f.fingerprint, f.title, f.category, f.severity, f.status, f.confidence, f.anchors, f.round, f.created_at, f.updated_at,
+        (SELECT COUNT(*) FROM finding_evidence e WHERE e.finding_id = f.id) AS evidence_count
+      FROM findings f WHERE ${where} ORDER BY f.created_at DESC, f.id DESC LIMIT ? OFFSET ?`)
+      .all(...args, boundedLimit(options.limit, 50, 200), boundedOffset(options.offset)) as unknown as Array<RawSummaryRow & { evidence_count: number }>;
+    return { total, findings: rows.map((row) => ({
+      id: row.id, runId: row.run_id, displayId: row.display_id, fingerprint: row.fingerprint,
+      title: row.title, category: row.category, severity: row.severity, status: row.status,
+      confidence: row.confidence ?? null, anchors: parseJsonArray(row.anchors ?? "[]") as FindingView["anchors"],
+      round: row.round, createdAt: row.created_at, evidenceCount: row.evidence_count,
+      updatedAt: row.updated_at,
+    })) };
+  });
+}
+
+export interface ComparisonFinding {
+  id: string;
+  runId: string;
+  displayId: string;
+  fingerprint: string;
+  title: string;
+  status: string;
+  severity: string;
+  confidence: number | null;
+  anchors: FindingView["anchors"];
+}
+
+export interface ComparisonRow {
+  fingerprint: string;
+  before: ComparisonFinding | null;
+  after: ComparisonFinding | null;
+}
+
+export interface RunComparison {
+  leftRunId: string;
+  rightRunId: string;
+  leftRun: RunSummary;
+  rightRun: RunSummary;
+  added: ComparisonRow[];
+  removed: ComparisonRow[];
+  changed: ComparisonRow[];
+  unchanged: ComparisonRow[];
+  summary: { added: number; removed: number; changed: number; unchanged: number };
+}
+
+/** Compare two runs by finding fingerprint and review state, independent of display ids. */
+export function compareRuns(projectId: string, leftRunId: string, rightRunId: string, stateRoot = pirStateBase()): RunComparison | null {
+  if (!isValidProjectId(projectId) || !/^[\w-]+$/.test(leftRunId) || !/^[\w-]+$/.test(rightRunId)) return null;
+  return withDb(path.join(stateRoot, projectId, "memory.sqlite"), (db) => {
+    const leftRow = db.prepare("SELECT * FROM review_runs WHERE project_id = ? AND id = ?").get(projectId, leftRunId) as unknown as RawRunRow | undefined;
+    const rightRow = db.prepare("SELECT * FROM review_runs WHERE project_id = ? AND id = ?").get(projectId, rightRunId) as unknown as RawRunRow | undefined;
+    if (!leftRow || !rightRow) return null;
+    const read = (runId: string): Map<string, ComparisonFinding> => {
+      const rows = db.prepare("SELECT id, run_id, display_id, fingerprint, title, status, severity, confidence, anchors FROM findings WHERE project_id = ? AND run_id = ? ORDER BY created_at DESC, id DESC")
+        .all(projectId, runId) as unknown as Array<{
+          id: string; run_id: string; display_id: string; fingerprint: string; title: string;
+          status: string; severity: string; confidence: number | null; anchors: string;
+        }>;
+      const byFingerprint = new Map<string, ComparisonFinding>();
+      for (const row of rows) {
+        if (!byFingerprint.has(row.fingerprint)) byFingerprint.set(row.fingerprint, {
+          id: row.id, runId: row.run_id, displayId: row.display_id, fingerprint: row.fingerprint,
+          title: row.title, status: row.status, severity: row.severity, confidence: row.confidence,
+          anchors: parseJsonArray(row.anchors) as FindingView["anchors"],
+        });
+      }
+      return byFingerprint;
+    };
+    const before = read(leftRunId);
+    const after = read(rightRunId);
+    const result: RunComparison = { leftRunId, rightRunId, leftRun: toRunSummary(leftRow, stateRoot, projectId), rightRun: toRunSummary(rightRow, stateRoot, projectId), added: [], removed: [], changed: [], unchanged: [], summary: { added: 0, removed: 0, changed: 0, unchanged: 0 } };
+    for (const fingerprint of [...new Set([...before.keys(), ...after.keys()])].sort()) {
+      const prior = before.get(fingerprint) ?? null;
+      const next = after.get(fingerprint) ?? null;
+      const row = { fingerprint, before: prior, after: next };
+      if (!prior) result.added.push(row);
+      else if (!next) result.removed.push(row);
+      else if (prior.status !== next.status || prior.severity !== next.severity || prior.confidence !== next.confidence || JSON.stringify(prior.anchors) !== JSON.stringify(next.anchors)) result.changed.push(row);
+      else result.unchanged.push(row);
+    }
+    result.summary = { added: result.added.length, removed: result.removed.length, changed: result.changed.length, unchanged: result.unchanged.length };
+    return result;
+  });
+}
+
+/** One finding with full evidence. Null = unknown run or finding. */
+
+export function listFeedback(
+  projectId: string,
+  options: { limit?: number; offset?: number; q?: string; action?: string; decision?: string; scope?: string; findingId?: string; runId?: string } = {},
+  stateRoot = pirStateBase(),
+): { events: FeedbackEventView[]; total: number } | null {
+  if (!isValidProjectId(projectId)) return null;
+  const dbPath = path.join(stateRoot, projectId, "memory.sqlite");
+  return withDb(dbPath, (db) => {
+    const clauses = ["(f.project_id = ? OR e.finding_id IS NULL)"];
+    const args: string[] = [projectId];
+    for (const [key, column] of [["action", "e.action"], ["decision", "e.decision"], ["scope", "e.scope"], ["findingId", "e.finding_id"], ["runId", "f.run_id"]] as const) {
+      if (options[key]) { clauses.push(`${column} = ?`); args.push(options[key]!); }
+    }
+    if (options.q?.trim()) {
+      clauses.push("(LOWER(COALESCE(e.note, '')) LIKE ? OR LOWER(e.action) LIKE ? OR LOWER(COALESCE(e.target, '')) LIKE ? OR LOWER(COALESCE(f.title, '')) LIKE ? OR LOWER(COALESCE(f.display_id, '')) LIKE ?)");
+      args.push(...Array(5).fill(`%${options.q.trim().toLowerCase()}%`) as string[]);
+    }
+    const from = `FROM feedback_events e LEFT JOIN findings f ON e.finding_id = f.id WHERE ${clauses.join(" AND ")}`;
+    const total = (db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...args) as { n: number }).n;
+    const rows = db
+      .prepare(`SELECT e.id, e.ts, e.finding_id, e.action, e.decision, e.priority, e.note, e.scope, e.target ${from} ORDER BY e.ts DESC, e.id DESC LIMIT ? OFFSET ?`)
+      .all(...args, boundedLimit(options.limit, 20, 200), boundedOffset(options.offset)) as unknown as Array<{
+      id: number; ts: number; finding_id: string | null; action: string;
+      decision: string | null; priority: string | null; note: string | null; scope: string | null; target: string | null;
+    }>;
+    return { total, events: rows.map((row) => ({
+      id: row.id, ts: row.ts, findingId: row.finding_id, action: row.action, decision: row.decision,
+      priority: row.priority, note: row.note, scope: row.scope, target: row.target,
+    })) };
+  });
+}
+
+
+export type MemoryKind = "project" | "feature" | "entity" | "issue" | "resolution";
+export interface ProjectMemoryView {
+  id: string;
+  kind: MemoryKind;
+  stale: boolean;
+  [field: string]: unknown;
+}
+
+/** Read archive knowledge without instantiating the migrating/writable Memory facade. */
+export function listProjectMemory(
+  projectId: string,
+  options: { q?: string; kind?: MemoryKind; source?: string; stale?: boolean; decision?: string; scope?: string; limit?: number; offset?: number } = {},
+  stateRoot = pirStateBase(),
+): { project: ProjectMemoryView | null; features: ProjectMemoryView[]; entities: ProjectMemoryView[]; issues: ProjectMemoryView[]; resolutions: ProjectMemoryView[]; items: ProjectMemoryView[]; total: number } | null {
+  if (!isValidProjectId(projectId)) return null;
+  return withDb(path.join(stateRoot, projectId, "memory.sqlite"), (db) => {
+    const memories: ProjectMemoryView[] = [];
+    const jsonFields = new Set(["responsibilities", "invariants", "conventions", "risk_areas", "feature_keys", "entry_points", "dependencies", "related_feature_keys", "notes", "anchor_paths"]);
+    for (const [kind, table] of [["project", "project_memories"], ["feature", "features"], ["entity", "code_entities"], ["issue", "issue_memories"], ["resolution", "finding_resolutions"]] as const) {
+      if (options.kind && options.kind !== kind) continue;
+      const rows = (kind === "resolution"
+        ? db.prepare("SELECT r.* FROM finding_resolutions r JOIN findings f ON f.id = r.finding_id WHERE f.project_id = ? ORDER BY r.id").all(projectId)
+        : db.prepare(`SELECT * FROM ${table} WHERE project_id = ? ORDER BY id`).all(projectId)) as unknown as Record<string, unknown>[];
+      for (const raw of rows) {
+        const memory: ProjectMemoryView = { id: String(raw.id), kind, stale: raw.stale === 1 };
+        for (const [key, value] of Object.entries(raw)) {
+          if (key === "project_id" || key === "stale" || key === "agent_fields") continue;
+          const field = key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase());
+          memory[field] = jsonFields.has(key) ? parseJsonArray(typeof value === "string" ? value : "[]") : value;
+        }
+        if (kind === "issue" || kind === "resolution") {
+          const finding = kind === "resolution"
+            ? db.prepare("SELECT id, run_id, display_id, title FROM findings WHERE project_id = ? AND id = ?").get(projectId, String(raw.finding_id))
+            : db.prepare("SELECT id, run_id, display_id, title FROM findings WHERE project_id = ? AND fingerprint = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(projectId, String(raw.fingerprint));
+          const related = finding as { id: string; run_id: string; display_id: string; title: string } | undefined;
+          memory.relatedFinding = related ? { id: related.id, runId: related.run_id, displayId: related.display_id, title: related.title } : null;
+        }
+        if (options.source && memory.source !== options.source) continue;
+        if (options.stale !== undefined && memory.stale !== options.stale) continue;
+        if (options.decision && memory.decision !== options.decision) continue;
+        if (options.scope && memory.scope !== options.scope) continue;
+        if (options.q?.trim() && !JSON.stringify(memory).toLowerCase().includes(options.q.trim().toLowerCase())) continue;
+        memories.push(memory);
+      }
+    }
+    const items = memories.slice(boundedOffset(options.offset), boundedOffset(options.offset) + boundedLimit(options.limit, 50, 200));
+    return {
+      total: memories.length, items,
+      project: items.find((item) => item.kind === "project") ?? null,
+      features: items.filter((item) => item.kind === "feature"),
+      entities: items.filter((item) => item.kind === "entity"),
+      issues: items.filter((item) => item.kind === "issue"),
+      resolutions: items.filter((item) => item.kind === "resolution"),
+    };
   });
 }

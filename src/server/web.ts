@@ -11,8 +11,11 @@ import {
   coverageFor,
   listProjects,
   listRuns,
+  listProjectFindings,
+  listProjectMemory,
+  listFeedback,
+  compareRuns,
   readTranscript,
-  recentFeedback,
   runDetail,
 } from "./web-store.js";
 import type { LiveRegistry } from "./live-registry.js";
@@ -279,15 +282,42 @@ export function createWebUi(config: WebUiConfig): WebUi {
       const limit = Number(url.searchParams.get("limit") ?? 50);
       const offset = Number(url.searchParams.get("offset") ?? 0);
       const status = url.searchParams.get("status") ?? undefined;
+      const q = url.searchParams.get("q") ?? undefined;
       const rawMode = url.searchParams.get("mode");
       const mode = rawMode === "change" || rawMode === "audit" ? rawMode : undefined;
-      const result = listRuns(parts[1]!, { limit, offset, ...(status ? { status } : {}), ...(mode ? { mode } : {}) }, stateRoot);
+      const result = listRuns(parts[1]!, { limit, offset, ...(status ? { status } : {}), ...(mode ? { mode } : {}), ...(q ? { q } : {}) }, stateRoot);
       if (!result) {
         json(req, res, 404, { error: "unknown project" });
         return true;
       }
       json(req, res, 200, result);
       return true;
+    }
+
+    if (parts[0] === "projects" && parts.length === 3 && parts[2] === "findings") {
+      const result = listProjectFindings(parts[1]!, {
+        q: url.searchParams.get("q") ?? undefined,
+        status: url.searchParams.get("status") ?? undefined,
+        severity: url.searchParams.get("severity") ?? undefined,
+        runId: url.searchParams.get("runId") ?? undefined,
+        limit: Number(url.searchParams.get("limit") ?? 50),
+        offset: Number(url.searchParams.get("offset") ?? 0),
+      }, stateRoot);
+      if (!result) { json(req, res, 404, { error: "unknown project" }); return true; }
+      json(req, res, 200, result); return true;
+    }
+
+    if (parts[0] === "projects" && parts.length === 3 && parts[2] === "memory") {
+      const result = listProjectMemory(parts[1]!, { q: url.searchParams.get("q") ?? undefined, limit: Number(url.searchParams.get("limit") ?? 50), offset: Number(url.searchParams.get("offset") ?? 0) }, stateRoot);
+      if (!result) { json(req, res, 404, { error: "unknown project" }); return true; }
+      json(req, res, 200, result); return true;
+    }
+
+    if (parts[0] === "projects" && parts.length === 3 && parts[2] === "run-compare") {
+      const left = url.searchParams.get("leftRunId"); const right = url.searchParams.get("rightRunId");
+      const result = left && right ? compareRuns(parts[1]!, left, right, stateRoot) : null;
+      if (!result) { json(req, res, 404, { error: "unknown run or missing comparison ids" }); return true; }
+      json(req, res, 200, result); return true;
     }
 
     if (parts[0] === "runs" && parts.length === 4 && parts[3] === "coverage") {
@@ -302,12 +332,12 @@ export function createWebUi(config: WebUiConfig): WebUi {
 
     if (parts[0] === "projects" && parts.length === 3 && parts[2] === "feedback") {
       const limit = Number(url.searchParams.get("limit") ?? 20);
-      const result = recentFeedback(parts[1]!, limit, stateRoot);
+      const result = listFeedback(parts[1]!, { limit, offset: Number(url.searchParams.get("offset") ?? 0), q: url.searchParams.get("q") ?? undefined }, stateRoot);
       if (!result) {
         json(req, res, 404, { error: "unknown project" });
         return true;
       }
-      json(req, res, 200, { events: result });
+      json(req, res, 200, result);
       return true;
     }
 

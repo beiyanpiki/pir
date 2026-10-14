@@ -304,3 +304,42 @@ test("web ui: run lists still serve archives written before the mode column", as
   assert.equal(audit.status, 200, "an audit filter on a pre-v5 archive is empty, not a 404");
   assert.equal(audit.body.total, 0);
 });
+
+test("web ui: project search, memory, feedback and fingerprint comparison stay read-only", async (t) => {
+  const { base, root } = await withWebServer(t);
+  const auth = { authorization: `Bearer ${WEB_TOKEN}` };
+  const store = SqliteStore.open(path.join(root, PROJECT_ID, "memory.sqlite"));
+  store.run(`INSERT INTO findings (id, project_id, run_id, display_id, fingerprint, title, claim, trigger, category, severity, status, anchors, memory_matches, round, created_at, updated_at)
+    VALUES ('f2', ?, ?, 'F-99', 'fp', 'Same issue later', 'The loop overruns by one.', 'diff', 'logic', 'P2', 'uncertain', '[]', '[]', 1, ?, ?)`, PROJECT_ID, AUDIT_RUN_ID, Date.now() + 1000, Date.now() + 1000);
+  store.run(`INSERT INTO issue_memories (id, project_id, fingerprint, claim, decision, rationale, scope, valid_until_commit, stale)
+    VALUES ('i1', ?, 'fp', 'Known loop bound', 'expected', 'Owner accepted this bound', 'project', 'deadbeef', 1)`, PROJECT_ID);
+  store.run(`INSERT INTO finding_resolutions (id, finding_id, fingerprint, original_claim, resolution, created_at)
+    VALUES ('res1', 'f1', 'fp', 'Loop bound', 'fixed', 1)`);
+  store.run(`INSERT INTO feedback_events (ts, finding_id, action, decision, note) VALUES (1, 'f1', 'feedback', 'expected', 'Accepted by owner')`);
+  store.close();
+  const get = async (suffix) => { const response = await fetch(`${base}/api/projects/${PROJECT_ID}/${suffix}`, { headers: auth }); assert.equal(response.status, 200, suffix); return response.json(); };
+  const runs = await get('runs?q=prov%2Fm&limit=1&offset=1');
+  assert.equal(runs.total, 2); assert.equal(runs.runs.length, 1);
+  assert.equal((await get('runs?q=budget&mode=audit')).total, 1);
+  assert.equal((await get('runs?q=' + encodeURIComponent('definitely-no-match-' + Date.now()))).total, 0);
+  const findings = await get('findings?q=loop&status=uncertain&severity=P2&limit=1');
+  assert.equal(findings.total, 1); assert.equal(findings.findings[0].fingerprint, 'fp'); assert.equal(findings.findings[0].runId, AUDIT_RUN_ID);
+  assert.equal((await get('findings?limit=1&offset=1')).findings.length, 1);
+  assert.equal((await get('findings?limit=nan&offset=-3')).findings.length, 2);
+  const memory = await get('memory?q=Known');
+  assert.equal(memory.total, 1); assert.equal(memory.items[0].stale, true);
+  assert.equal(memory.items[0].validUntilCommit, 'deadbeef');
+  assert.equal(memory.items[0].relatedFinding.displayId, 'F-99');
+  assert.equal((await get('memory')).resolutions[0].relatedFinding.displayId, 'F-1');
+  const feedback = await get('feedback?q=Accepted&limit=1');
+  assert.equal(feedback.total, 1); assert.equal(feedback.events[0].decision, 'expected');
+  const compare = await get(`run-compare?leftRunId=${RUN_ID}&rightRunId=${AUDIT_RUN_ID}`);
+  assert.deepEqual(compare.summary, { added: 0, removed: 0, changed: 1, unchanged: 0 });
+  assert.equal(compare.changed[0].before.displayId, 'F-1'); assert.equal(compare.changed[0].after.displayId, 'F-99');
+  assert.equal(compare.rightRun.stoppedBecause, 'budget reached');
+  for (const endpoint of ['findings', 'memory', 'feedback', `run-compare?leftRunId=${RUN_ID}&rightRunId=${AUDIT_RUN_ID}`]) {
+    assert.equal((await fetch(`${base}/api/projects/${PROJECT_ID}/${endpoint}`)).status, 401);
+    assert.equal((await fetch(`${base}/api/projects/${PROJECT_ID}/${endpoint}`, { method: 'POST', headers: auth })).status, 405);
+  }
+  assert.equal((await fetch(`${base}/api/projects/${'b'.repeat(64)}/memory`, { headers: auth })).status, 404);
+});

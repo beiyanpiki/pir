@@ -82,6 +82,7 @@ export function RunsPage() {
 
   return (
     <div className="page-shell">
+      <nav className="run-toolbar" aria-label="Project views"><Link to={`/projects/${projectId}`}>Runs</Link><Link to={`/projects/${projectId}/findings`}>Findings</Link><Link to={`/projects/${projectId}/memory`}>Memory</Link><Link to={`/projects/${projectId}/feedback`}>Feedback</Link><Link to={`/projects/${projectId}/compare`}>Compare runs</Link></nav>
       <header className="page-header project-page-header">
         <div className="project-heading">
           <Link className="icon-button" to="/projects" aria-label="Back to projects" title="Back to projects"><ArrowLeft size={17} /></Link>
@@ -97,7 +98,7 @@ export function RunsPage() {
         <div><Code2 size={17} /><span><small>Project ID</small><strong title={projectId}>{projectId.slice(0, 12)}</strong></span></div>
       </section>
       <section className="data-section" aria-label="Review runs">
-        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={searchDraft} onChange={setSearchDraft} label="Search this page" /></div>
+        <div className="data-section-head"><h2 className="section-label">Review runs <span className="section-count">{total}</span></h2><SearchField value={searchDraft} onChange={setSearchDraft} label="Search all project runs" /></div>
         <div className="run-toolbar">
           <div className="segmented-control" role="group" aria-label="Filter runs by status">{STATUSES.map((status) => (
             <button key={status} type="button" aria-pressed={statusFilter === status} className={statusFilter === status ? "is-active" : ""} onClick={() => updateUrl({ status, offset: 0 })}>{status === "all" ? "All runs" : status[0].toUpperCase() + status.slice(1)}</button>
