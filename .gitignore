@@ -7,5 +7,10 @@ dist/
 .DS_Store
 tests/eval/reviewbench/.cache/
 tests/eval/rb-out/
+# AACR-Bench (M0/M1): upstream data, materialized rows and run outputs are
+# re-downloaded/rebuilt on demand; only scripts, meta, fixtures and results
+# are committed. The clone cache lives outside the worktree ($PIR_AACR_CACHE).
+tests/eval/aacr/dataset/
+tests/eval/aacr/out/
 tests/web-e2e/test-results/
 test-results/
