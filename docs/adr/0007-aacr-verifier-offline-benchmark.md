@@ -203,3 +203,13 @@ in CI, never against a leaderboard.
   not attributable" — audit-mode `runVerifier` (current-state verification
   without change attribution) is the obvious candidate — and report both
   rows deliberately.
+- **Two provenance guards came out of the re-review (dogfood F-185/F-187).**
+  `--resume` refuses to mix a different model id or CLI build into a round
+  already on disk: the round's provenance is one model and one build sha256,
+  and a silent mix would publish numbers under a stamp that describes only
+  half of them. And the sampler excludes the dataset's 11 `side: "left"`
+  comments (0.5% of 2,145): their `from_line`/`to_line` refer to the deleted
+  old file, which the head-anchored mapping contract cannot express, so they
+  are counted out (`sample.sideExcluded`) instead of silently mis-mapped;
+  `validateRecords` rejects an unknown side value and `parseTask` refuses a
+  non-right task loudly.

@@ -55,7 +55,7 @@ Label 1 = the comment is correct (should survive), label 0 = incorrect (should b
 
 ## Data materialization, honestly stated
 
-The dataset carries commit SHAs but no diff bodies. Per repository the materializer does `git init` + `git fetch --depth 1 origin <sha>` for the capture-time head and for the merge base GitHub reports for the dataset's base/head pair (a naive two-SHA diff would fold hundreds of commits of base-branch drift in reverse). The per-comment diff is that merge-base..head diff narrowed to the comment's path. Unreachable commits (force-pushed PRs whose head was garbage-collected) become error rows: the run reports them and scores the rest — it never substitutes a different commit for the captured one.
+The dataset carries commit SHAs but no diff bodies. Per repository the materializer does `git init` + `git fetch --depth 1 origin <sha>` for the capture-time head and for the merge base GitHub reports for the dataset's base/head pair (a naive two-SHA diff would fold hundreds of commits of base-branch drift in reverse). The per-comment diff is that merge-base..head diff narrowed to the comment's path. Unreachable commits (force-pushed PRs whose head was garbage-collected) become error rows: the run reports them and scores the rest — it never substitutes a different commit for the captured one. Two limits are counted rather than hidden: the dataset's 11 `side: "left"` comments are excluded from the sample (their line numbers refer to the deleted old file, which the head-anchored mapping cannot express; `sample.sideExcluded` records the count), and `--resume` refuses to mix a different model or CLI build into a round already on disk, so one round always carries one provenance.
 
 ## Attribution and citation
 
