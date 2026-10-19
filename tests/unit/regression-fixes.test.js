@@ -95,13 +95,23 @@ test("F-14: applyFeedback validates decision before writing anything", async () 
   }
 });
 
-test("F-0: the default token budget is unlimited (no cap unless --max-tokens)", async () => {
-  // Pin the semantics 82505f9 established and the audit rewrite accidentally
-  // regressed: no DEFAULT_MAX_TOKENS cap in the supervisor source.
+test("B3: find applies the documented default token ceilings; audit keeps the unlimited default", async () => {
+  // B3 (ADR 0006) deliberately supersedes 82505f9's "no default token budget"
+  // policy for find: unbounded runaway cost on large change sets outweighed
+  // "different problems need different amounts", and `--max-tokens unlimited`
+  // restores that policy explicitly (risk R8's escape hatch). Audit keeps the
+  // pre-B3 semantics by construction — its Budget is built without role
+  // ceilings — so a future refactor cannot silently cap a multi-day sweep.
+  // The behavioral halves of this pin live in tests/unit/budget.test.js and
+  // tests/integration/token-budget.test.js.
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../../src/core/supervisor.ts", import.meta.url), "utf8");
+  assert.match(source, /DEFAULT_FIND_REVIEWER_INPUT_TOKENS/);
+  assert.match(source, /DEFAULT_FIND_VERIFIER_INPUT_TOKENS/);
   assert.doesNotMatch(source, /DEFAULT_MAX_TOKENS/);
-  assert.match(source, /options\.maxTokens === undefined \? undefined : positiveInteger/);
+  const audit = source.slice(source.indexOf("export async function auditIssues"));
+  assert.ok(audit.length > 0, "the audit section is present");
+  assert.doesNotMatch(audit, /reviewerTokens|verifierTokens/, "audit must not gain B3's default ceilings");
 });
 
 // --- batch-1 dogfood (issue #42): F-38 retry pacing, F-39 page consistency ---

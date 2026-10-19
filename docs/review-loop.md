@@ -203,7 +203,20 @@ verified fix; a reproducing trigger reopens the finding. Inspect
 
 Token budgets are checked between sessions. An in-flight session may exceed
 the remaining budget; pir does not cancel that model turn at the limit.
-`--max-tokens` and other numeric limits must be positive integers.
+`--max-tokens` and other numeric limits must be positive integers, and
+`--max-tokens unlimited` removes every token ceiling.
+
+`find` applies default ceilings of 1.2M reviewer and 0.8M verifier
+prompt-side (input) tokens when `--max-tokens` is absent (ADR 0006). A hit
+starts no new reviewer round, but every candidate already pending is still
+verified — the grace, including backlogs larger than one drain's per-round
+cap — and the stop is reported in `stoppedBecause` (and
+structurally as `budgetStop: {kind, reason}` in the run manifest) while
+`incomplete` is computed exactly as before. An explicit `--max-tokens N`
+replaces those defaults with one hard whole-run ceiling measured on total
+tokens: it also refuses new verifier admissions mid-drain, so pending
+candidates stay unverified exactly as they did before B3. Audit keeps the
+unlimited-until-set semantics.
 
 `data.incomplete` covers pending candidates, verification execution errors,
 unfinished change discovery, and incomplete audit coverage. Audit additionally
