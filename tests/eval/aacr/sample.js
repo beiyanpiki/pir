@@ -51,11 +51,18 @@ export function sideExclusionCount(records) {
  * each record's original dataset index and its comment id, so the materialized
  * JSONL, the run manifest and the results file can name exactly which comments
  * a number came from.
+ *
+ * Omitting `limit` means the whole head-anchorable corpus, not the whole
+ * dataset: with the 11 LEFT-side rows excluded the two counts differ (2,145 vs
+ * 2,134), and sizing the full sample by `records.length` would make the
+ * full-corpus round throw on its own dataset.
  */
 export function sampleRecords(records, { limit, seed = 42 } = {}) {
   if (!Array.isArray(records)) throw new TypeError("records must be an array");
   const n = records.length;
-  const size = limit === undefined || limit === null ? n : limit;
+  const headAnchorable = records.filter(isHeadAnchorable).length;
+  if ((limit === undefined || limit === null) && headAnchorable === 0) throw new Error("dataset has no head-anchorable records to sample");
+  const size = limit === undefined || limit === null ? headAnchorable : limit;
   if (!Number.isSafeInteger(size) || size < 1) throw new Error("limit must be a positive integer");
   if (size > n) throw new Error(`limit ` + size + ` exceeds the dataset size ` + n);
   const random = mulberry32(seed);
