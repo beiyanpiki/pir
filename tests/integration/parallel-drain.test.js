@@ -277,25 +277,29 @@ test("parallel drain: a rejected verdict frees its reserved slot for the next ca
   }
 });
 
-test("parallel drain: token budget exhaustion stops dispatching; in-flight verifications still land", async () => {
+test("parallel drain: token budget exhaustion stops dispatching before the next candidate starts", async () => {
   const list = candidates(5);
   const fx = await findFixture();
-  // Deterministic without choreography: landings are in admission order, so
-  // the n-th admission check always sees the same spend. Usage is 100 per
-  // session (reviewer included): the 4th admission (delta) sees 100+200=300
-  // and fits maxTokens=400, while the 5th (epsilon) always sees 100+300=400
-  // and is refused — no gate for epsilon to sit on, so a slow completion of
-  // delta before gamma can only shift session timing, never the outcome.
+  // Single-worker drain: stages charge only when they land, and landings are
+  // strictly in admission order, so a parallel run lets a worker whose own
+  // session finished out of order admit the next candidate while an earlier
+  // completion is still buffered and uncharged — the admitted count then
+  // depends on completion timing (this test flaked on CI with 5 sessions where
+  // 4 were expected). One worker removes the interleaving entirely: reviewer
+  // 100, then each verification charges 100 on landing, so the next admission
+  // sees 200, 300, 400 and stops at the fourth candidate. The parallel
+  // in-flight landing property is covered by the maxFindings reservation test
+  // above and the audit drain tests.
   const factory = new DrainHarness({
     reviewer: reviewerRecording(list),
     verifier: verifierConfirming(),
     usage: true,
   });
   try {
-    const outcome = await fx.run(factory, { maxRounds: 5, maxTokens: 400, verifyConcurrency: 2 });
-    assert.equal(factory.verifierSessions, 4, "budget-exhausted admission refuses the fifth");
-    assert.equal(outcome.findings.length, 4, "the in-flight fourth verification lands");
-    assert.equal(outcome.pendingCandidates, 1);
+    const outcome = await fx.run(factory, { maxRounds: 5, maxTokens: 400, verifyConcurrency: 1 });
+    assert.equal(factory.verifierSessions, 3, "the 400-token ceiling refuses the fourth candidate");
+    assert.equal(outcome.findings.length, 3);
+    assert.equal(outcome.pendingCandidates, 2);
     assert.match(outcome.stoppedBecause, /token budget exhausted/);
   } finally {
     fx.cleanup();
