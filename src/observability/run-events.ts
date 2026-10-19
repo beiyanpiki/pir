@@ -449,6 +449,8 @@ export interface RunManifest {
   startedAt: number;
   finishedAt: number;
   stoppedBecause: string;
+  /** B3 (ADR 0006): the token/wall-clock ceiling that ended the run, when one did. */
+  budgetStop?: { kind: import("../core/budget.js").BudgetCeilingKind; reason: string } | null;
   incomplete: boolean;
   /** Deterministic run-level verdict from the verified findings (Q4). */
   runVerdict: "incorrect" | "correct-with-findings" | "needs-review" | "correct";
