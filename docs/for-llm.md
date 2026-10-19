@@ -276,9 +276,12 @@ Finding shape:
 ```text
 id, displayId, title, claim, trigger, category, severity, status
 featureKey, entityKey
-anchors: [{ path, startLine, endLine? }]
+anchors: [{ path, startLine, endLine?, excerpt?, lineCorrected?, originalStartLine?, originalEndLine? }]
+  excerpt: verbatim snippet used for local re-location (optional)
+  lineCorrected: the excerpt's unique match decided startLine/endLine; originalStartLine/originalEndLine keep the model's range
 evidence: [{ kind, path?, startLine?, excerpt?, description? }]
 verifierRationale, memoryMatches, round, createdAt
+lineCorrected: true when at least one anchor was re-located locally from its excerpt
 confidence: verifier self-assessment 0–1 (null when not on record)
 ```
 

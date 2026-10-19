@@ -39,7 +39,7 @@ export interface FindingView {
   status: string;
   featureKey: string | null;
   entityKey: string | null;
-  anchors: Array<{ path: string; startLine: number; endLine?: number }>;
+  anchors: Array<{ path: string; startLine: number; endLine?: number; excerpt?: string; lineCorrected?: boolean; originalStartLine?: number; originalEndLine?: number }>;
   evidence: Array<{ kind: string; path?: string; startLine?: number; excerpt?: string; description?: string }>;
   memoryMatches: MemoryMatch[];
   verifierRationale: string | null;
@@ -47,9 +47,15 @@ export interface FindingView {
   confidence: number | null;
   round: number;
   createdAt: number;
+  /**
+   * B2: at least one anchor's lines were decided locally from its excerpt
+   * (never present without a correction on the stored anchors).
+   */
+  lineCorrected: boolean;
 }
 
 export function toFindingView(ctx: AppContext, row: FindingRow): FindingView {
+  const anchors = ctx.memory.findings.anchors(row);
   return {
     id: row.id,
     displayId: row.displayId,
@@ -61,12 +67,13 @@ export function toFindingView(ctx: AppContext, row: FindingRow): FindingView {
     status: row.status,
     featureKey: row.featureKey,
     entityKey: row.entityKey,
-    anchors: ctx.memory.findings.anchors(row),
+    anchors,
     evidence: ctx.memory.findings.evidence(row.id),
     memoryMatches: ctx.memory.findings.memoryMatches(row),
     verifierRationale: row.verifierRationale,
     confidence: row.confidence,
     round: row.round,
     createdAt: row.createdAt,
+    lineCorrected: anchors.some((anchor) => anchor.lineCorrected === true),
   };
 }

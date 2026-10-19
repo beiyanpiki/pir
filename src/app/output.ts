@@ -41,7 +41,10 @@ export function renderFinding(finding: FindingView): string {
     `  category: ${finding.category}${finding.entityKey ? ` | entity: ${finding.entityKey}` : ""}${finding.featureKey ? ` | feature: ${finding.featureKey}` : ""}`,
   ];
   for (const anchor of finding.anchors.slice(0, 3)) {
-    lines.push(`  at: ${anchor.path}:${anchor.startLine}${anchor.endLine ? `-${anchor.endLine}` : ""}`);
+    const corrected = anchor.lineCorrected && anchor.originalStartLine !== undefined
+      ? ` (line corrected from ${anchor.originalStartLine}${anchor.originalEndLine === undefined ? "" : `-${anchor.originalEndLine}`})`
+      : "";
+    lines.push(`  at: ${anchor.path}:${anchor.startLine}${anchor.endLine ? `-${anchor.endLine}` : ""}${corrected}`);
   }
   if (finding.verifierRationale) {
     lines.push(`  verifier: ${finding.verifierRationale.slice(0, 300)}`);
