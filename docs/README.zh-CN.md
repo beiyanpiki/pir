@@ -123,6 +123,7 @@ docker compose up -d
 pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # 暂存、未暂存和未跟踪的内容
+pir find --preview --json               # 预演本次评审会选择哪些文件、遮蔽哪些文件
 
 pir audit --json                        # 已提交的 HEAD 快照
 pir audit --path src/auth --path src/payments --json
@@ -176,6 +177,10 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 ```
 
 `--dry-run` 复用真实 audit 的快照与单元规划器，不建 run、不调模型；`coverage` 从本地项目库读取该 run 过程中持久化的覆盖率记录。
+
+变更评审在模型看到 diff 之前先做过滤。change set 构建完成后，每个文件按固定顺序过四道闸门——binary、secret 路径（不可被任何 include/skip 覆盖）、skip 规则（依赖目录、构建产物、lockfile、压缩产物）以及超大的单文件 diff。被排除的文件保留 path/status/churn 元数据，但 diff 正文被清空，任何 reviewer 会话都无法翻页读取。被排除的文件是"可见的排除"而不是消失：`find --json` 信封与 run manifest 的 `files[]` 新增 `excluded`（始终存在）与 `excludedReason`（仅被排除时），纯增量——所有既有字段名与值不变。secret 是唯一绝对闸门：`.env`、`.ssh` 内容、SSH 密钥家族、`.netrc`/`.npmrc`/`.pypirc`/`.dockercfg` 永不进入模型（仓库中作为示例提交的 `.env.example`/`.sample`/`.template` 不受影响，仍可评审）。
+
+`pir find --preview` 在付出评审成本之前打印这次选择——逐文件的 status/churn，以及 selected/excluded 与对应原因（文本或 `--json`）。它调用与真实运行完全相同的 change set 构建器与纯过滤函数，不建 run、不开启模型会话、不写入任何内容；run-shaping 类 flag 会直接报用法错误，而不是被静默忽略。
 
 ## 服务 API 与任务
 
