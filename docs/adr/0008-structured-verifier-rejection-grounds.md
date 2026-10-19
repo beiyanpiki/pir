@@ -137,3 +137,14 @@ truth) applies to any per-bucket reading of the result.
 - Audit verifiers keep the old contract, so `findings.rejection_ground` is
   null for audit rows by construction. A reader must not treat that null as
   "the verifier had no reason"; it is "this mode does not record one yet".
+- **The gate exposed a provenance gap, fixed here.** `dist/cli/cli.js` is a
+  thin dispatcher, so `run-m0.js`'s CLI `sha256` was identical for the pre-
+  and post-B4 builds (both reported `2a6ce185…`) even though the verifier
+  behaved differently: a build identity that cannot see a behavior change
+  cannot certify a controlled comparison. `run-m0.js` now records a **build
+  digest** over every built module under `dist/` (sorted path + content),
+  `--resume` refuses a round recorded with a different digest, and
+  `report.js` prints the digest per side and explicitly calls out two sides
+  that share one instead of implying a comparison. The B4 rounds were
+  re-recorded with the digest in place; the before/after numbers themselves
+  are unchanged by the fix.

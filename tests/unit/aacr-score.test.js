@@ -313,3 +313,21 @@ test("renderResultsMd states the degraded diff-base count (M0 dogfood F-181)", (
   const degraded = renderResultsMd({ run, scores: scoreRun([verifierRow({ diffBaseKind: "base-tip" })]) });
   assert.match(degraded, /1 verifier row\(s\) used a degraded base-tip diff/);
 });
+
+test("B4: an identical build on both sides is called out, not read as evidence", () => {
+  const run = {
+    round: "after", model: "opencode-go/deepseek-v4.1-flash:medium",
+    dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
+    sample: { limit: 100, seed: 42, digest: "d".repeat(64), eligible: 100 },
+    cli: { sha256: "e".repeat(64), buildSha256: "b".repeat(64) },
+    limits: { arms: ["verifier"], concurrency: 8, timeoutMs: 600000, cache: "/tmp/cache" },
+    config: { model: "m", thinking: "medium" }, startedAt: "2026-10-19T00:00:00.000Z", finishedAt: "2026-10-19T01:00:00.000Z", cacheBytes: 1024,
+  };
+  const scores = scoreRun([verifierRow({ id: "a", label: 1, verdict: "confirmed", decision: "keep" })]);
+  const sameBuild = renderResultsMd({ run, scores, baseline: { run, scores } });
+  assert.match(sameBuild, /The two sides report the same build digest/);
+  assert.match(sameBuild, /\| build sha256 \(dist digest\) \|/);
+  const distinct = renderResultsMd({ run: { ...run, cli: { ...run.cli, buildSha256: "c".repeat(64) } }, scores, baseline: { run, scores } });
+  assert.ok(!distinct.includes("same build digest"));
+  assert.match(distinct, /− `bbbbbbbb`|\| − bbbbbbbb \|/);
+});

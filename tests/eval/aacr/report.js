@@ -103,6 +103,10 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   lines.push("Comment-level binary classification: label 1 = the comment is correct (should survive), label 0 = incorrect (should be intercepted).",
     " The pir arm runs the shipped verifier (" + code("pir _verify-comment --arm verifier") + ", production " + code("runVerifier") +
     " with the full repository checkout at the comment's capture-time head commit); the OCR arm runs the ported open-code-review reflection prompt on the same material (diff only, no tools), same model id, same scoring code. Per ADR-0007:");
+  if (!Object.keys(scores.arms).includes("ocr")) {
+    lines.push("");
+    lines.push("**This round ran the pir verifier arm only** (the arms row in Run configuration names it): no OCR row was scored, so the comparison sentences below describe the two-arm protocol and not a second arm of this run.");
+  }
   lines.push("");
   lines.push("- Primary policy **uncertain = keep**: " + code("confirmed") + " and " + code("uncertain") + " both count as keeps, only " + code("rejected") + " kills." +
     " The strict policy **uncertain = miss** is reported beside it: an uncertain verdict earns no credit in either direction (neither a keep nor a kill).");
@@ -123,6 +127,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   lines.push("| date | " + (run.startedAt ?? "—") + " → " + (run.finishedAt ?? "(unfinished)") + " |");
   lines.push("| model (both arms) | " + code(run.model) + " |");
   lines.push("| CLI sha256 | " + code(run.cli?.sha256 ?? "—") + " |");
+  lines.push("| build sha256 (dist digest) | " + code(run.cli?.buildSha256 ?? "—") + " |");
   lines.push("| dataset sha256 | " + code(run.dataset.sha256) + " |");
   lines.push("| sample | limit " + (run.sample.limit ?? run.sample.eligible) + ", seed " + run.sample.seed + ", digest " + code(run.sample.digest) + " |");
   lines.push("| arms | " + (run.limits?.arms ?? Object.keys(scores.arms)).join(", ") + " |");
@@ -156,15 +161,24 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
     lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     for (const shoulder of [["−", baseline.run, baseline.scores], ["+", run, scores]]) {
       const [mark, sideRun, sideScores] = shoulder;
+      // The build digest, not the entry-file sha256: cli.js is a thin
+      // dispatcher and the two builds can share it byte for byte (B4 did).
+      const buildId = sideRun.cli?.buildSha256 ?? sideRun.cli?.sha256 ?? "?";
       for (const arm of Object.keys(sideScores.arms).sort()) {
         const armScore = sideScores.arms[arm];
         const overall = armScore.policies[PRIMARY_POLICY].overall;
-        lines.push(["", mark + " " + code(String(sideRun.cli?.sha256 ?? "?").slice(0, 8)), arm,
+        lines.push(["", mark + " " + code(String(buildId).slice(0, 8)), arm,
           String(overall.sampleSize), overall.label1 + " / " + overall.label0,
           pct(overall.accuracy), pct(overall.precision), pct(overall.recall), pct(overall.f1),
           pct(overall.killRate), pct(overall.falseKillRate), pct(overall.interceptPrecision),
           overall.invalid + " / " + overall.errors, ""].join(" | "));
       }
+    }
+    const beforeBuild = baseline.run.cli?.buildSha256 ?? baseline.run.cli?.sha256;
+    const afterBuild = run.cli?.buildSha256 ?? run.cli?.sha256;
+    if (beforeBuild && afterBuild && beforeBuild === afterBuild) {
+      lines.push("");
+      lines.push("> **The two sides report the same build digest** — either the change did not alter any built module or the rounds used the same build. A comparison of one build against itself cannot demonstrate a regression or its absence; check the CLI path/`--cli` before reading this section.");
     }
     lines.push("");
     for (const arm of Object.keys(scores.arms).sort()) {

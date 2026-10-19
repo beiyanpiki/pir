@@ -34,6 +34,30 @@ export const ARMS = ["verifier", "ocr"];
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
+/**
+ * Build identity for provenance. `dist/cli/cli.js` is a thin dispatcher, so
+ * hashing that one file cannot tell two engines apart — B4's before/after
+ * rounds proved it: the pre- and post-B4 builds share cli.js byte for byte
+ * while behaving differently. The digest therefore covers every built module
+ * under dist/ (sorted path + content), which changes whenever any behavior
+ * does.
+ */
+export function buildDigest(distRoot) {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.isFile() && entry.name.endsWith(".js")) files.push(full);
+    }
+  };
+  walk(distRoot);
+  files.sort();
+  const hash = createHash("sha256");
+  for (const file of files) hash.update(path.relative(distRoot, file)).update("\0").update(readFileSync(file)).update("\0");
+  return hash.digest("hex");
+}
+
 /** Per-task worktree: detached head checkout, reclaimed after its run. */
 export function materializeTask(repoDir, head, workDir) {
   if (existsSync(workDir)) {
@@ -193,14 +217,20 @@ export function scoreRow(task, arm, run) {
 
 /**
  * F-185: --resume must not stamp old rows with a new model or CLI build. A
- * round's provenance is one model id and one CLI sha256, so a resume that
- * changes either would publish mixed numbers under a stamp that describes only
- * half of them.
+ * round's provenance is one model id and one build, so a resume that changes
+ * either would publish mixed numbers under a stamp that describes only half of
+ * them. The build identity is the full dist digest (see buildDigest); the
+ * entry-file sha256 stays as a compatibility check for rounds recorded before
+ * the digest existed.
  */
-export function assertResumeCompatible(previousSummary, { model, cliSha256 }) {
+export function assertResumeCompatible(previousSummary, { model, cliSha256, buildSha256 }) {
   if (!previousSummary) return;
   if (previousSummary.model && previousSummary.model !== model) {
     throw new Error(`--resume refuses to mix models: round was recorded with ${previousSummary.model}, this invocation uses ${model} (pick a fresh --round name)`);
+  }
+  const previousBuild = previousSummary.cli?.buildSha256;
+  if (previousBuild && buildSha256 && previousBuild !== buildSha256) {
+    throw new Error(`--resume refuses to mix CLI builds: round was recorded with build digest ${previousBuild}, this build is ${buildSha256} (rebuild, then pick a fresh --round name)`);
   }
   const previousCli = previousSummary.cli?.sha256;
   if (previousCli && cliSha256 && previousCli !== cliSha256) {
@@ -245,6 +275,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const roundDir = path.join(options.outRoot, roundName);
   const previous = new Map();
   const cliSha256 = sha256(readFileSync(options.cli));
+  const buildSha256 = buildDigest(path.resolve(path.dirname(options.cli), ".."));
   let startedAt = new Date().toISOString();
   if (existsSync(roundDir)) {
     if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume)`);
@@ -257,7 +288,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (existsSync(summaryPath)) {
       const previousSummary = JSON.parse(readFileSync(summaryPath, "utf8"));
       if (previousSummary.startedAt) startedAt = previousSummary.startedAt;
-      assertResumeCompatible(previousSummary, { model: options.model, cliSha256 });
+      assertResumeCompatible(previousSummary, { model: options.model, cliSha256, buildSha256 });
     }
   }
   mkdirSync(roundDir, { recursive: true });
@@ -267,7 +298,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     schemaVersion: 1, round: roundName, startedAt, resumedAt: options.resume ? new Date().toISOString() : undefined,
     node: process.version,
     model: options.model,
-    cli: { path: options.cli, sha256: cliSha256 },
+    cli: { path: options.cli, sha256: cliSha256, buildSha256 },
     dataset: header.dataset, sample: header.sample, citation: header.citation,
     limits: { limit: options.limit ?? null, arms: options.arms, concurrency: options.concurrency, timeoutMs: options.timeoutMs, cache: options.cache },
     arms: {}, tasks: [], errors: [],
