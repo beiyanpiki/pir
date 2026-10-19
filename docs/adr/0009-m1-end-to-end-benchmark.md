@@ -2,12 +2,13 @@
 
 ## Status
 
-**Proposed (2026-10-19).** Roadmap item M1 (End-to-end benchmark) of
-`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`, Iteration 2. This skeleton
-lands the fixture, driver, normalization, judge delegation and the
-materialization decision; the `--limit 20` smoke, the full 196-PR run, the
-`--eval-rounds 3` averaging and the first `results/M1-*.md` are subsequent
-execution. M1 is consistent with, and reuses, [ADR-0007](0007-aacr-verifier-offline-benchmark.md)
+**Accepted (2026-10-19).** Roadmap item M1 (End-to-end benchmark) of
+`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`, Iteration 2. This ADR
+records the skeleton — fixture, driver, normalization, judge delegation and
+the materialization decision — and the `--limit 20` smoke that exercised it
+end to end; the full 196-PR run, the `--eval-rounds 3` averaging and the
+first `results/M1-*.md` are Iteration 3's execution, so M1 itself stays
+in progress. M1 is consistent with, and reuses, [ADR-0007](0007-aacr-verifier-offline-benchmark.md)
 (M0): same opt-in surface, same isolation conventions, same provenance
 guards, same unredistributed-data stance.
 
@@ -250,3 +251,28 @@ of that measurement.
 - M0 protocol and conventions: [ADR-0007](0007-aacr-verifier-offline-benchmark.md).
 - Upstream: [alibaba/aacr-bench](https://github.com/alibaba/aacr-bench) @ `ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df` (Apache-2.0), `evaluation/pipeline.py`, `evaluation/evaluate.py`, `evaluation/judge.py`, `evaluation/config.py`.
 - Citation: arXiv 2601.19494, `AACR-Bench: Evaluating Automatic Code Review with Holistic Repository-Level Context`.
+
+## Smoke result (2026-10-19)
+
+Round `2026-10-19-m1-smoke-glm`, model `zai-coding-cn/glm-5.3:max` (max
+thinking), concurrency 1, 30-min default cap raised to 60 min for the two
+largest repositories: **20/20 instances produced rows**, 0 error rows, 0
+incomplete rows. The `reported` view carried 33 findings across the 20 PRs
+and `confirmedOnly` 32; no finding was dropped for a missing anchor
+(`dropped.anchorless = 0`). The pinned upstream mock judge consumed both
+view directories and reported `evaluated_instances: 20`,
+`missing_instances: 0` for each. The mock judge's `balanced_score` (0) is a
+lexical-similarity placeholder and is **not** a result: it validates the
+plumbing only, and a real judge needs `JUDGE_BASE_URL` / `JUDGE_API_KEY` /
+`JUDGE_MODEL`. One instance (`FreeCAD__FreeCAD@e596925`) first hit the
+60-minute task cap and produced a counted error row; retried with a 120-min
+cap it completed and its row replaced the error, which is why the round has
+no error rows in its final form — the retry is visible in the round log, not
+hidden.
+
+The smoke also produced the first real finding against the driver: a `pir
+find` that stops as incomplete exits 3 with a valid envelope, and treating
+that as a failure threw away a real review. Exit 0, 1 and 3 with a parseable
+envelope are now normal rows (with `exitCode`/`incomplete`/`stoppedBecause`
+recorded and an `INCOMPLETE` log line); only signal kills, other statuses
+and unparseable output are errors.
