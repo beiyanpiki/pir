@@ -314,6 +314,18 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
 
     const runTask = async (task) => {
       const taskRow = { id: task.id, index: task.index, label: task.comment.label, path: task.comment.path, runs: [] };
+      // A resumed round whose every arm row already exists needs no checkout:
+      // paying the fetch/worktree cycle per reused task serializes the whole
+      // resume behind git for no new evidence.
+      if (options.resume && options.arms.every((arm) => previous.get(`${arm}|${task.id}`))) {
+        for (const arm of options.arms) {
+          console.error(`REUSED ${arm} ${task.id}`);
+          taskRow.runs.push({ arm, status: "reused" });
+        }
+        summary.tasks.push(taskRow);
+        flush();
+        return;
+      }
       let repoDir = null;
       let checkout = null;
       try {
