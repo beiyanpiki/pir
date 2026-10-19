@@ -189,6 +189,23 @@ export function scoreRow(task, arm, run) {
   };
 }
 
+/**
+ * F-185: --resume must not stamp old rows with a new model or CLI build. A
+ * round's provenance is one model id and one CLI sha256, so a resume that
+ * changes either would publish mixed numbers under a stamp that describes only
+ * half of them.
+ */
+export function assertResumeCompatible(previousSummary, { model, cliSha256 }) {
+  if (!previousSummary) return;
+  if (previousSummary.model && previousSummary.model !== model) {
+    throw new Error(`--resume refuses to mix models: round was recorded with ${previousSummary.model}, this invocation uses ${model} (pick a fresh --round name)`);
+  }
+  const previousCli = previousSummary.cli?.sha256;
+  if (previousCli && cliSha256 && previousCli !== cliSha256) {
+    throw new Error(`--resume refuses to mix CLI builds: round was recorded with dist/cli/cli.js sha256 ${previousCli}, this build is ${cliSha256} (rebuild, then pick a fresh --round name)`);
+  }
+}
+
 export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
@@ -225,6 +242,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const population = { materializedRows: rows.length, usable: usable.length, materializationErrors: materializationErrors.length, degradedDiffBases: usable.filter((row) => row.material?.diffBaseKind === "base-tip").length, selected: selected.length };
   const roundDir = path.join(options.outRoot, roundName);
   const previous = new Map();
+  const cliSha256 = sha256(readFileSync(options.cli));
   let startedAt = new Date().toISOString();
   if (existsSync(roundDir)) {
     if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume)`);
@@ -237,6 +255,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (existsSync(summaryPath)) {
       const previousSummary = JSON.parse(readFileSync(summaryPath, "utf8"));
       if (previousSummary.startedAt) startedAt = previousSummary.startedAt;
+      assertResumeCompatible(previousSummary, { model: options.model, cliSha256 });
     }
   }
   mkdirSync(roundDir, { recursive: true });
@@ -246,7 +265,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     schemaVersion: 1, round: roundName, startedAt, resumedAt: options.resume ? new Date().toISOString() : undefined,
     node: process.version,
     model: options.model,
-    cli: { path: options.cli, sha256: sha256(readFileSync(options.cli)) },
+    cli: { path: options.cli, sha256: cliSha256 },
     dataset: header.dataset, sample: header.sample, citation: header.citation,
     limits: { limit: options.limit ?? null, arms: options.arms, concurrency: options.concurrency, timeoutMs: options.timeoutMs, cache: options.cache },
     arms: {}, tasks: [], errors: [],

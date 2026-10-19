@@ -13,7 +13,7 @@ import {
   rememberMergeBase, writeMaterialized,
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
-import { materializeTask, parseOptions as runOptions, releaseTask, scoreRow } from "../eval/aacr/run-m0.js";
+import { assertResumeCompatible, materializeTask, parseOptions as runOptions, releaseTask, scoreRow } from "../eval/aacr/run-m0.js";
 
 function temporary(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "pir-aacr-mat-"));
@@ -50,6 +50,16 @@ const record = (over = {}) => ({
   note: "The constant changed.", category: "Code Defect", context: "Diff Level",
   is_ai_comment: true, source_model: "GPT-5.2", label: 1, project_main_language: "TypeScript",
   pr_category: "Bug Fix", pr_change_line_count: 3, ...over,
+});
+
+test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
+  const summary = { model: "m-a", cli: { sha256: "a".repeat(64) } };
+  assert.doesNotThrow(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "a".repeat(64) }));
+  assert.doesNotThrow(() => assertResumeCompatible(undefined, { model: "m-a", cliSha256: "b".repeat(64) }));
+  assert.throws(() => assertResumeCompatible(summary, { model: "m-b", cliSha256: "a".repeat(64) }), /refuses to mix models/);
+  assert.throws(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "b".repeat(64) }), /refuses to mix CLI builds/);
+  // A previous summary without provenance (older format) is not a mismatch.
+  assert.doesNotThrow(() => assertResumeCompatible({}, { model: "m-b", cliSha256: "b".repeat(64) }));
 });
 
 test("M0 dogfood F-181: a failed merge-base lookup is never cached, so later runs retry", () => {
