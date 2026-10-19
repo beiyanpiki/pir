@@ -1,6 +1,6 @@
 import { Type } from "typebox";
 import { buildIdentity } from "../findings/identity.js";
-import { FINDING_CATEGORIES, type AnchorLineCorrection, type CandidateFinding, type DecisionAssessment, type VerifierResult } from "../findings/types.js";
+import { FINDING_CATEGORIES, REJECTION_GROUNDS, type AnchorLineCorrection, type CandidateFinding, type DecisionAssessment, type RejectionGround, type VerifierResult } from "../findings/types.js";
 import { locateSnippetExcerpt } from "../findings/snippet-locate.js";
 import type { ReviewTool } from "../agents/types.js";
 import { matchIssueHistory } from "../memory/retrieval.js";
@@ -260,7 +260,29 @@ function citesReadPath(rationale: string, readPath: string): boolean {
   return false;
 }
 
-export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
+/**
+ * Normalize a rejected verdict's ground (roadmap B4). The enum is the model's
+ * vocabulary, not a gate: an unknown or differently-spelled value collapses to
+ * `other` so a rejection is never lost to a vocabulary mismatch. A *missing*
+ * ground on a change-mode rejection is still a tool-boundary error, which the
+ * model can correct in the same session.
+ */
+export function normalizeRejectionGround(value: unknown): RejectionGround {
+  if (typeof value !== "string") return "other";
+  const normalized = value.trim().toLowerCase();
+  return (REJECTION_GROUNDS as readonly string[]).includes(normalized) ? (normalized as RejectionGround) : "other";
+}
+
+export interface SubmitVerdictOptions {
+  /**
+   * Change mode only: a rejection must name its ground. Audit mode has no
+   * change attribution, so half the enum (pre-existing / not-introduced) is
+   * meaningless there and the requirement stays off.
+   */
+  requireRejectionGround?: boolean;
+}
+
+export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence, options: SubmitVerdictOptions = {}): ReviewTool {
   const known = new Set(matchedIds ?? []);
   return {
     name: "submit_verdict",
@@ -272,6 +294,7 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
       priorDecisionStillApplies: Type.Optional(Type.Boolean({ description: "Legacy field: only valid for exactly one matched decision." })),
       decisionAssessments: Type.Optional(Type.Array(Type.Object({ memoryId: nonemptySchema(), stillApplies: Type.Boolean(), rationale: Type.Optional(nonemptySchema()) }))),
       codeFeedback: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Code-only follow-up, never historical decision text or memory rationale." })),
+      rejectionGround: Type.Optional(Type.String({ description: "Required when verdict is rejected: one of no-such-code, contradicted-by-code, pre-existing, guarded, speculative, not-introduced-by-change, other. An unrecognized value is recorded as other." })),
       uncertaintyReason: Type.Optional(enumSchema(UNCERTAINTY_REASONS)),
     }),
     async execute(params) {
@@ -297,6 +320,16 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         const codeFeedback = params.codeFeedback === undefined ? undefined : text(params.codeFeedback, "codeFeedback", 2000);
         const uncertaintyReason = params.uncertaintyReason === undefined ? undefined : member(params.uncertaintyReason, UNCERTAINTY_REASONS, "uncertaintyReason");
         if (uncertaintyReason && verdict !== "uncertain") throw new Error("uncertaintyReason requires an uncertain verdict.");
+        // Roadmap B4: a rejection is only useful if its reason survives the
+        // session. Required in change mode, normalized (never rejected) on
+        // vocabulary drift, ignored for non-rejected verdicts.
+        if (params.rejectionGround !== undefined && typeof params.rejectionGround !== "string") throw new Error("rejectionGround must be a string.");
+        const rejectionGroundText = typeof params.rejectionGround === "string" ? params.rejectionGround.trim() : undefined;
+        if (verdict === "rejected" && rejectionGroundText === "") throw new Error("rejectionGround must be nonempty when provided.");
+        if (verdict === "rejected" && rejectionGroundText === undefined && options.requireRejectionGround) {
+          throw new Error(`rejectionGround is required when verdict is rejected: name the ground that disproves the candidate (${REJECTION_GROUNDS.join(", ")}).`);
+        }
+        const rejectionGround = verdict === "rejected" && rejectionGroundText !== undefined ? normalizeRejectionGround(rejectionGroundText) : undefined;
         let decisionAssessments: DecisionAssessment[] | undefined;
         if (params.decisionAssessments !== undefined) {
           if (!Array.isArray(params.decisionAssessments)) throw new Error("decisionAssessments must be an array.");
@@ -325,6 +358,7 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
           ...(legacy === undefined ? {} : { priorDecisionStillApplies: legacy as boolean }),
           ...(decisionAssessments === undefined ? {} : { decisionAssessments }),
           ...(codeFeedback === undefined ? {} : { codeFeedback }),
+          ...(rejectionGround === undefined ? {} : { rejectionGround }),
           ...(verdict === "uncertain" ? { uncertaintyReason: uncertaintyReason ?? "missing-evidence" } : {}),
         };
         return { text: "Verdict recorded.", terminate: true };

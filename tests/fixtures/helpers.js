@@ -43,11 +43,16 @@ export function git(cwd, args) {
  * pinned head read of `path`, then a rationale citing it. Scripted verifier
  * sessions in the integration suites must model this contract — a bare
  * submit_verdict is rejected as evidence-free.
+ *
+ * Roadmap B4 is part of that contract too: a change-mode rejection must name
+ * its ground, so the helper supplies the default a compliant session would use
+ * unless the caller states one explicitly.
  */
 export async function submitVerdictWithEvidence(tool, verdict, path = "src/pay.ts") {
   await tool("read_code").execute({ path });
   return tool("submit_verdict").execute({
     ...verdict,
+    ...(verdict.verdict === "rejected" && verdict.rejectionGround === undefined ? { rejectionGround: "contradicted-by-code" } : {}),
     rationale: `${verdict.rationale} Evidence: read ${path}:1.`,
   });
 }

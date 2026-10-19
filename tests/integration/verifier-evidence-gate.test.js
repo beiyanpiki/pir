@@ -118,13 +118,14 @@ test("evidence gate: a search alone gathers evidence but stage 2 still demands a
     const read = await tools("read_code").execute({ path: "src/pay.ts" });
     assert.ok(!read.text.startsWith("ERROR"), read.text);
     const accepted = await tools("submit_verdict").execute({
-      verdict: "rejected", rationale: "the search at src/pay.ts:1 contradicts the claimed call path", confidence: 0.9,
+      verdict: "rejected", rationale: "the search at src/pay.ts:1 contradicts the claimed call path", confidence: 0.9, rejectionGround: "contradicted-by-code",
     });
     assert.equal(accepted.terminate, true);
   });
   try {
     const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
     assert.equal(result.verdict, "rejected");
+    assert.equal(result.rejectionGround, "contradicted-by-code", "B4: the ground survives into the verifier result");
   } finally {
     fx.cleanup();
   }
@@ -257,7 +258,7 @@ test("evidence gate stage 2: extension-less, root-dotfile, and spaced read paths
     const dotfileFactory = scriptedFactory(async ({ tools }) => {
       await tools("read_code").execute({ path: ".gitignore" });
       const accepted = await tools("submit_verdict").execute({
-        verdict: "rejected", rationale: ".gitignore already excludes the generated path", confidence: 0.9,
+        verdict: "rejected", rationale: ".gitignore already excludes the generated path", confidence: 0.9, rejectionGround: "contradicted-by-code",
       });
       assert.equal(accepted.terminate, true);
     });
@@ -268,7 +269,7 @@ test("evidence gate stage 2: extension-less, root-dotfile, and spaced read paths
     const spacedFactory = scriptedFactory(async ({ tools }) => {
       await tools("read_code").execute({ path: "docs/my notes.md" });
       const accepted = await tools("submit_verdict").execute({
-        verdict: "rejected", rationale: 'the documented contract in "docs/my notes.md" contradicts the claim', confidence: 0.9,
+        verdict: "rejected", rationale: 'the documented contract in "docs/my notes.md" contradicts the claim', confidence: 0.9, rejectionGround: "contradicted-by-code",
       });
       assert.equal(accepted.terminate, true);
     });
