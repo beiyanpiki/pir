@@ -209,7 +209,8 @@ the remaining budget; pir does not cancel that model turn at the limit.
 `find` applies default ceilings of 1.2M reviewer and 0.8M verifier
 prompt-side (input) tokens when `--max-tokens` is absent (ADR 0006). A hit
 starts no new reviewer round, but every candidate already pending is still
-verified — the grace — and the stop is reported in `stoppedBecause` (and
+verified — the grace, including backlogs larger than one drain's per-round
+cap — and the stop is reported in `stoppedBecause` (and
 structurally as `budgetStop: {kind, reason}` in the run manifest) while
 `incomplete` is computed exactly as before. An explicit `--max-tokens N`
 replaces those defaults with one hard whole-run ceiling measured on total

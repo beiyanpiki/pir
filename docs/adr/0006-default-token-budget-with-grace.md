@@ -41,13 +41,12 @@ isolated session, so the long-conversation bloat that compression exists
 to manage structurally does not exist here (context §3, "Deliberate
 non-borrowings").
 
-A budget that is checked between sessions can only do two things: refuse
-to start new work, or finish work already started. Today the drain does
-neither cleanly at a budget hit: `drainVerifications` refuses further
-admissions the moment `Budget.exhausted()` is true, so a run that crosses
-a ceiling mid-drain abandons candidates it has already paid discovery for
-— the worst of both worlds, and exactly what "controlled truncation" is
-meant to avoid.
+A budget checked between sessions can only refuse new work or finish work
+already started, and the pre-B3 drain did neither cleanly: it refused
+further admissions the moment `Budget.exhausted()` was true, so a run
+crossing a ceiling mid-drain abandoned candidates it had already paid
+discovery for — the worst of both worlds, and what "controlled
+truncation" exists to avoid.
 
 ## Decision
 
@@ -75,11 +74,13 @@ describe reading cost. Estimated fallbacks are attributed the same way.
 **Grace: finish verifying what was found.** A hit on either default
 ceiling starts no new reviewer round, but every candidate already pending
 still goes through the verification drain — even when the verifier
-ceiling was already crossed. That bounded overshoot is the point: the
-discovery spend is sunk, and a candidate left unverified is a run that
-paid twice for one answer. The drain's admission gate therefore consults
-only the *hard* ceilings (see below), and the loop's between-session gate
-consults all of them.
+ceiling was already crossed, and even when the backlog outlives the
+drain's per-round cap (the loop keeps running drain-only rounds until the
+queue is empty, and the ceiling, not the round limit, is the reason it
+reports). That bounded overshoot is the point: the discovery spend is
+sunk, and a candidate left unverified is a run that paid twice for one
+answer. The drain's admission gate therefore consults only the *hard*
+ceilings (see below) while the between-session gate consults all of them.
 
 **An explicit `--max-tokens N` stays hard.** The user's own ceiling
 keeps today's exact semantics: measured-total-token accounting, checked
@@ -101,26 +102,25 @@ runner's "unlimited" mode now passes it explicitly
 
 **Unchanged contracts.** `incomplete` is computed exactly as before — a
 budget stop with un-reviewed work is still incomplete, pending candidates
-still count, verification errors still count — and the exit-code contract
+and verification errors still count — and the exit-code contract
 (0 / 1 / 3) is untouched. A budget stop is a controlled truncation, not a
-failure: the run still persists findings, pending candidates, rounds, and
-a status. `stoppedBecause` names the ceiling that was hit ("reviewer
+failure: the run still persists findings, rounds, and a status.
+`stoppedBecause` names the ceiling that was hit ("reviewer
 token budget exhausted (… of 1200000 input tokens)", "verifier …",
 "token …" for the explicit ceiling, "wall-clock …"), never a generic
 round-limit string, and the manifest and outcome carry the same fact
-structurally as `budgetStop: { kind, reason }` for consumers that should
-not parse prose. The manifest schema version stays 1 (additive field).
+structurally as `budgetStop: { kind, reason }` (schema version stays 1;
+additive field).
 
 **Tightening the constants (A2).** The values may only be *tightened*
 after checking them against M1's per-PR token distribution, recorded as
-an amendment to this ADR. The constants are not a knob to tune by feel.
+an amendment to this ADR — not a knob to tune by feel.
 
 ## Consequences
 
-- A large-PR run that would previously have run unbounded now stops at
-  the ceiling, verifies the backlog it already has, reports incomplete if
-  the reviewer wanted more, and exits 3 under a `--fail-on` gate — the
-  code an unfinished review always produced.
+- A large-PR run that would previously have run unbounded now stops at a
+  ceiling, finishes its backlog, reports incomplete when the reviewer
+  wanted more, and exits 3 under a `--fail-on` gate.
 - A run can overshoot the verifier ceiling only by the pending queue it
   already had: work already paid for, never new discovery.
 - Because the ceilings are measured between sessions, one in-flight round

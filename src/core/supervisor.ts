@@ -549,7 +549,21 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         break;
       }
       const stop = shouldStop(state, budget);
-      if (stop.stop) { state.stoppedBecause = stop.reason!; break; }
+      if (stop.stop) {
+        // B3 (ADR 0006) grace: a default-ceiling hit ends discovery, not the
+        // verification of work discovery already found. The drain has its own
+        // per-round cap, so a backlog larger than one drain keeps the loop
+        // alive in drain-only rounds (a non-empty queue skips the reviewer
+        // session below) until the queue is empty — which is also why the
+        // ceiling, not "max rounds", is the reason reported at the end. Only
+        // the graceful ceilings defer: a hard ceiling refuses verifier
+        // admissions, so the queue could never shrink.
+        const graceful = budget.gracefulExhausted();
+        if (!(graceful !== null && state.pending.length > 0)) {
+          state.stoppedBecause = graceful ?? stop.reason!;
+          break;
+        }
+      }
       state.round += 1;
       onProgress({ type: "round-start", round: state.round, message: `review round ${state.round}${state.pending.length ? " (pending verification)" : ""}` });
 

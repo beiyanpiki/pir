@@ -130,6 +130,15 @@ export class Budget {
     return this.hardCeilingHit()?.reason ?? null;
   }
 
+  /**
+   * The default role ceilings (B3's grace), which stop new discovery but never
+   * abandon a pending verification backlog. Null when neither is configured or
+   * reached, or when a hard ceiling is also hit (the hard one reports first).
+   */
+  gracefulExhausted(): string | null {
+    return this.hardCeilingHit() === null ? this.gracefulCeilingHit()?.reason ?? null : null;
+  }
+
   exhausted(): string | null {
     return this.ceilingHit()?.reason ?? null;
   }

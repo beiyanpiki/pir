@@ -52,6 +52,21 @@ test("B3: the verifier ceiling is named distinctly and is equally graceful", () 
   assert.equal(budget.hardExhausted(), null);
 });
 
+test("B3: gracefulExhausted() reports the default ceilings only, never a hard one", () => {
+  const grace = new Budget({ maxRounds: 3, reviewerTokens: 100 });
+  grace.chargeSession(usage({ inputTokens: 120, totalTokens: 120 }), "reviewer");
+  assert.match(grace.gracefulExhausted(), /reviewer token budget exhausted/);
+  assert.equal(grace.hardExhausted(), null);
+
+  const hard = new Budget({ maxRounds: 3, maxTokens: 100, reviewerTokens: 100_000 });
+  hard.chargeSession(usage({ inputTokens: 150, totalTokens: 150 }), "reviewer");
+  assert.equal(hard.gracefulExhausted(), null, "a hard ceiling reports first and never defers");
+  assert.match(hard.hardExhausted(), /token budget exhausted/);
+
+  const none = new Budget({ maxRounds: 3, verifierTokens: 100 });
+  assert.equal(none.gracefulExhausted(), null, "configured but unreached is not exhausted");
+});
+
 test("B3: an explicit maxTokens ceiling stays hard and keeps the measured-total accounting", () => {
   const budget = new Budget({ maxRounds: 3, maxTokens: 100 });
   budget.chargeSession(usage({ inputTokens: 90, outputTokens: 20, totalTokens: 110 }), "verifier");

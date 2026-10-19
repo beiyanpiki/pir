@@ -194,6 +194,36 @@ test("findIssues B3: the verifier ceiling does not cut the pending backlog short
   });
 });
 
+test("findIssues B3/F-178: a backlog larger than one drain cap is still fully verified", async () => {
+  await withRepo(async (repo, ctx) => {
+    const factory = scriptedFactory({
+      usage: {
+        reviewer: roleUsage(DEFAULT_FIND_REVIEWER_INPUT_TOKENS + 50_000),
+        verifier: roleUsage(10_000),
+      },
+      reviewer: async (tool) => { await recordCandidates(tool, 5, true); },
+      verifier: confirm,
+    });
+    const outcome = await findIssues({
+      repoRoot: repo.dir, memory: ctx.memory, codeMap: ctx.codeMap, factory,
+      options: { maxRounds: 2, maxVerificationsPerRound: 2 },
+    });
+
+    // The ceiling is hit in round 1; the drain's per-round cap leaves 3 of the
+    // 5 candidates queued. The graceful stop must defer and keep draining
+    // (rounds grow past maxRounds) until every candidate is verified, then
+    // report the ceiling — not the round limit — as the reason.
+    assert.equal(factory.reviewerSessions, 1, "no new reviewer round");
+    assert.equal(factory.verifierSessions, 5, "every pending candidate reached a verifier");
+    assert.equal(outcome.pendingCandidates, 0);
+    assert.equal(outcome.findings.length, 5);
+    assert.ok(outcome.rounds.length > 2, "drain-only rounds continued past maxRounds");
+    assert.match(outcome.stoppedBecause, /reviewer token budget exhausted/);
+    assert.equal(outcome.budgetStop.kind, "reviewer-tokens");
+    assert.equal(outcome.incomplete, true);
+  });
+});
+
 test("findIssues B3: an explicit --max-tokens replaces the default ceilings; unlimited removes them", async () => {
   for (const [label, maxTokens] of [["an explicit whole-run ceiling", 10_000_000], ["the unlimited opt-out", null]]) {
     await withRepo(async (repo, ctx) => {
