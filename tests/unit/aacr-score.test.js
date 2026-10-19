@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 
-import { bucketize, classify, confidenceAuc, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY } from "../eval/aacr/score.js";
+import { bucketize, classify, confidenceAuc, isNoVerdict, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY } from "../eval/aacr/score.js";
 import { renderResultsMd } from "../eval/aacr/report.js";
 
 const verifierRow = (over = {}) => ({
@@ -197,6 +197,25 @@ test("scoreRun: per-arm diffBaseKinds counts degraded rows (M0 dogfood F-181)", 
   ];
   const scores = scoreRun(rows);
   assert.deepEqual(scores.arms.verifier.diffBaseKinds, { "merge-base": 1, "base-tip": 1, unknown: 1 });
+});
+
+test("M0 dogfood F-188: a verifier session without a verdict scores as no decision", () => {
+  const providerError = verifierRow({ decision: "keep", verdict: "uncertain", uncertaintyReason: "provider-error" });
+  assert.equal(classify(providerError, PRIMARY_POLICY), "none");
+  assert.equal(classify(providerError, STRICT_POLICY), "none");
+  assert.equal(keepScore(providerError), null);
+  assert.equal(isNoVerdict(providerError), true);
+  const missingEvidence = verifierRow({ decision: "keep", verdict: "uncertain", uncertaintyReason: "missing-evidence" });
+  assert.equal(classify(missingEvidence, PRIMARY_POLICY), "keep");
+  assert.equal(isNoVerdict(missingEvidence), false);
+  // In the scorer the no-verdict row is a miss (and counted as invalid), not a keep.
+  const scores = scoreRun([
+    verifierRow({ id: "a", label: 1, decision: "keep", verdict: "confirmed" }),
+    { ...providerError, id: "b", label: 1 },
+  ]);
+  const overall = scores.arms.verifier.policies[PRIMARY_POLICY].overall;
+  assert.equal(overall.recall, 0.5);
+  assert.equal(overall.invalid, 1);
 });
 
 test("renderResultsMd states the degraded diff-base count (M0 dogfood F-181)", () => {

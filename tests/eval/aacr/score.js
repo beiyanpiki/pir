@@ -33,8 +33,18 @@ export const POLICIES = [PRIMARY_POLICY, STRICT_POLICY];
  * provider failure with no verdict, an OCR parse error, or (strict policy) an
  * uncertain verifier verdict.
  */
+/**
+ * F-188: a verifier session that crashed on a provider error or never called
+ * submit_verdict produced no decision. Older rows stored such verdicts as
+ * decision "keep"; the uncertainty reason is the authoritative signal.
+ */
+export function isNoVerdict(row) {
+  return row?.arm === "verifier" && (row.uncertaintyReason === "provider-error" || row.uncertaintyReason === "missing-verdict");
+}
+
 export function classify(row, policy = PRIMARY_POLICY) {
   if (!row || row.status !== "ok") return "none";
+  if (isNoVerdict(row)) return "none";
   if (row.decision === "invalid" || row.decision === undefined || row.decision === null) return "none";
   if (policy === STRICT_POLICY && row.arm === "verifier" && row.verdict === "uncertain") return "none";
   if (row.decision === "kill") return "kill";
@@ -45,6 +55,8 @@ export function classify(row, policy = PRIMARY_POLICY) {
 /** Confidence mapped onto a keep-ranking score in [0,1]; three verdict tiers stay ordered. */
 export function keepScore(row) {
   if (!row || row.status !== "ok") return null;
+  // F-188: no verdict means no ranking signal, not a neutral 0.5.
+  if (isNoVerdict(row)) return null;
   const confidence = typeof row.confidence === "number" && Number.isFinite(row.confidence)
     ? Math.min(1, Math.max(0, row.confidence))
     : null;
@@ -110,7 +122,7 @@ export function scoreRows(rows, policy = PRIMARY_POLICY) {
     }
     const verdict = classify(row, policy);
     if (verdict === "none") {
-      if (row.decision === "invalid" || row.decision === null || row.decision === undefined) counts.invalid += 1;
+      if (row.decision === "invalid" || row.decision === null || row.decision === undefined || isNoVerdict(row)) counts.invalid += 1;
       if (label === 1) { counts.fn += 1; counts.unresolvedPositive += 1; } else { counts.unresolvedNegative += 1; }
       continue;
     }

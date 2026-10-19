@@ -300,6 +300,23 @@ export async function runOcrArm(ctx: AppContext, task: VerifyCommentTask, model?
   };
 }
 
+/** Uncertainty reasons that mean "the verifier never produced a verdict". */
+const NO_VERDICT_REASONS = new Set(["provider-error", "missing-verdict"]);
+
+/**
+ * Normalize a verifier verdict into the benchmark's keep/kill decision.
+ * F-188: a crashed session (provider error) or a session that never called
+ * submit_verdict produced no decision at all — it must not be scored as a
+ * keep just because it is "not rejected". Only a verdict-less uncertainty is
+ * invalid; missing-evidence/tool-limit abstentions stay keeps under the
+ * uncertain=keep policy.
+ */
+export function decisionForVerdict(verdict: VerifierResult): "keep" | "kill" | "invalid" {
+  if (verdict.verdict === "rejected") return "kill";
+  if (verdict.verdict === "uncertain" && NO_VERDICT_REASONS.has(verdict.uncertaintyReason ?? "")) return "invalid";
+  return "keep";
+}
+
 export async function runVerifierArm(ctx: AppContext, task: VerifyCommentTask, model?: string): Promise<VerifyCommentResult> {
   const started = performance.now();
   const candidate = commentToCandidate(task);
@@ -315,7 +332,7 @@ export async function runVerifierArm(ctx: AppContext, task: VerifyCommentTask, m
     id: task.id, arm: "verifier", model: model ?? null,
     head: task.material.head, diffBase: task.material.diffBase, diffBaseKind: task.material.diffBaseKind ?? "unknown",
     pathInDiff: Boolean(task.material.pathInDiff),
-    decision: verdict.verdict === "rejected" ? "kill" : "keep",
+    decision: decisionForVerdict(verdict),
     verdict: verdict.verdict,
     confidence: typeof verdict.confidence === "number" ? verdict.confidence : null,
     uncertaintyReason: verdict.uncertaintyReason ?? null,

@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import {
-  buildChangeSet, candidateDigest, commentToCandidate, firstSentence, mapCommentCategory, parseTask, selectDiffExcerpt,
+  buildChangeSet, candidateDigest, commentToCandidate, decisionForVerdict, firstSentence, mapCommentCategory, parseTask, selectDiffExcerpt,
 } from "../../dist/app/verify-comment.js";
 import {
   buildOcrReflectionPrompt, extractFirstJsonObject, OCR_REFLECTION_ATTRIBUTION, OCR_REFLECTION_SYSTEM_PROMPT,
@@ -56,6 +56,17 @@ test("parseTask validates every field the mapping depends on", () => {
   assert.throws(() => parseTask({ ...task(), material: { ...task().material, head: "nope" } }), /material\.head must be a 40-char hex sha/);
   assert.throws(() => parseTask({ ...task(), material: { ...task().material, diff: null } }), /material\.diff must be a string/);
   assert.equal(parseTask({ ...task(), material: { ...task().material, diffBaseKind: undefined } }).material.diffBaseKind, "unknown");
+});
+
+test("M0 dogfood F-188: a session without a verdict is invalid, not a keep", () => {
+  assert.equal(decisionForVerdict({ verdict: "rejected", confidence: 0.8 }), "kill");
+  assert.equal(decisionForVerdict({ verdict: "confirmed", confidence: 0.8 }), "keep");
+  // An abstention is a decision under uncertain=keep; only a session that
+  // never produced a verdict is invalid.
+  assert.equal(decisionForVerdict({ verdict: "uncertain", confidence: 0, uncertaintyReason: "missing-evidence" }), "keep");
+  assert.equal(decisionForVerdict({ verdict: "uncertain", confidence: 0, uncertaintyReason: "tool-limit" }), "keep");
+  assert.equal(decisionForVerdict({ verdict: "uncertain", confidence: 0, uncertaintyReason: "provider-error" }), "invalid");
+  assert.equal(decisionForVerdict({ verdict: "uncertain", confidence: 0, uncertaintyReason: "missing-verdict" }), "invalid");
 });
 
 test("firstSentence takes the first sentence and caps very long notes", () => {
