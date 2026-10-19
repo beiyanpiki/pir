@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ChangeSet } from "../changes/change-set.js";
+import { renameAwareSecretReason } from "../changes/filter.js";
 import { readFileAtCommit, resolveCommit } from "../changes/git.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import type { Memory } from "../memory/index.js";
@@ -30,6 +31,16 @@ export interface ToolContext {
    * overview and hunk-index listings do not count as reads.
    */
   hunkObserver?: (path: string, hunkIndex: number) => void;
+  /**
+   * Change-mode secret-path guard (B1): when true, the pinned read channels
+   * (`read_code`, `search_text`, collector evidence reads) refuse paths the
+   * non-overridable secret gate excludes, so an excluded file's content
+   * cannot reach a session through anything but the SDK's builtin filesystem
+   * tools — which read the working tree, not the pinned revision, and are
+   * outside this gate. Audit contexts never set it: audit behavior is
+   * deliberately unchanged.
+   */
+  blockSecretPaths?: boolean;
 }
 
 export type ReviewRevision = "head" | "base" | "merge-base";
@@ -72,6 +83,14 @@ export async function readReviewFile(ctx: ToolContext, relPath: string, revision
   const absolute = safeResolve(ctx.repoRoot, relPath);
   if (!absolute) throw new Error("invalid repository-relative path");
   const normalized = path.relative(path.resolve(ctx.repoRoot), absolute).split(path.sep).join("/");
+  if (ctx.blockSecretPaths) {
+    // Rename-aware (F-183): the changeset's own renames cannot launder a
+    // secret past the gate that excluded it.
+    const reason = renameAwareSecretReason(ctx.changeSet, normalized);
+    if (reason !== undefined) {
+      throw new Error(`${JSON.stringify(normalized)} is a ${reason} and is excluded from this review; its content is never sent to a model. Report the change from the file-list metadata instead.`);
+    }
+  }
   const commit = await resolveReviewRevision(ctx, revision);
   const content = await readFileAtCommit(ctx.repoRoot, commit, normalized);
   if (content !== null) ctx.readObserver?.(normalized, revision);

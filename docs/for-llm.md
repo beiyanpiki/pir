@@ -259,6 +259,15 @@ For review results, inspect these fields in order:
    `correct`.
 4. `data.pendingCandidates` and `pendingFindings`: list unresolved work.
 5. Audit `data.coverage` and `suspectedDuplicates`: account for scope.
+   In change mode, `data.run.files[]` lists every changed file; a file with
+   `excluded: true` (+ `excludedReason`) had its diff body withheld by the
+   file filter (binary, secret path, skip pattern, oversized diff). Metadata
+   is intact, the patch is not: do not claim to have reviewed those files,
+   and do not ask a session for their diff — `get_change` refuses. For the
+   secret gates (dotenv/SSH/credential files) `read_code` and `search_text`
+   refuse the path on every revision in change mode, so the file body is
+   unreachable through the review tools as well; the builtin filesystem tools
+   read the working tree and are not evidence.
 6. `usage`, `usageComplete`, `estimatedTokens`, and `durationMs`: report
    measured cost/usage only when available.
 
@@ -298,6 +307,16 @@ returns the exact snapshot identity (`head`, `treeId`, scope/planner
 versions), selection and classification counts, and the planned unit count —
 no run, no model. `pir audit coverage [--run <id>|--latest] [--json]` reads
 the per-file ledger of a recorded audit run from the local project database.
+
+Before paying for a change review, `pir find --preview [--json]` returns the
+change set a real find of the same range would review plus the per-file
+selection: `path`, `status`, `additions`/`deletions`, `excluded`,
+`excludedReason` and the filter `gate` (`binary`, `secret`,
+`skip-pattern`, `oversized-diff`, `not-included`) — no run, no model, no
+writes. Run-shaping flags (`--max-rounds`, `--max-tokens`,
+`--max-findings`, `--verify-concurrency`, `--min-confidence`,
+`--fail-on`, `--model`, `--verify-model`, `--angles`, `--plugins`)
+are rejected with exit 2 rather than silently ignored.
 
 `--max-findings unlimited` (#57) removes the report cap: the result envelope
 carries `run.maxFindings: null` and `run.maxFindingsMode: "unlimited"`

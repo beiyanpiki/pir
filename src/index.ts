@@ -26,8 +26,10 @@ export type { FindOptions, FindOutcome, AuditOptions, AuditOutcome } from "./cor
 export { computeRunVerdict } from "./core/review-state.js";
 export type { RunVerdict } from "./core/review-state.js";
 export type { ReviewTarget } from "./core/review-target.js";
-export { buildRepoSnapshot, pathMatchesGlob, MAX_AUDIT_FILE_BYTES } from "./changes/snapshot.js";
+export { buildRepoSnapshot } from "./changes/snapshot.js";
 export type { RepoSnapshot, AuditScope, ScopedEntry, TreeEntry } from "./changes/snapshot.js";
+export { FILTER_VERSION, MAX_AUDIT_FILE_BYTES, pathMatchesGlob } from "./changes/filter.js";
+export type { EntryClass, PathRule } from "./changes/filter.js";
 export { planAuditUnits, PLANNER_VERSION } from "./core/audit-planner.js";
 export type { ReviewWorkUnit, OwnedRange } from "./core/audit-planner.js";
 export { CoverageLedger } from "./core/coverage.js";

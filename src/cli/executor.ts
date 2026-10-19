@@ -17,6 +17,7 @@ import {
   type UserConfig,
 } from "./config.js";
 import { createAppContext } from "../app/context.js";
+import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
@@ -119,6 +120,13 @@ Usage:
                       "none" to disable, or "auto" to detect from marker
                       files at head (default)
   --no-sync-index     skip codegraph index sync
+  --preview           print the file selection a real find of the same range
+                      would review (#B1): per-file status and churn, plus
+                      selected or excluded with the gate's reason — binary,
+                      secret paths, skip patterns, oversized single-file
+                      diff. Excluded files stay visible as metadata; their
+                      diff bodies never reach a model. No run, no model, no
+                      writes; run-shaping flags are rejected
   --detach            remote only: submit as an async job and return
                       immediately (#53; see Remote mode)`,
 
@@ -1055,6 +1063,23 @@ async function cmdFind(
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
   }
+  // File-selection preview (B1/T4): the exact change set and the exact pure
+  // filter a real find of the same range would apply — no run row, no model
+  // session, no writes. Run-shaping flags cannot affect a selection, so they
+  // are rejected instead of silently ignored (the audit --dry-run precedent).
+  if (flags.get("--preview") === true) {
+    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins"]) {
+      if (flags.has(shaping)) {
+        throw new UsageError(`find --preview previews the file selection only; ${shaping} shapes a real run`);
+      }
+    }
+    return await renderFindPreview(ctx, {
+      base: flags.get("--base") as string | undefined,
+      head: flags.get("--head") as string | undefined,
+      json,
+      emit,
+    });
+  }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
   const maxFindings = maxFindingsFlag(flags);
@@ -1088,12 +1113,9 @@ async function cmdFind(
             maxFindings: result.maxFindings,
             maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
-            files: result.changeSet.files.map((f) => ({
-              path: f.path,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-            })),
+            // Purely additive (B1): every pre-B1 key keeps its value, plus
+            // files[].excluded (always present) and excludedReason (filtered only).
+            files: result.changeSet.files.map(changedFileSummary),
           },
           degraded: result.degraded,
           plugins: result.plugins,
@@ -1276,6 +1298,98 @@ async function cmdAudit(
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `pir find --preview [--json]` (B1/T4): the change set a real find of the
+ * same range would review, plus the per-file decision of the shared
+ * change-mode filter — the same buildChangeSet + selectChangeFiles calls the
+ * run makes, so what is previewed is what gets reviewed by construction.
+ * Excluded files are reported with their path/status/churn and the gate's
+ * reason: the reviewer's view is "this changed, and you may not read its
+ * diff". No run row, no model session, no writes.
+ */
+async function renderFindPreview(
+  ctx: Ctx,
+  input: { base: string | undefined; head: string | undefined; json: boolean; emit: Emit },
+): Promise<number> {
+  const { buildChangeSet } = await import("../changes/change-set.js");
+  const { DEFAULT_SKIP_PATTERNS, FILTER_VERSION, MAX_DIFF_FILE_BYTES, SECRET_PATH_PATTERNS, selectChangeFiles } = await import("../changes/filter.js");
+  const { getHeadCommit } = await import("../changes/git.js");
+  const emit = input.emit;
+  // Ref labels stay labels ("HEAD^") in the readout; only the diff is pinned
+  // to resolved commits.
+  const requestedBase = input.base ?? `${input.head ?? "HEAD"}^`;
+  const changeSet = await buildChangeSet(ctx.repoRoot, requestedBase, input.head ?? (await getHeadCommit(ctx.repoRoot)));
+  const decisions = selectChangeFiles(changeSet.files);
+  const files = changeSet.files.map((file, index) => {
+    const decision = decisions[index]!;
+    return {
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      language: file.language,
+      excluded: !decision.selected,
+      ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+      ...(decision.reason ? { excludedReason: decision.reason } : {}),
+      ...(decision.gate ? { gate: decision.gate } : {}),
+    };
+  });
+  const byGate: Record<string, number> = {};
+  for (const decision of decisions) {
+    if (decision.gate) byGate[decision.gate] = (byGate[decision.gate] ?? 0) + 1;
+  }
+  const selected = decisions.filter((decision) => decision.selected).length;
+  const counts = { total: files.length, selected, excluded: files.length - selected, byGate };
+  const note = "no run is created and no model is used; this is the same change set and filter a real find would use";
+  const gates = ["binary", "secret", "not-included", "skip-pattern", "oversized-diff"];
+  if (input.json) {
+    emit(
+      envelope(
+        "find.preview",
+        {
+          base: changeSet.baseCommit ?? changeSet.base,
+          head: changeSet.headCommit ?? changeSet.head,
+          requestedBase,
+          mergeBase: changeSet.mergeBase,
+          churn: changeSet.churn,
+          filter: {
+            version: FILTER_VERSION,
+            gates,
+            maxDiffBytes: MAX_DIFF_FILE_BYTES,
+            secretPaths: SECRET_PATH_PATTERNS,
+            defaultExclusions: DEFAULT_SKIP_PATTERNS,
+          },
+          counts,
+          files,
+          note,
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: changeSet.headCommit ?? changeSet.head } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const gateSummary = gates
+    .filter((gate) => (byGate[gate] ?? 0) > 0)
+    .map((gate) => `${byGate[gate]} ${gate}`)
+    .join(", ");
+  const lines = [
+    `find preview: merge-base ${changeSet.mergeBase} -> head ${changeSet.headCommit ?? changeSet.head} (${changeSet.files.length} files, ${changeSet.churn} changed lines)`,
+    `requested base: ${requestedBase}; filter version ${FILTER_VERSION} (gates: ${gates.join(" -> ")}, ${MAX_DIFF_FILE_BYTES}-byte diff cap)`,
+    `files: ${counts.total} total — ${counts.selected} selected, ${counts.excluded} excluded${gateSummary ? ` (${gateSummary})` : ""}`,
+    "excluded files keep path/status/churn metadata; their diff bodies never reach a model",
+  ];
+  for (const file of files) {
+    const state = file.excluded ? "excluded" : "selected";
+    const rename = file.oldPath ? ` (from ${file.oldPath})` : "";
+    const reason = file.excludedReason ? `  (${file.excludedReason})` : "";
+    lines.push(`  ${state.padEnd(10)}${file.status.padEnd(10)}+${file.additions}/-${file.deletions}${" ".repeat(Math.max(1, 8 - `+${file.additions}/-${file.deletions}`.length))}${file.path}${rename}${reason}`);
+  }
+  lines.push(note);
+  emit(`${lines.join("\n")}\n`);
+  return 0;
 }
 
 /**

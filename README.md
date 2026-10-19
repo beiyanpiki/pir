@@ -168,6 +168,7 @@ unavailable even though the image installs the codegraph CLI.
 pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # staged, unstaged, and untracked work
+pir find --preview --json               # what a review would select, and what it withholds
 
 pir audit --json                        # committed HEAD snapshot
 pir audit --path src/auth --path src/payments --json
@@ -282,6 +283,29 @@ pir audit coverage --run <run-id>  # ... or of a specific run
 `--dry-run` runs the exact snapshot and unit planner a real audit would use,
 without creating a run or invoking any model; `coverage` reads the ledger the
 run persisted as it went, from the local project database.
+
+Change mode filters before an agent ever sees the diff. After the change set is
+built, each file passes four gates in order — binary, secret paths (never
+overridable), skip patterns (vendored dependencies, build output, lockfiles,
+minified files), and an oversized single-file diff — and an excluded file keeps
+its path, status and churn metadata but loses its diff body, so no reviewer
+session can page it. Excluded files are reported, not hidden: `files[]` in the
+`find --json` envelope and in the run manifest carries `excluded` (always
+present) and `excludedReason` (only when filtered), additively — every
+pre-existing field keeps its name and value. Secrets are the one absolute gate:
+`.env`, `.ssh` material, SSH key families, `.netrc`/`.npmrc`/`.pypirc`/
+`.dockercfg` are never sent to a model — their diff is withheld and change-mode
+`read_code`/`search_text` refuse the path on every revision, so the gate is not
+bypassed by reading the whole file (checked-in `.env.example`/`.sample`/
+`.template` stay reviewable). The SDK's builtin filesystem tools read the
+working tree rather than the pinned commit and are outside this gate; the
+reviewer prompt already treats them as non-evidence.
+
+`pir find --preview` prints that selection before you pay for a run —
+per-file status/churn plus selected/excluded with the gate's reason, as text or
+`--json`. It calls the same change-set builder and the same pure filter the
+real run uses, creates no run row, opens no model session and writes nothing;
+run-shaping flags are rejected with a usage error instead of being ignored.
 
 ## Service API and jobs
 

@@ -1,4 +1,5 @@
-import { buildChangeSet, type ChangeSet } from "../changes/change-set.js";
+import { buildChangeSet, changedFileSummary, type ChangeSet } from "../changes/change-set.js";
+import { applyChangeFilter } from "../changes/filter.js";
 import { getHeadCommit } from "../changes/git.js";
 import { buildRepoSnapshot } from "../changes/snapshot.js";
 import type { CodeMapProvider } from "../codemap/types.js";
@@ -490,7 +491,13 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   });
 
   const requestedHead = options.head ?? (await getHeadCommit(deps.repoRoot));
-  const changeSet = await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead);
+  // B1: the change-mode gate runs once, before any session exists — binary,
+  // secret paths (non-overridable), skip patterns, oversized single-file diff.
+  // Excluded files keep their path/status/churn metadata but arrive with no
+  // hunks, so no reviewer/verifier tool can put their diff body in a prompt.
+  const changeSet = applyChangeFilter(
+    await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead),
+  );
   // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
   // pages accumulate across rounds. No behavior change — accounting only.
   const changeCoverage = new ChangeCoverage(changeSet);
@@ -520,7 +527,13 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
     featureKeys: [], entityKeys: [], headCommit: head,
   });
-  const toolCtx: ToolContext = { repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory };
+  // B1: change mode also guards the pinned read channels, so the secret gate
+  // is not bypassed by read_code/search_text on a filtered path. Audit builds
+  // its own context without the guard — its behavior is unchanged.
+  const toolCtx: ToolContext = {
+    repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory,
+    blockSecretPaths: true,
+  };
   const languagePacks = await resolveLanguagePacks({
     repoRoot: deps.repoRoot,
     headCommit: head,
@@ -878,7 +891,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-      files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+      files: changeSet.files.map(changedFileSummary),
     });
     throw error;
   }
@@ -922,7 +935,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-    files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+    files: changeSet.files.map(changedFileSummary),
   });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,

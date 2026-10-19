@@ -466,8 +466,8 @@ export interface RunManifest {
   usage?: SessionUsage;
   durationMs: number;
   estimatedTokens: number;
-  /** Change mode: the reviewed file list. */
-  files?: Array<{ path: string; status: string; additions: number; deletions: number }>;
+  /** Change mode: the reviewed file list (B1 adds the exclusion record). */
+  files?: Array<{ path: string; status: string; additions: number; deletions: number; excluded?: boolean; excludedReason?: string }>;
   /** Audit mode: coverage ledger summary and work-unit states. */
   coverage?: CoverageSummary;
   units?: Array<{ id: string; module: string; state: string; reason?: string; files: number; attempts: number }>;
