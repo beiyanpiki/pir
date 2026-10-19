@@ -46,6 +46,21 @@ export interface FindingIdentity {
   normalizedTrigger: string;
 }
 
+/**
+ * One anchor whose excerpt located locally and overrode the model's range
+ * (roadmap B2). Carried by the `line-corrected` run event; the anchor itself
+ * keeps the same data as `lineCorrected`/`originalStartLine` fields.
+ */
+export interface AnchorLineCorrection {
+  /** Reviewer-assigned runtime id, e.g. F-101 (before persistence). */
+  displayId: string;
+  path: string;
+  originalStartLine: number;
+  originalEndLine?: number;
+  startLine: number;
+  endLine?: number;
+}
+
 export interface CandidateFinding {
   /** Runtime id assigned when collected (F-1, F-2, ...). */
   displayId?: string;
