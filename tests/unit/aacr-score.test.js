@@ -188,3 +188,27 @@ test("renderResultsMd refuses to render without provenance and includes the cita
   assert.match(markdown, /opencode-go\/deepseek-v4\.1-flash:medium/);
   assert.equal(markdown.endsWith("\n"), true);
 });
+
+test("scoreRun: per-arm diffBaseKinds counts degraded rows (M0 dogfood F-181)", () => {
+  const rows = [
+    verifierRow({ id: "a", diffBaseKind: "merge-base" }),
+    verifierRow({ id: "b", diffBaseKind: "base-tip" }),
+    verifierRow({ id: "c" }),
+  ];
+  const scores = scoreRun(rows);
+  assert.deepEqual(scores.arms.verifier.diffBaseKinds, { "merge-base": 1, "base-tip": 1, unknown: 1 });
+});
+
+test("renderResultsMd states the degraded diff-base count (M0 dogfood F-181)", () => {
+  const run = {
+    round: "2026-10-19-m0", model: "opencode-go/deepseek-v4.1-flash:medium",
+    dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
+    sample: { limit: 2, seed: 42, digest: "d".repeat(64), eligible: 2 },
+    cli: { sha256: "c".repeat(64) }, limits: { arms: ["verifier", "ocr"], concurrency: 2, timeoutMs: 600000, cache: "/tmp/cache" },
+    config: { model: "m", thinking: "medium" }, startedAt: "2026-10-19T00:00:00.000Z", finishedAt: "2026-10-19T01:00:00.000Z", cacheBytes: 1024,
+  };
+  const clean = renderResultsMd({ run, scores: scoreRun([verifierRow({ diffBaseKind: "merge-base" })]) });
+  assert.match(clean, /no degraded base-tip rows/);
+  const degraded = renderResultsMd({ run, scores: scoreRun([verifierRow({ diffBaseKind: "base-tip" })]) });
+  assert.match(degraded, /1 verifier row\(s\) used a degraded base-tip diff/);
+});

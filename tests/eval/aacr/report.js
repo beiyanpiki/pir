@@ -133,6 +133,12 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
   if (notes.length === 0) lines.push("- (none recorded)");
   for (const note of notes) lines.push("- " + note);
   lines.push("- Caliber (roadmap R2): the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for M0.");
+  const degraded = Object.entries(scores.arms)
+    .map(([arm, score]) => [arm, score.diffBaseKinds?.["base-tip"] ?? 0])
+    .filter(([, count]) => count > 0);
+  lines.push(degraded.length === 0
+    ? "- Diff base: every scored row used the GitHub merge base (ADR-0007 §7); no degraded base-tip rows."
+    : "- Diff base (dogfood F-181): " + degraded.map(([arm, count]) => count + " " + arm + " row(s)").join(", ") + " used a degraded base-tip diff because the compare API was unavailable; those rows read the capture-time base..head pair ADR-0007 §7 warns about, so treat their verdicts as lower-confidence.");
   lines.push("- **Target question (measured limitation, ADR-0007 Consequences):** the dataset's label asks whether the comment is *correct review feedback*; " + code("runVerifier") + " answers whether a *concrete, change-attributable defect* exists. The first run's rationales show valid comments rejected precisely because they are a style preference or a pre-existing observation, which the shipped do-not-report contract requires. " + code("falseKillRate") + " is therefore still " + code("rejected(label=1)/label=1") + " operationally, but it must not be read as \"the verifier destroys real findings\", and it is not the same quantity as the OCR arm's false-kill. Read " + code("killRate") + " (label-0 interception) and the per-category table jointly; Maintainability concentrates the mismatch.");
   lines.push("- Ground truth is 3/4 AI-authored comments verified by domain experts (roadmap R3); read the " + code("is_ai_comment") + " and " + code("source_model") + " buckets before extrapolating to human-review taste.",
     " The dataset's 1,505/640 split makes label-0 the smaller population, so every kill-family number carries a wide interval at this sample size.");

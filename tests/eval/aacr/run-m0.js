@@ -219,7 +219,10 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (options.limit !== undefined) selected = selected.slice(0, options.limit);
 
   const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-m0`;
-  const population = { materializedRows: rows.length, usable: usable.length, materializationErrors: materializationErrors.length, selected: selected.length };
+  // Degraded base-tip rows are scored normally but must be visible in every
+  // summary: their material is the capture-time pair ADR-0007 §7 warns about
+  // (dogfood F-181).
+  const population = { materializedRows: rows.length, usable: usable.length, materializationErrors: materializationErrors.length, degradedDiffBases: usable.filter((row) => row.material?.diffBaseKind === "base-tip").length, selected: selected.length };
   const roundDir = path.join(options.outRoot, roundName);
   const previous = new Map();
   let startedAt = new Date().toISOString();

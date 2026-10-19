@@ -178,7 +178,14 @@ export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
         ])),
       };
     }
-    arms[arm] = { rows: armRows.length, policies };
+    // Diff-base provenance (dogfood F-181): a base-tip row was materialized
+    // from the degraded capture-time pair, so its verdict is lower-confidence.
+    const diffBaseKinds = {};
+    for (const row of armRows) {
+      const kind = row?.diffBaseKind ?? "unknown";
+      diffBaseKinds[kind] = (diffBaseKinds[kind] ?? 0) + 1;
+    }
+    arms[arm] = { rows: armRows.length, diffBaseKinds, policies };
   }
   return { primaryPolicy: PRIMARY_POLICY, strictPolicy: STRICT_POLICY, arms };
 }

@@ -8,8 +8,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createTempGitRepo, git } from "../fixtures/helpers.js";
 import {
-  changedPaths, directoryBytes, ensureFetched, ensureRepoCache, errorRow, hasCommit, headFile, materializeComment,
-  parseMergeBase, parseOptions, parsePrUrl, pathDiff, readMaterialized, writeMaterialized,
+  cachedMergeBase, changedPaths, directoryBytes, ensureFetched, ensureRepoCache, errorRow, hasCommit, headFile,
+  isDegradedDiffBase, materializeComment, parseMergeBase, parseOptions, parsePrUrl, pathDiff, readMaterialized,
+  rememberMergeBase, writeMaterialized,
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
 import { materializeTask, parseOptions as runOptions, releaseTask, scoreRow } from "../eval/aacr/run-m0.js";
@@ -49,6 +50,32 @@ const record = (over = {}) => ({
   note: "The constant changed.", category: "Code Defect", context: "Diff Level",
   is_ai_comment: true, source_model: "GPT-5.2", label: 1, project_main_language: "TypeScript",
   pr_category: "Bug Fix", pr_change_line_count: 3, ...over,
+});
+
+test("M0 dogfood F-181: a failed merge-base lookup is never cached, so later runs retry", () => {
+  const cache = {};
+  const key = "example/repo|" + "a".repeat(40) + "|" + "b".repeat(40);
+  assert.equal(cachedMergeBase(cache, key), undefined, "no entry means resolve, not reuse");
+  // A legacy entry that recorded the degraded base-tip pair is treated as
+  // absent: the pre-fix code wrote failures exactly like successes.
+  cache[key] = "a".repeat(40);
+  cache[key + "|kind"] = "base-tip";
+  assert.equal(cachedMergeBase(cache, key), undefined, "a base-tip entry must be re-resolved");
+  // A successful resolution is reusable and round-trips through the helpers.
+  rememberMergeBase(cache, key, "c".repeat(40));
+  assert.equal(cachedMergeBase(cache, key), "c".repeat(40));
+  assert.equal(cache[key + "|kind"], "merge-base");
+  // A malformed sha is not reusable either.
+  cache["example/repo|x|y"] = "not-a-sha";
+  cache["example/repo|x|y|kind"] = "merge-base";
+  assert.equal(cachedMergeBase(cache, "example/repo|x|y"), undefined);
+});
+
+test("M0 dogfood F-181: degraded base-tip rows are recognizable for counting", () => {
+  assert.equal(isDegradedDiffBase({ material: { diffBaseKind: "base-tip" } }), true);
+  assert.equal(isDegradedDiffBase({ material: { diffBaseKind: "merge-base" } }), false);
+  assert.equal(isDegradedDiffBase({ material: {} }), false);
+  assert.equal(isDegradedDiffBase({}), false);
 });
 
 test("repo cache initializes once and fetches exactly the requested commit", () => {

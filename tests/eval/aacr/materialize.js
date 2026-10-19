@@ -114,6 +114,31 @@ export function parseMergeBase(stdout) {
 }
 
 /**
+ * Reusable merge base for a repo|base|head pair, or undefined when there is
+ * none. Only a *successful* GitHub compare resolution is cacheable: a
+ * transient API failure degrades that one run to the base-tip pair and must
+ * be retried on the next run, never pinned for every later materialization
+ * (dogfood F-181). Entries written by earlier versions with a non-merge-base
+ * kind are therefore treated as absent.
+ */
+export function cachedMergeBase(cache, key) {
+  if (!cache || cache[`${key}|kind`] !== "merge-base") return undefined;
+  return parseMergeBase(cache[key]) ?? undefined;
+}
+
+/** Persist one successful resolution. Failures are deliberately not cached. */
+export function rememberMergeBase(cache, key, sha) {
+  cache[key] = sha;
+  cache[`${key}|kind`] = "merge-base";
+  return cache;
+}
+
+/** True when a materialized row read the degraded capture-time base..head pair. */
+export function isDegradedDiffBase(row) {
+  return row?.material?.diffBaseKind === "base-tip";
+}
+
+/**
  * GitHub's merge base for the dataset's capture-time pair. `gh` first (the
  * authenticated CLI the rest of the eval tooling already assumes), then an
  * unauthenticated REST call with an optional GITHUB_TOKEN. Returns null when
@@ -330,7 +355,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const mergeBaseCache = path.join(options.cache, "merge-bases.json");
   const cache = existsSync(mergeBaseCache) ? JSON.parse(readFileSync(mergeBaseCache, "utf8")) : {};
   const rows = [];
-  const stats = { total: sampled.length, fetched: 0, reused: 0, errors: 0, repos: new Set(), mergeBaseFailures: 0 };
+  const stats = { total: sampled.length, fetched: 0, reused: 0, errors: 0, repos: new Set(), mergeBaseFailures: 0, degradedRows: 0 };
   const digest0 = sampleDigest(sampled);
   const header0 = headerRow(meta, actualSha256, { seed: options.seed, limit: options.limit ?? null, sampleDigest: digest0, ids: sampled.map((s) => s.id) });
   // Flush after every row: a multi-hour materialization that is interrupted
@@ -342,6 +367,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     if (reused && !reused.error) {
       stats.reused += 1;
       if (reused.material?.cache) stats.repos.add(reused.material.cache);
+      if (isDegradedDiffBase(reused)) stats.degradedRows += 1;
       rows.push(reused);
       continue;
     }
@@ -358,22 +384,29 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       if (ensureFetched(repoDir, head, { timeoutMs: options.timeoutMs }).fetched) stats.fetched += 1;
       const key = `${nwo}|${base}|${head}`;
       stage = "merge-base";
-      let diffBase = cache[key] ?? undefined;
-      let diffBaseKind = cache[`${key}|kind`];
+      // Only a resolved merge base is reusable (F-181): a failed lookup must
+      // not pin the degraded base-tip pair for every later run, and --force
+      // deliberately re-resolves instead of reusing the cache.
+      let diffBase = options.force ? undefined : cachedMergeBase(cache, key);
+      let diffBaseKind = diffBase === undefined ? undefined : "merge-base";
       if (diffBase === undefined) {
         const resolved = await resolveMergeBase(nwo, base, head, { env });
         diffBase = resolved.sha ?? base;
         diffBaseKind = resolved.sha ? "merge-base" : "base-tip";
-        if (!resolved.sha) { stats.mergeBaseFailures += 1; console.error(`${label} WARN merge base unavailable (${resolved.error ?? "unknown"}); using base tip${base}`); }
-        cache[key] = diffBase;
-        cache[`${key}|kind`] = diffBaseKind;
-        mkdirSync(options.cache, { recursive: true });
-        writeFileSync(mergeBaseCache, JSON.stringify(cache, null, 2) + "\n");
+        if (resolved.sha) {
+          rememberMergeBase(cache, key, resolved.sha);
+          mkdirSync(options.cache, { recursive: true });
+          writeFileSync(mergeBaseCache, JSON.stringify(cache, null, 2) + "\n");
+        } else {
+          stats.mergeBaseFailures += 1;
+          console.error(`${label} WARN merge base unavailable (${resolved.error ?? "unknown"}); using base tip ${base} for this row only (not cached)`);
+        }
       }
       stage = "fetch-diff-base";
       ensureFetched(repoDir, diffBase, { timeoutMs: options.timeoutMs });
       stage = "diff";
       const row = materializeComment({ sampled: entry, repoDir, head, diffBase, diffBaseKind: diffBaseKind ?? "merge-base", cacheRoot: options.cache, gitOptions: { maxBytes: MAX_DIFF_BYTES } });
+      if (isDegradedDiffBase(row)) stats.degradedRows += 1;
       rows.push(row);
       flush();
       console.error(`${label} ${nwo}#${prNumber} ${entry.record.path} diff=${row.material.diffBytes}B inDiff=${row.material.pathInDiff} headFile=${row.material.headFileBytes}B${row.material.headFileMissing ? " MISSING" : ""}`);
@@ -391,6 +424,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const summary = {
     out: options.out, cache: options.cache, sample: { seed: options.seed, limit: options.limit ?? null, digest, size: sampled.length },
     rows: rows.length, errorRows: stats.errors, reused: stats.reused, fetchedCommits: stats.fetched, mergeBaseFailures: stats.mergeBaseFailures,
+    degradedDiffBases: stats.degradedRows,
     repos: stats.repos.size, cacheBytes,
   };
   console.log(options.json ? JSON.stringify(summary) : JSON.stringify(summary, null, 2));
