@@ -77,7 +77,7 @@ export interface FindingView {
   status: string;
   featureKey: string | null;
   entityKey: string | null;
-  anchors: Array<{ path: string; startLine: number; endLine?: number }>;
+  anchors: Array<{ path: string; startLine: number; endLine?: number; excerpt?: string; lineCorrected?: boolean; originalStartLine?: number; originalEndLine?: number }>;
   evidence: Array<{ kind: string; path?: string; startLine?: number; excerpt?: string; description?: string }>;
   memoryMatches: unknown[];
   verifierRationale: string | null;

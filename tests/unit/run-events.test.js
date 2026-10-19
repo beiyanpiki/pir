@@ -209,3 +209,29 @@ test("session starts expose only the transcript basename, including factory fail
     unsubscribe();
   }
 });
+
+test("line-corrected events carry both ranges on the emitting session (B2)", () => {
+  const received = [];
+  const sink = createRunEventSink("run-b2", "project-1");
+  const unsubscribe = onRunEvent((event) => received.push(event));
+  try {
+    const session = sink.session({ sessionKind: "reviewer", role: "code reviewer", round: 1 });
+    session.sessionStarted("prompt");
+    session.lineCorrected({ displayId: "F-101", path: "src/total.ts", originalStartLine: 4, originalEndLine: 6, startLine: 10, endLine: 12 });
+    session.lineCorrected({ displayId: "F-101", path: "src/total.ts", originalStartLine: 30, startLine: 8 });
+
+    const events = received.filter((event) => event.kind === "line-corrected");
+    assert.equal(events.length, 2);
+    assert.match(events[0].sessionId, /^reviewer-1-/);
+    assert.equal(events[0].displayId, "F-101");
+    assert.equal(events[0].path, "src/total.ts");
+    assert.equal(events[0].originalStartLine, 4);
+    assert.equal(events[0].originalEndLine, 6);
+    assert.equal(events[0].startLine, 10);
+    assert.equal(events[0].endLine, 12);
+    assert.ok(events[1].seq > events[0].seq, "sequence numbers increase");
+    assert.ok(!("endLine" in events[1]) && !("originalEndLine" in events[1]), "single-line corrections omit the ends");
+  } finally {
+    unsubscribe();
+  }
+});

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { reviewerPrompt, verifierPrompt, auditVerifierPrompt, doNotReportLines, FINDER_ANGLES, resolveAngleIds } from "../../dist/agents/prompts.js";
+import { reviewerPrompt, verifierPrompt, auditReviewerPrompt, auditVerifierPrompt, doNotReportLines, FINDER_ANGLES, resolveAngleIds } from "../../dist/agents/prompts.js";
 import { runReviewerRound, ReviewerRoundError } from "../../dist/agents/reviewer.js";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { runVerifier } from "../../dist/agents/verifier.js";
@@ -333,4 +333,44 @@ test("angle prompt states the shared reporting cap across parallel sessions (dog
   assert.ok(!solo.includes("parallel specialized sessions"));
   const shared = reviewerPrompt({ ...base, fanoutSize: 3 });
   assert.match(shared, /You are one of 3 parallel specialized sessions; the reporting cap is shared across all of them/);
+});
+
+test("reviewer prompt requests a verbatim anchor excerpt and demotes line numbers (B2)", () => {
+  const prompt = reviewerPrompt(changeFullInput);
+  assert.ok(prompt.includes("that anchor's excerpt field"), "names the anchor excerpt field");
+  assert.ok(prompt.includes("copy a few verbatim lines from the pinned head side of the changed file"), "asks for the verbatim snippet");
+  assert.ok(prompt.includes("line numbers are a fallback only"), "line numbers become a fallback");
+  assert.ok(prompt.includes("does not match the pinned file exactly once is rejected"), "unique-match rule stated");
+  // Audit mode is a separate adoption decision: its prompt is untouched in B2.
+  const audit = auditReviewerPrompt({
+    head: "head-sha", unitId: "unit-1", module: "src", attempt: 1, maxAttempts: 2,
+    owned: [{ path: "counter.ts", startLine: 1, endLine: 10 }], unitsTotal: 2, unitsRemaining: 2,
+    maxFindings: 5, findingsRemaining: 5, focus: [], memoryPack: "pack", structuralQueries: false,
+  });
+  assert.ok(!audit.includes("excerpt field"));
+});
+
+test("reviewer forwards excerpt-driven anchor corrections to the session emitter (B2)", async () => {
+  const evidence = evidenceCtx();
+  try {
+    const corrections = [];
+    const f = factory(async (tool) => {
+      const recorded = await tool("record_candidate").execute({
+        ...candidate,
+        anchors: [{ path: "counter.ts", startLine: 7, excerpt: "export const next = (n: number) => n + 1;" }],
+      });
+      assert.match(recorded.text, /Recorded candidate F-201/);
+      await tool("finish_round").execute({ summary: "Recorded the corrected anchor", nextFocus: [], needsMoreRounds: false });
+    });
+    const emitter = { sessionStarted() {}, sdkEvent() {}, sessionEnded() {}, lineCorrected: (correction) => corrections.push(correction) };
+    const result = await runReviewerRound({ ...reviewerDeps(f), ctx: evidence.ctx, onSessionEvent: emitter });
+    assert.equal(result.candidates.length, 1);
+    assert.deepEqual(result.candidates[0].anchors, [{
+      path: "counter.ts", startLine: 1, excerpt: "export const next = (n: number) => n + 1;",
+      lineCorrected: true, originalStartLine: 7,
+    }]);
+    assert.deepEqual(corrections, [{ displayId: "F-201", path: "counter.ts", originalStartLine: 7, startLine: 1 }]);
+  } finally {
+    evidence.repo.cleanup();
+  }
 });

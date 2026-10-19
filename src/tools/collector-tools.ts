@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { buildIdentity } from "../findings/identity.js";
-import { FINDING_CATEGORIES, type CandidateFinding, type DecisionAssessment, type VerifierResult } from "../findings/types.js";
+import { FINDING_CATEGORIES, type AnchorLineCorrection, type CandidateFinding, type DecisionAssessment, type VerifierResult } from "../findings/types.js";
+import { locateSnippetExcerpt } from "../findings/snippet-locate.js";
 import type { ReviewTool } from "../agents/types.js";
 import { matchIssueHistory } from "../memory/retrieval.js";
 import { readReviewFile, safeResolve, type ToolContext } from "./context.js";
@@ -31,13 +32,34 @@ function member<T extends string>(value: unknown, values: readonly T[], label: s
 
 const errorOutput = (error: unknown) => ({ text: `ERROR: ${error instanceof Error ? error.message : String(error)}` });
 
-export interface CandidateCollector { candidates: CandidateFinding[] }
+/** An anchor excerpt is a snippet, not a paste of the whole file. */
+const MAX_ANCHOR_EXCERPT = 4000;
+
+export interface CandidateCollector {
+  candidates: CandidateFinding[];
+  /**
+   * Optional tap for the `line-corrected` observability event (roadmap B2).
+   * Fired once per anchor whose excerpt located locally, and only after the
+   * whole candidate validated — a rejected submission never reports one.
+   */
+  onLineCorrected?: (correction: AnchorLineCorrection) => void;
+}
+
+/** Anchor location resolution: the pinned path plus the range to use. */
+interface ResolvedLocation {
+  path: string | undefined;
+  startLine?: number;
+  endLine?: number;
+  excerpt?: string;
+  /** Present when an excerpt's unique match overrode the model's range. */
+  correction?: { originalStartLine: number; originalEndLine?: number };
+}
 
 export function createRecordCandidateTool(ctx: ToolContext, collector: CandidateCollector, round: number): ReviewTool {
   let seq = 0;
   return {
     name: "record_candidate",
-    description: "Record one distinct, grounded defect. Severity is impact, not confidence. Locations use pinned head lines; ONLY entirely deleted files fall back to merge-base lines, documented in evidence. Unchanged relevant files are valid anchors.",
+    description: "Record one distinct, grounded defect. Severity is impact, not confidence. Locations use pinned head lines; ONLY entirely deleted files fall back to merge-base lines, documented in evidence. Unchanged relevant files are valid anchors. An optional anchor excerpt (a few verbatim lines from the pinned file) re-locates that anchor locally and overrides its line numbers; an excerpt that does not match exactly once is rejected.",
     promptSnippet: "record_candidate: submit a grounded candidate finding",
     parameters: Type.Object({
       title: Type.String({ minLength: 1, maxLength: 80 }),
@@ -46,6 +68,7 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
       featureKey: Type.Optional(nonemptySchema()), entityKey: Type.Optional(nonemptySchema()),
       anchors: Type.Array(Type.Object({
         path: nonemptySchema(), startLine: Type.Integer({ minimum: 1 }), endLine: Type.Optional(Type.Integer({ minimum: 1 })),
+        excerpt: Type.Optional(nonemptySchema()),
       }), { minItems: 1 }),
       evidence: Type.Array(Type.Object({
         kind: enumSchema(EVIDENCE_KINDS), path: Type.Optional(nonemptySchema()),
@@ -55,6 +78,9 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
     }),
     async execute(params) {
       try {
+        // Assigned before validation so an excerpt correction can be reported
+        // under the id this candidate will get; seq only advances on success.
+        const displayId = `F-${round}${String(seq + 1).padStart(2, "0")}`;
         const title = text(params.title, "title", 80);
         const claim = text(params.claim, "claim");
         const trigger = text(params.trigger, "trigger");
@@ -66,10 +92,10 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
         if (!Array.isArray(params.evidence) || !params.evidence.length) throw new Error("evidence must be a nonempty array.");
         const snapshots = new Map<string, Awaited<ReturnType<typeof readReviewFile>>>();
         const deleted = new Map<string, string>();
-        async function validateLocation(location: Record<string, unknown>, required: boolean): Promise<string | undefined> {
+        async function validateLocation(location: Record<string, unknown>, required: boolean, locateExcerpt = false): Promise<ResolvedLocation> {
           if (location.path === undefined) {
             if (required || location.startLine !== undefined || location.endLine !== undefined) throw new Error("A repository-relative path is required for line locations.");
-            return undefined;
+            return { path: undefined };
           }
           const rel = text(location.path, "path", 4096);
           if (rel !== location.path || rel.includes("\\") || !safeResolve(ctx.repoRoot, rel)) throw new Error("path must be repository-relative without traversal.");
@@ -85,22 +111,60 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           }
           const start = location.startLine;
           const end = location.endLine;
+          const excerpt = locateExcerpt && location.excerpt !== undefined ? text(location.excerpt, "excerpt", MAX_ANCHOR_EXCERPT) : undefined;
           if (required || start !== undefined || end !== undefined) {
             if (!Number.isSafeInteger(start) || (start as number) < 1 || (end !== undefined && (!Number.isSafeInteger(end) || (end as number) < (start as number)))) {
               throw new Error("Line ranges require positive integer startLine and endLine >= startLine.");
+            }
+            if (excerpt !== undefined) {
+              // B2: the excerpt decides the range. The model's numbers are a
+              // hint (kept as original*), so they are deliberately NOT
+              // bounds-checked against the file: drift may push them past EOF.
+              const match = locateSnippetExcerpt(snapshot.content!, excerpt);
+              if (match.kind === "none") throw new Error(`Anchor excerpt was not found in ${rel} at ${snapshot.revision}: copy the snippet verbatim from the pinned file, or omit excerpt to use the supplied line numbers.`);
+              if (match.kind === "ambiguous") throw new Error(`Anchor excerpt matches ${match.occurrences} locations in ${rel} at ${snapshot.revision}: include more surrounding lines so the snippet is unique, or omit excerpt to use the supplied line numbers.`);
+              if (snapshot.revision === "merge-base") deleted.set(snapshot.path, snapshot.commit);
+              return {
+                path: snapshot.path,
+                startLine: match.startLine,
+                ...(match.endLine === match.startLine ? {} : { endLine: match.endLine }),
+                excerpt,
+                correction: { originalStartLine: start as number, ...(end === undefined ? {} : { originalEndLine: end as number }) },
+              };
             }
             const content = snapshot.content!;
             const count = content.length === 0 ? 0 : content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
             if ((end ?? start) as number > count) throw new Error(`Line range exceeds ${snapshot.revision} file length (${count}): ${rel}`);
           }
           if (snapshot.revision === "merge-base") deleted.set(snapshot.path, snapshot.commit);
-          return snapshot.path;
+          return { path: snapshot.path, startLine: start as number | undefined, endLine: end as number | undefined, ...(excerpt === undefined ? {} : { excerpt }) };
         }
         const anchors: CandidateFinding["anchors"] = [];
+        const corrections: AnchorLineCorrection[] = [];
         for (const raw of params.anchors) {
           if (!object(raw)) throw new Error("Each anchor must be an object.");
-          const path = (await validateLocation(raw, true))!;
-          anchors.push({ path, startLine: raw.startLine as number, ...(raw.endLine === undefined ? {} : { endLine: raw.endLine as number }) });
+          const resolved = await validateLocation(raw, true, true);
+          anchors.push({
+            path: resolved.path!,
+            startLine: resolved.startLine!,
+            ...(resolved.endLine === undefined ? {} : { endLine: resolved.endLine }),
+            ...(resolved.excerpt === undefined ? {} : { excerpt: resolved.excerpt }),
+            ...(resolved.correction === undefined ? {} : {
+              lineCorrected: true,
+              originalStartLine: resolved.correction.originalStartLine,
+              ...(resolved.correction.originalEndLine === undefined ? {} : { originalEndLine: resolved.correction.originalEndLine }),
+            }),
+          });
+          if (resolved.correction) {
+            corrections.push({
+              displayId,
+              path: resolved.path!,
+              originalStartLine: resolved.correction.originalStartLine,
+              ...(resolved.correction.originalEndLine === undefined ? {} : { originalEndLine: resolved.correction.originalEndLine }),
+              startLine: resolved.startLine!,
+              ...(resolved.endLine === undefined ? {} : { endLine: resolved.endLine }),
+            });
+          }
         }
         const evidence: CandidateFinding["evidence"] = [];
         for (const raw of params.evidence) {
@@ -109,18 +173,18 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           const excerpt = raw.excerpt === undefined ? undefined : text(raw.excerpt, "evidence.excerpt");
           const description = raw.description === undefined ? undefined : text(raw.description, "evidence.description");
           if (!excerpt && !description) throw new Error("Evidence requires a useful excerpt or description.");
-          const path = await validateLocation(raw, false);
+          const { path } = await validateLocation(raw, false);
           evidence.push({ kind, path, excerpt, description, startLine: raw.startLine as number | undefined, endLine: raw.endLine as number | undefined });
         }
         // SourceAnchor stays compatible: an explicit evidence note records the
         // only permitted old-side fallback, for files entirely absent at head.
         for (const [path, commit] of deleted) evidence.push({ kind: "diff", path, description: `Entirely deleted file: locations for ${path} use merge-base ${commit}, not head.` });
-        const displayId = `F-${round}${String(seq + 1).padStart(2, "0")}`;
         const candidate: CandidateFinding = {
           displayId, title, claim, trigger, category, severity, featureKey, entityKey, anchors, evidence, round,
           identity: buildIdentity({ featureKey, entityKey, category, claim, trigger }),
         };
         collector.candidates.push(candidate);
+        for (const correction of corrections) collector.onLineCorrected?.(correction);
         seq += 1;
         return { text: `Recorded candidate ${displayId}: ${title}` };
       } catch (error) { return errorOutput(error); }

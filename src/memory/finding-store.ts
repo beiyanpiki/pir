@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { parseJsonArray, parseJsonObject } from "../core/types.js";
+import { parseJsonArray, parseJsonObject, type SourceAnchor } from "../core/types.js";
 import type { FindingEvidence, MemoryMatch, VerifiedFinding } from "../findings/types.js";
 import type { SqliteStore } from "./sqlite-store.js";
 
@@ -305,9 +305,9 @@ export class FindingStore {
     }));
   }
 
-  anchors(row: FindingRow): Array<{ path: string; startLine: number; endLine?: number }> {
+  anchors(row: FindingRow): SourceAnchor[] {
     return parseJsonArray(row.anchors).length > 0
-      ? (parseJsonObject<Array<{ path: string; startLine: number; endLine?: number }>>(row.anchors) ?? [])
+      ? (parseJsonObject<SourceAnchor[]>(row.anchors) ?? [])
       : [];
   }
 

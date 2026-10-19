@@ -174,3 +174,132 @@ test("issue-memory lookup uses claim matching and preserves IDs, triggers and st
   assert.ok(!(await tool.execute({ claim: "unrelated graphics polygon rendering" })).text.includes("issue-7"));
   assert.match((await tool.execute({})).text, /^ERROR:/);
 });
+// ---------------------------------------------------------------------------
+// B2: snippet-anchored location correction
+// ---------------------------------------------------------------------------
+
+/**
+ * 25-line head file with a distinctive 3-line target block at lines 10-12 and
+ * one line (3 and 20) repeated twice so excerpt ambiguity is real.
+ */
+function driftFixture() {
+  const repo = createTempGitRepo("pir-drift-");
+  const lines = Array.from({ length: 25 }, (_, index) => `const filler${index + 1} = ${index + 1};`);
+  lines[2] = "const duplicate = true;";
+  lines[19] = "const duplicate = true;";
+  lines[9] = "function computeTotal(items) {";
+  lines[10] = "  const total = items.reduce((sum, item) => sum + item.price, 1);";
+  lines[11] = "  return total * rate;";
+  repo.write("src/total.ts", `${lines.join("\n")}\n`);
+  const base = repo.commit("drift baseline");
+  lines[10] = "  const total = items.reduce((sum, item) => sum + item.price, 0);";
+  repo.write("src/total.ts", `${lines.join("\n")}\n`);
+  const head = repo.commit("drift changed snapshot");
+  const ctx = { repoRoot: repo.dir, headCommit: head, changeSet: { base, head, baseCommit: base, headCommit: head, mergeBase: base, files: [{ path: "src/total.ts", status: "modified" }], patch: "" }, codeMap: { structuralQueries: false }, memory: null };
+  return {
+    repo, ctx,
+    target: { path: "src/total.ts", startLine: 10, endLine: 12 },
+    excerpt: ["function computeTotal(items) {", "  const total = items.reduce((sum, item) => sum + item.price, 0);", "  return total * rate;"].join("\n"),
+    cleanup: () => repo.cleanup(),
+  };
+}
+
+function driftCandidate(drift, excerpt) {
+  return {
+    title: "Rate applied too late",
+    claim: "The running total ignores the per-item rate",
+    trigger: "Calling computeTotal once",
+    category: "correctness",
+    severity: "P1",
+    anchors: [{ path: "src/total.ts", startLine: 10 + drift, endLine: 12 + drift, ...(excerpt === undefined ? {} : { excerpt }) }],
+    evidence: [{ kind: "code", path: "src/total.ts", startLine: 11, excerpt: "sum + item.price" }],
+  };
+}
+
+test("excerpt locate corrects ±5-line drift on every fixture and keeps the original range (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 1);
+    const drifts = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
+    let corrected = 0;
+    for (const drift of drifts) {
+      const output = await tool.execute(driftCandidate(drift, f.excerpt));
+      assert.ok(!output.text.startsWith("ERROR"), `drift ${drift}: ${output.text}`);
+      const anchor = collector.candidates.at(-1).anchors[0];
+      assert.equal(anchor.startLine, f.target.startLine, `drift ${drift}`);
+      assert.equal(anchor.endLine, f.target.endLine, `drift ${drift}`);
+      assert.equal(anchor.lineCorrected, true, `drift ${drift}`);
+      assert.equal(anchor.originalStartLine, f.target.startLine + drift, `drift ${drift}`);
+      assert.equal(anchor.originalEndLine, f.target.endLine + drift, `drift ${drift}`);
+      assert.equal(anchor.excerpt, f.excerpt, `drift ${drift}`);
+      if (anchor.lineCorrected) corrected += 1;
+    }
+    // A1: correction success rate over the ±5-line drift fixtures (11/11).
+    assert.equal(`${corrected}/${drifts.length}`, "11/11");
+    assert.equal(corrections.length, drifts.length);
+    assert.deepEqual(corrections[0], {
+      displayId: "F-101", path: "src/total.ts",
+      originalStartLine: 5, originalEndLine: 7, startLine: 10, endLine: 12,
+    });
+
+    // Drift past EOF is still corrected: a present excerpt decides the range,
+    // so the model's numbers are kept as original* without a bounds check.
+    const far = await tool.execute(driftCandidate(20, f.excerpt));
+    assert.ok(!far.text.startsWith("ERROR"), far.text);
+    const farAnchor = collector.candidates.at(-1).anchors[0];
+    assert.deepEqual([farAnchor.startLine, farAnchor.endLine, farAnchor.originalStartLine], [10, 12, 30]);
+
+    // A single-line excerpt collapses to startLine with no endLine/originalEndLine.
+    const single = await tool.execute({ ...driftCandidate(4, undefined), anchors: [{ path: f.target.path, startLine: 16, excerpt: "  return total * rate;" }] });
+    assert.ok(!single.text.startsWith("ERROR"), single.text);
+    const singleAnchor = collector.candidates.at(-1).anchors[0];
+    assert.deepEqual(Object.keys(singleAnchor), ["path", "startLine", "excerpt", "lineCorrected", "originalStartLine"]);
+    assert.equal(singleAnchor.startLine, 12);
+    assert.equal(singleAnchor.originalStartLine, 16);
+  } finally { f.cleanup(); }
+});
+
+test("an unlocatable excerpt is a tool-boundary error: zero hits, multiple hits, no partial record (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 2);
+
+    const none = await tool.execute(driftCandidate(0, "const nowhere = true;"));
+    assert.match(none.text, /^ERROR:/);
+    assert.match(none.text, /was not found in src\/total\.ts/);
+    const multiple = await tool.execute(driftCandidate(0, "const duplicate = true;"));
+    assert.match(multiple.text, /^ERROR:/);
+    assert.match(multiple.text, /matches 2 locations in src\/total\.ts/);
+
+    // One bad anchor rejects the whole candidate, even when a later anchor
+    // would have located (and even though the first never mutated anything).
+    const mixed = await tool.execute({
+      ...driftCandidate(0, f.excerpt),
+      anchors: [{ path: f.target.path, startLine: 10, endLine: 12, excerpt: "const nowhere = true;" }, { path: f.target.path, startLine: 10, endLine: 12, excerpt: f.excerpt }],
+    });
+    assert.match(mixed.text, /^ERROR:/);
+    assert.deepEqual(collector.candidates, []);
+    assert.deepEqual(corrections, [], "a rejected submission reports no correction");
+  } finally { f.cleanup(); }
+});
+
+test("no-excerpt anchors are byte-identical: output, anchor keys and events (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 3);
+    const output = await tool.execute(driftCandidate(0, undefined));
+    assert.equal(output.text, "Recorded candidate F-301: Rate applied too late");
+    assert.equal(output.terminate, undefined);
+    const candidate = collector.candidates[0];
+    // Pre-B2 anchor shape: same keys, same order, same JSON.
+    assert.deepEqual(Object.keys(candidate.anchors[0]), ["path", "startLine", "endLine"]);
+    assert.equal(JSON.stringify(candidate.anchors), '[{"path":"src/total.ts","startLine":10,"endLine":12}]');
+    assert.deepEqual(corrections, []);
+  } finally { f.cleanup(); }
+});

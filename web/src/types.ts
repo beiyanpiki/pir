@@ -81,7 +81,7 @@ export interface FindingView {
   status: string;
   featureKey: string | null;
   entityKey: string | null;
-  anchors: Array<{ path: string; startLine: number; endLine?: number }>;
+  anchors: Array<{ path: string; startLine: number; endLine?: number; excerpt?: string; lineCorrected?: boolean; originalStartLine?: number; originalEndLine?: number }>;
   evidence: FindingEvidence[];
   memoryMatches: unknown[];
   verifierRationale: string | null;
@@ -265,6 +265,16 @@ export type RunEvent =
   | (RunEventCommon & { kind: "session-block"; sessionId: string; block: SessionBlock })
   | (RunEventCommon & { kind: "session-tool-result"; sessionId: string; toolCallId: string; name: string; isError: boolean; result: string; truncated: boolean })
   | (RunEventCommon & { kind: "session-end"; sessionId: string; error?: string; usage?: SessionUsage })
+  | (RunEventCommon & {
+      kind: "line-corrected";
+      sessionId: string;
+      displayId: string;
+      path: string;
+      originalStartLine: number;
+      originalEndLine?: number;
+      startLine: number;
+      endLine?: number;
+    })
   | (RunEventCommon & {
       kind: "run-end";
       status: string;
