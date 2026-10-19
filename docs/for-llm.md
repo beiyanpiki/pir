@@ -212,7 +212,7 @@ Limits:
 | --- | --- |
 | `--max-findings N` | `10`; confirmed plus uncertain reports; ceiling, not target |
 | `--max-rounds N` | `2` for `find`; includes verification-only rounds |
-| `--max-tokens N` | unlimited unless set; checked between sessions |
+| `--max-tokens N` | `find`: default ceilings of 1.2M reviewer + 0.8M verifier prompt-side (input) tokens when the flag is absent — a hit starts no new reviewer round but still drains the pending verification backlog, and the stop is recorded in `stoppedBecause`/`budgetStop` with `incomplete` computed as usual; a numeric `N` replaces the defaults with one hard whole-run ceiling in measured total tokens (it also refuses new verifier admissions mid-drain, leaving pending candidates unverified); `unlimited` removes every token ceiling (the B3 opt-out). `audit`: unlimited unless set. All ceilings are checked between sessions |
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
 | `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |

@@ -193,7 +193,13 @@ removes the cap entirely (#57, needs a same-version server remotely). JSON
 results carry `run.maxFindings` (`null` when unlimited) plus an explicit
 `run.maxFindingsMode` of `capped` or `unlimited`. `--max-rounds` applies to
 change reviews; audits are bounded by work units and the optional
-`--max-tokens` budget. Reviews have no token ceiling unless one is set.
+`--max-tokens` budget, with no default token ceiling. `find` defaults to
+1.2M reviewer + 0.8M verifier input tokens (ADR 0006): hitting a ceiling
+starts no new reviewer round but still verifies everything already found,
+then reports the stop in `stoppedBecause` and leaves the usual
+`incomplete` (exit 3 under `--fail-on`). `--max-tokens N` replaces the
+defaults with one explicit whole-run ceiling and `--max-tokens unlimited`
+removes every token ceiling.
 `--plugins auto` is the default; use `--plugins none` or a comma separated
 list of built-in packs to override detection. The shipped Frontend, Go and
 TypeScript packs support both modes; the frontend pack auto-activates on

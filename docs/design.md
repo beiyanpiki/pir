@@ -85,7 +85,9 @@ The planner groups files by module, using exact snapshot line counts. The
 current planner allows up to five owned ranges and 1,200 lines per unit;
 files over 800 lines are divided into 500-line chunks. These are scheduling
 limits, not separate model token budgets. One run-wide budget, finding limit,
-and deduplication state span every unit.
+and deduplication state span every unit; the audit budget is unlimited
+unless `--max-tokens` is set, while `find` applies the default ceilings of
+ADR 0006.
 
 `pir audit --dry-run` (#56) runs the same snapshot and planner and reports
 head/tree ids, per-selection and per-classification counts, and the planned
