@@ -304,6 +304,15 @@ export function selectChangeFile(file: FilterableFile, options: ChangeFilterOpti
 }
 
 /**
+ * Decisions for every file, in change-set order — the run's gate
+ * (`applyChangeFilter`) and the `find --preview` readout both start here, so
+ * what is previewed is what gets reviewed by construction.
+ */
+export function selectChangeFiles(files: FilterableFile[], options: ChangeFilterOptions = {}): ChangeFileDecision[] {
+  return files.map((file) => selectChangeFile(file, options));
+}
+
+/**
  * Apply the change-mode gate to a built change set. Excluded files keep every
  * metadata field (path/status/churn/language) but lose their hunks, so no code
  * path — `get_change`, the coverage ledger, or any future consumer of the
@@ -311,9 +320,10 @@ export function selectChangeFile(file: FilterableFile, options: ChangeFilterOpti
  * excluded is returned unchanged.
  */
 export function applyChangeFilter(changeSet: ChangeSet, options: ChangeFilterOptions = {}): ChangeSet {
+  const decisions = selectChangeFiles(changeSet.files, options);
   let excluded = 0;
-  const files = changeSet.files.map((file) => {
-    const decision = selectChangeFile(file, options);
+  const files = changeSet.files.map((file, index) => {
+    const decision = decisions[index]!;
     if (decision.selected) return file;
     excluded += 1;
     return { ...file, hunks: [], excluded: true, excludedReason: decision.reason! };
