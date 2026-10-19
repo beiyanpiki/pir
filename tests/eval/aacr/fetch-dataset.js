@@ -52,6 +52,10 @@ export function validateRecords(records) {
       if (!(field in (row ?? {}))) missing.set(field, (missing.get(field) ?? 0) + 1);
     }
     if (row?.label !== 0 && row?.label !== 1) throw new Error(`record ${index}: label must be 0 or 1`);
+    // The mapping layer cannot anchor a LEFT-side comment (old-file lines), so
+    // the vocabulary is validated here and the sampler excludes it loudly
+    // (dogfood F-187) instead of trusting an unknown value through.
+    if (row?.side !== "left" && row?.side !== "right") throw new Error(`record ${index}: side must be "left" or "right"`);
   });
   if (missing.size > 0) throw new Error(`dataset.json records are missing fields: ${[...missing].map(([f, n]) => `${f}×${n}`).join(", ")}`);
   return records;

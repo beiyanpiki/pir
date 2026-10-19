@@ -113,6 +113,10 @@ export function parseTask(json: unknown): VerifyCommentTask {
   if (!Number.isInteger(comment.from_line) || comment.from_line < 1) fail("comment.from_line must be a positive integer");
   if (!Number.isInteger(comment.to_line) || comment.to_line < comment.from_line) fail("comment.to_line must be an integer >= from_line");
   if (typeof comment.note !== "string" || comment.note.trim() === "") fail("comment.note is required");
+  // F-187: anchors are head-file lines. A LEFT-side comment's numbers refer to
+  // the old file, so the sampler never emits one; refuse it loudly if it
+  // arrives anyway rather than scoring a mis-anchored row.
+  if (comment.side !== "right") fail('comment.side must be "right" (LEFT-side comments anchor to old-file lines and are excluded from M0)');
   const material = task.material;
   if (!material || typeof material !== "object") fail("material is required");
   if (!/^[0-9a-f]{40}$/.test(String(material.head ?? ""))) fail("material.head must be a 40-char hex sha");

@@ -50,6 +50,9 @@ test("parseTask validates every field the mapping depends on", () => {
   assert.throws(() => parseTask({ ...task(), comment: { ...task().comment, from_line: 0 } }), /from_line must be a positive integer/);
   assert.throws(() => parseTask({ ...task(), comment: { ...task().comment, to_line: 1 } }), /to_line must be an integer/);
   assert.throws(() => parseTask({ ...task(), comment: { ...task().comment, note: "  " } }), /comment\.note is required/);
+  // F-187: anchors are head-file lines; only the right side is representable.
+  assert.throws(() => parseTask({ ...task(), comment: { ...task().comment, side: "left" } }), /comment\.side must be "right"/);
+  assert.throws(() => parseTask({ ...task(), comment: { ...task().comment, side: undefined } }), /comment\.side must be "right"/);
   assert.throws(() => parseTask({ ...task(), material: { ...task().material, head: "nope" } }), /material\.head must be a 40-char hex sha/);
   assert.throws(() => parseTask({ ...task(), material: { ...task().material, diff: null } }), /material\.diff must be a string/);
   assert.equal(parseTask({ ...task(), material: { ...task().material, diffBaseKind: undefined } }).material.diffBaseKind, "unknown");

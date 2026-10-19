@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { commentId, mulberry32, sampleDigest, sampleRecords } from "../eval/aacr/sample.js";
+import { commentId, isHeadAnchorable, mulberry32, sampleDigest, sampleRecords, sideExclusionCount } from "../eval/aacr/sample.js";
 import { citationNotice, datasetHeader, loadMeta, parseOptions as fetchOptions, verifyPin, validateRecords } from "../eval/aacr/fetch-dataset.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +40,28 @@ test("commentId is stable, distinct per comment, and index-prefixed", () => {
   assert.notEqual(commentId(3, { ...first, note: "different" }), id);
   assert.notEqual(commentId(3, { ...first, path: "other.ts" }), id);
   assert.notEqual(commentId(3, { ...first, label: 0 }), id);
+});
+
+test("M0 dogfood F-187: sampleRecords skips LEFT-side comments and keeps dataset indices", () => {
+  const records = [
+    record({ side: "left", path: "src/old.ts" }),
+    record({ path: "src/a.ts" }), record({ path: "src/b.ts" }), record({ path: "src/c.ts" }),
+  ];
+  const sample = sampleRecords(records, { limit: 3, seed: 7 });
+  assert.equal(sample.length, 3);
+  assert.ok(sample.every((entry) => entry.record.side === "right"));
+  assert.deepEqual(sample.map((entry) => entry.index).sort((a, b) => a - b), [1, 2, 3]);
+  // Ids keep the dataset's own index, so a LEFT row never shifts another row's id.
+  assert.equal(sample.find((entry) => entry.record.path === "src/a.ts").id, commentId(1, records[1]));
+  assert.equal(sideExclusionCount(records), 1);
+  assert.equal(isHeadAnchorable(records[0]), false);
+  assert.equal(isHeadAnchorable(records[1]), true);
+  assert.throws(() => sampleRecords(records, { limit: 4, seed: 7 }), /head-anchorable dataset size/);
+});
+
+test("M0 dogfood F-187: validateRecords rejects an unknown side value", () => {
+  assert.throws(() => validateRecords([record({ side: "middle" })]), /side must be "left" or "right"/);
+  assert.doesNotThrow(() => validateRecords([record({ side: "left" })]));
 });
 
 test("sampleRecords is reproducible from (dataset, seed, limit) and never repeats", () => {

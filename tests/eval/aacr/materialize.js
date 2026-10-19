@@ -28,7 +28,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { citationNotice, loadMeta, validateRecords, DEFAULT_META, DEFAULT_DATASET } from "./fetch-dataset.js";
-import { commentId, sampleDigest, sampleRecords } from "./sample.js";
+import { commentId, sampleDigest, sampleRecords, sideExclusionCount } from "./sample.js";
 
 const HERE = fileURLToPath(new URL("./", import.meta.url));
 export const DEFAULT_CACHE = process.env.PIR_AACR_CACHE ?? path.join(homedir(), ".cache", "pir-aacr");
@@ -315,12 +315,12 @@ export function writeMaterialized(file, header, rows) {
   writeFileSync(file, [JSON.stringify(header), ...rows.map((row) => JSON.stringify(row))].join("\n") + "\n");
 }
 
-export function headerRow(meta, actualSha256, { seed, limit, sampleDigest: digest, ids }) {
+export function headerRow(meta, actualSha256, { seed, limit, sampleDigest: digest, ids, sideExcluded = 0 }) {
   return {
     __meta__: "aacr-bench/m0-materialized/v1",
     dataset: { id: meta.dataset.id, url: meta.dataset.url, revision: meta.dataset.hfRevision, sha256: actualSha256, records: meta.dataset.records },
     citation: citationNotice(meta),
-    sample: { seed, limit: limit ?? null, eligible: ids.length, digest },
+    sample: { seed, limit: limit ?? null, eligible: ids.length, sideExcluded, digest },
     materialization: meta.materialization,
     createdAt: new Date().toISOString(),
   };
@@ -357,7 +357,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const rows = [];
   const stats = { total: sampled.length, fetched: 0, reused: 0, errors: 0, repos: new Set(), mergeBaseFailures: 0, degradedRows: 0 };
   const digest0 = sampleDigest(sampled);
-  const header0 = headerRow(meta, actualSha256, { seed: options.seed, limit: options.limit ?? null, sampleDigest: digest0, ids: sampled.map((s) => s.id) });
+  const sideExcluded = sideExclusionCount(records);
+  const header0 = headerRow(meta, actualSha256, { seed: options.seed, limit: options.limit ?? null, sampleDigest: digest0, ids: sampled.map((s) => s.id), sideExcluded });
   // Flush after every row: a multi-hour materialization that is interrupted
   // keeps everything already fetched, and --resume picks up where it stopped.
   const flush = () => writeMaterialized(options.out, header0, rows);
@@ -422,7 +423,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   writeMaterialized(options.out, header, rows);
   const cacheBytes = directoryBytes(options.cache);
   const summary = {
-    out: options.out, cache: options.cache, sample: { seed: options.seed, limit: options.limit ?? null, digest, size: sampled.length },
+    out: options.out, cache: options.cache, sample: { seed: options.seed, limit: options.limit ?? null, digest, size: sampled.length, sideExcluded },
     rows: rows.length, errorRows: stats.errors, reused: stats.reused, fetchedCommits: stats.fetched, mergeBaseFailures: stats.mergeBaseFailures,
     degradedDiffBases: stats.degradedRows,
     repos: stats.repos.size, cacheBytes,

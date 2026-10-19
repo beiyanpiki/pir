@@ -28,10 +28,29 @@ export function mulberry32(seed) {
 }
 
 /**
- * Reproducible sample over the dataset: Fisher-Yates with a seeded PRNG.
- * The output carries each record's original index and its comment id, so the
- * materialized JSONL, the run manifest and the results file can name exactly
- * which comments a number came from.
+ * A comment this benchmark can anchor: the mapping contract pins anchors to
+ * head-file lines, while a GitHub review comment on the deleted side (`side:
+ * "left"`) carries old-file line numbers no head anchor can express
+ * (dogfood F-187). LEFT rows are excluded from the sample and counted, never
+ * silently mapped to the wrong lines.
+ */
+export function isHeadAnchorable(record) {
+  return record?.side === "right";
+}
+
+/** Dataset rows the head-anchored mapping cannot represent (reported per run). */
+export function sideExclusionCount(records) {
+  return (records ?? []).filter((record) => !isHeadAnchorable(record)).length;
+}
+
+/**
+ * Reproducible sample over the head-anchorable dataset: Fisher-Yates with a
+ * seeded PRNG, LEFT-side records skipped while filling (their position in the
+ * shuffle is still consumed, so the right-side sample for an existing seed is
+ * unchanged unless a LEFT row previously occupied a slot). The output carries
+ * each record's original dataset index and its comment id, so the materialized
+ * JSONL, the run manifest and the results file can name exactly which comments
+ * a number came from.
  */
 export function sampleRecords(records, { limit, seed = 42 } = {}) {
   if (!Array.isArray(records)) throw new TypeError("records must be an array");
@@ -45,7 +64,14 @@ export function sampleRecords(records, { limit, seed = 42 } = {}) {
     const j = Math.floor(random() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  return order.slice(0, size).map((index) => ({ index, id: commentId(index, records[index]), record: records[index] }));
+  const picked = [];
+  for (const index of order) {
+    if (!isHeadAnchorable(records[index])) continue;
+    picked.push({ index, id: commentId(index, records[index]), record: records[index] });
+    if (picked.length === size) break;
+  }
+  if (picked.length < size) throw new Error(`limit ` + size + ` exceeds the head-anchorable dataset size ` + picked.length);
+  return picked;
 }
 
 /** Stable digest of the sampled id list — recorded in every run manifest. */
