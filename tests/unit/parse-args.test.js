@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseArgs, verifyConcurrencyFlag } from "../../dist/cli/executor.js";
+import { maxTokensFlag, parseArgs, verifyConcurrencyFlag } from "../../dist/cli/executor.js";
 
 test("parseArgs accepts --flag=value for value flags", () => {
   const { positional, flags } = parseArgs(["find", "--repo=demo", "--base=origin/main", "--json"]);
@@ -39,6 +39,25 @@ test("parseArgs parses --plugins in both forms", () => {
   assert.equal(flags.get("--plugins"), "golang,react");
   const eq = parseArgs(["find", "--plugins=none"]);
   assert.equal(eq.flags.get("--plugins"), "none");
+});
+
+test("maxTokensFlag (B3): positive integer, literal unlimited -> null, garbage rejected", () => {
+  assert.equal(maxTokensFlag(new Map()), undefined);
+  assert.equal(maxTokensFlag(new Map([["--max-tokens", "500000"]])), 500000);
+  assert.equal(maxTokensFlag(new Map([["--max-tokens", "unlimited"]])), null);
+  assert.equal(maxTokensFlag(new Map([["--max-tokens", "UNLIMITED"]])), null);
+  assert.equal(maxTokensFlag(new Map([["--max-tokens", " Unlimited "]])), null);
+  for (const bad of ["0", "-3", "1.5", "many", ""]) {
+    assert.throws(
+      () => maxTokensFlag(new Map([["--max-tokens", bad]])),
+      new RegExp(`invalid --max-tokens: ${bad} \\(positive integer or "unlimited" required\\)`),
+    );
+  }
+  // A valueless flag is a parse-level boolean; it must not silently mean 1.
+  assert.throws(() => maxTokensFlag(new Map([["--max-tokens", true]])), /invalid --max-tokens: a value is required/);
+  // End-to-end through the real parser: both spellings reach the helper.
+  assert.equal(maxTokensFlag(parseArgs(["find", "--max-tokens", "unlimited"]).flags), null);
+  assert.equal(maxTokensFlag(parseArgs(["find", "--max-tokens=250000"]).flags), 250000);
 });
 
 test("verifyConcurrencyFlag: flag > PIR_VERIFY_CONCURRENCY env > undefined", () => {

@@ -75,8 +75,14 @@ Usage:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    discovery/verification loop rounds (default 2)
-  --max-tokens <n>    optional session-boundary token budget; reviews run
-                      unbounded by default (rounds and findings still cap)
+  --max-tokens <n>    token ceiling for the run. Unset: the find defaults
+                      apply — 1.2M reviewer + 0.8M verifier input tokens
+                      (ADR 0006); hitting one starts no new reviewer round but
+                      still verifies every pending candidate, so a budget stop
+                      is a controlled truncation, not a lost run. A positive
+                      integer sets one explicit whole-run ceiling instead, and
+                      "unlimited" removes every token ceiling (rounds and
+                      findings still cap; remote needs a same-version server)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
                       out — nothing is padded to reach it. "unlimited"
@@ -124,7 +130,8 @@ Usage:
   --head <ref>        snapshot commit to audit (default: HEAD). The committed
                       tree only: uncommitted changes are never audited
   --max-tokens <n>    optional whole-run token budget across all units;
-                      unlimited unless set (rounds and findings still cap)
+                      unlimited unless set — audit has no default ceiling
+                      (rounds and findings still cap); "unlimited" removes it
   --max-findings <n>  whole-run cap on reported findings (default 10);
                       "unlimited" removes it (#57)
   --verify-concurrency <n>
@@ -868,6 +875,27 @@ export function maxFindingsFlag(flags: Map<string, string | boolean>): number | 
 }
 
 /**
+ * --max-tokens: positive integer, or the literal "unlimited"
+ * (case-insensitive) which removes every token ceiling — including find's
+ * B3 default ceilings (ADR 0006). Parsed to null so the supervisor can tell
+ * "no ceiling" from every numeric ceiling; undefined means the flag was
+ * absent (find applies its defaults, audit stays unlimited).
+ */
+export function maxTokensFlag(flags: Map<string, string | boolean>): number | null | undefined {
+  const raw = flags.get("--max-tokens");
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError('invalid --max-tokens: a value is required (positive integer or "unlimited")');
+  }
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError(`invalid --max-tokens: ${raw} (positive integer or "unlimited" required)`);
+  }
+  return value;
+}
+
+/**
  * --verify-concurrency: parallel verifier sessions during a verification
  * drain. Precedence: flag > PIR_VERIFY_CONCURRENCY env > undefined (the
  * supervisor applies the default of 1). Bounded 1–MAX_VERIFY_CONCURRENCY so
@@ -1034,7 +1062,7 @@ async function cmdFind(
     base: flags.get("--base") as string | undefined,
     head: flags.get("--head") as string | undefined,
     maxRounds: positiveIntFlag(flags, "--max-rounds"),
-    maxTokens: positiveIntFlag(flags, "--max-tokens"),
+    maxTokens: maxTokensFlag(flags),
     maxFindings,
     verifyConcurrency: verifyConcurrencyFlag(flags),
     minConfidence: minConfidenceFlag(flags),
@@ -1166,7 +1194,7 @@ async function cmdAudit(
     head: flags.get("--head") as string | undefined,
     includePaths,
     skipGlobs,
-    maxTokens: positiveIntFlag(flags, "--max-tokens"),
+    maxTokens: maxTokensFlag(flags),
     maxFindings,
     verifyConcurrency: verifyConcurrencyFlag(flags),
     minConfidence: minConfidenceFlag(flags),
