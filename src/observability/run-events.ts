@@ -4,6 +4,7 @@ import type { SessionUsage } from "../agents/types.js";
 import { writeTranscript } from "../agents/transcripts.js";
 import type { RoundInfo } from "../core/review-state.js";
 import type { CoverageSummary } from "../core/coverage.js";
+import type { AnchorLineCorrection } from "../findings/types.js";
 import type { ActivePack } from "../plugins/index.js";
 
 /**
@@ -114,6 +115,26 @@ export type RunEvent =
       sessionId: string;
       error?: string;
       usage?: SessionUsage;
+    }
+  | {
+      /**
+       * Roadmap B2: a record_candidate anchor carried an excerpt whose unique
+       * local match decided its lines. Carries both ranges so consumers can
+       * tell an actual displacement from a no-op confirmation. Observational
+       * only — consumers that do not know the kind must ignore it.
+       */
+      kind: "line-corrected";
+      runId: string;
+      projectId: string;
+      seq: number;
+      ts: number;
+      sessionId: string;
+      displayId: string;
+      path: string;
+      originalStartLine: number;
+      originalEndLine?: number;
+      startLine: number;
+      endLine?: number;
     }
   | {
       kind: "run-end";
@@ -243,6 +264,8 @@ export interface SessionEventEmitter {
   /** Raw SDK session event; irrelevant kinds are dropped, nothing is thrown. */
   sdkEvent(event: unknown): void;
   sessionEnded(error?: string, usage?: SessionUsage): void;
+  /** B2: one anchor's excerpt located locally and overrode the model's range. */
+  lineCorrected(correction: AnchorLineCorrection): void;
 }
 
 export interface RunEndInfo {
@@ -374,6 +397,16 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
               phase: "info", message: `context compaction (${typed.reason ?? "unknown"}) in ${meta.sessionKind} session`,
             });
           }
+        },
+        lineCorrected(correction) {
+          emitRunEvent({
+            kind: "line-corrected", runId, projectId, seq: next(), ts: Date.now(), sessionId,
+            displayId: correction.displayId, path: correction.path,
+            originalStartLine: correction.originalStartLine,
+            ...(correction.originalEndLine !== undefined ? { originalEndLine: correction.originalEndLine } : {}),
+            startLine: correction.startLine,
+            ...(correction.endLine !== undefined ? { endLine: correction.endLine } : {}),
+          });
         },
         sessionEnded(error, usage) {
           // A session that never started (factory failure) still deserves a

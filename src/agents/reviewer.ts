@@ -119,7 +119,11 @@ export interface ReviewerDeps {
  * mode reviews the base..head diff; audit mode reviews one snapshot unit.
  */
 export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoundResult> {
-  const collector: CandidateCollector = { candidates: [] };
+  const collector: CandidateCollector = {
+    candidates: [],
+    // B2: surface excerpt-driven anchor overrides on the live event channel.
+    ...(deps.onSessionEvent ? { onLineCorrected: (correction) => deps.onSessionEvent!.lineCorrected(correction) } : {}),
+  };
   const outcome: RoundOutcome = { summary: "", nextFocus: [], needsMoreRounds: false, submitted: false };
   const readPaths = new Set<string>();
   const hunkReads: Array<{ path: string; hunkIndex: number }> = [];
