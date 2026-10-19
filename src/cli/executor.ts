@@ -421,6 +421,8 @@ export const VALUE_FLAGS = new Set([
   "--plugins",
   "--path",
   "--skip",
+  "--task-file",
+  "--arm",
 ]);
 
 /** Repeatable value flags: the single-slot map keeps the last value for
@@ -642,7 +644,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError("serve must run in the local CLI process, not through the executor");
   }
 
-  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill"]);
+  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill", "_verify-comment"]);
   if (!knownCommands.has(command)) {
     throw new UsageError(`unknown command: ${command}`);
   }
@@ -694,6 +696,11 @@ async function runInContext(
         break;
       case "verify-fix":
         code = await cmdVerifyFix(ctx, positional.slice(1), flags, json, emit);
+        break;
+      // Internal eval command (M0): outside the stable contract, never listed
+      // in help and never forwarded to a remote server (see cli.ts LOCAL_ONLY).
+      case "_verify-comment":
+        code = await cmdVerifyComment(ctx, positional.slice(1), flags, json, emit, log);
         break;
       default:
         throw new UsageError(`unknown command: ${command}`);
@@ -1158,6 +1165,39 @@ async function cmdFind(
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `_verify-comment` (roadmap M0): internal eval command, OUTSIDE the stable
+ * contract — underscore-prefixed, not listed in USAGE/HELP_SECTIONS, local-only,
+ * and gated on PIR_EVAL=1. It verifies ONE materialized AACR-Bench comment and
+ * prints the verdict, so the offline benchmark measures the shipped verifier.
+ * May change or disappear without notice; do not build consumers on it.
+ */
+async function cmdVerifyComment(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  if (process.env.PIR_EVAL !== "1") {
+    throw new UsageError("_verify-comment is an internal evaluation command; set PIR_EVAL=1 to run it");
+  }
+  const taskFile = flags.get("--task-file");
+  if (typeof taskFile !== "string" || taskFile.trim() === "") {
+    throw new UsageError("_verify-comment requires --task-file <path>");
+  }
+  const arm = (flags.get("--arm") as string | undefined) ?? "verifier";
+  if (arm !== "verifier" && arm !== "ocr") throw new UsageError(`invalid --arm: ${arm} (verifier|ocr)`);
+  const { readTaskFile, runVerifyComment } = await import("../app/verify-comment.js");
+  const task = readTaskFile(taskFile);
+  const model = flags.get("--model") as string | undefined;
+  log(`• _verify-comment ${task.id} arm=${arm}`);
+  const result = await runVerifyComment(ctx, task, { arm, ...(model === undefined ? {} : { model }) });
+  emit(json ? `${envelope("_verify-comment", result)}\n` : `${JSON.stringify(result, null, 2)}\n`);
+  return 0;
 }
 
 async function cmdAudit(
