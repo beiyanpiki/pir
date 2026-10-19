@@ -1,4 +1,4 @@
-import { buildChangeSet, type ChangeSet } from "../changes/change-set.js";
+import { buildChangeSet, changedFileSummary, type ChangeSet } from "../changes/change-set.js";
 import { applyChangeFilter } from "../changes/filter.js";
 import { getHeadCommit } from "../changes/git.js";
 import { buildRepoSnapshot } from "../changes/snapshot.js";
@@ -850,7 +850,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-      files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+      files: changeSet.files.map(changedFileSummary),
     });
     throw error;
   }
@@ -888,7 +888,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-    files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+    files: changeSet.files.map(changedFileSummary),
   });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,

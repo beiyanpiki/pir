@@ -17,6 +17,7 @@ import {
   type UserConfig,
 } from "./config.js";
 import { createAppContext } from "../app/context.js";
+import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
@@ -1060,12 +1061,9 @@ async function cmdFind(
             maxFindings: result.maxFindings,
             maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
-            files: result.changeSet.files.map((f) => ({
-              path: f.path,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-            })),
+            // Purely additive (B1): every pre-B1 key keeps its value, plus
+            // files[].excluded (always present) and excludedReason (filtered only).
+            files: result.changeSet.files.map(changedFileSummary),
           },
           degraded: result.degraded,
           plugins: result.plugins,
