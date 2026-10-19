@@ -1,23 +1,35 @@
-# AACR-Bench verifier offline benchmark (M0)
+# AACR-Bench benchmarks (M0 verifier + M1 end-to-end)
 
-Comment-level measurement of the **verifier stage** against [AACR-Bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench): 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. The benchmark asks one question — how well does `runVerifier`'s defect verdict line up with the dataset's "is this comment correct" label — and compares it against the open-code-review reflection prompt on identical material; the two questions are deliberately not identical, and ADR-0007's Consequences section records the measured consequence.
+Two measurement surfaces against [AACR-Bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench):
 
-Protocol, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md); the numbers live in [RESULTS](results/). This surface **extends** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); it does not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline.
+- **M0 — verifier offline benchmark.** Comment-level measurement of the **verifier stage**: 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. It asks how well `runVerifier`'s defect verdict lines up with the dataset's "is this comment correct" label, and compares it against the open-code-review reflection prompt on identical material; the two questions are deliberately not identical, and ADR-0007's Consequences section records the measured consequence.
+- **M1 — end-to-end benchmark (skeleton).** Whole-`pir find` runs over the upstream `positive_samples` split: 196 PRs, 1,506 known-correct reference comments, 50 repositories. Findings are judged by the **pinned upstream judge** and reported as file-level semantic precision/recall plus **`balanced_score`** — the caliber published OCR / Claude Code / Codex rows use. M1 never builds a judge of its own.
+
+Protocols, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md) (M0) and [ADR 0009](../../../docs/adr/0009-m1-end-to-end-benchmark.md) (M1); the numbers live in [RESULTS](results/). Both surfaces **extend** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); they do not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline. The M1 `--limit 20` smoke costs 20 model runs: it is a manual check, never a CI gate.
 
 ## Layout
 
 ```text
 tests/eval/aacr/
-  meta.json               dataset + upstream prompt pins (URL, revision, sha256, license, citation)
+  meta.json               dataset, M1 fixture, upstream framework and OCR prompt pins (URL, revision, sha256, license, citation)
   fetch-dataset.js        T1: download the pinned dataset.json, verify sha256, write the citation sidecar
   sample.js               pure seeded sampling + comment ids (shared by the materializer and the driver)
   materialize.js          T2: shared clone cache (depth 1) -> per-comment diff + head file -> intermediate JSONL
   run-m0.js               T4: spawn `pir _verify-comment` per comment per arm with rb-grade isolation
   score.js                T5: pure scoring (policies, accuracy/P/R/F1, AUC, kill-rate, buckets, rejection grounds)
   report.js               A1: results document renderer (protocol, per-bucket tables, citation, optional before/after baseline)
-  results/                committed results files (M0-*.md)
+  fixtures/
+    build-fixture.js      M1 T1: pin-verified positive_samples.json -> fixtures/test-set.json
+    test-set.json         gitignored: derived fixture body (one row per PR)
+    positive_samples.json gitignored: verified upstream download cache
+  m1/
+    normalize-aacr.js     M1 T3: envelope -> reported / confirmedOnly upstream comment views
+    run-aacr.js           M1 T2: per-PR `pir find` driver (same-repo serial / cross-repo concurrent)
+    judge.js              M1 T4: pinned upstream judge delegation (data/results/pipeline eval)
+    git-async.js          non-blocking fetch / worktree / synthetic-head plumbing
+  results/                committed results files (M0-*.md, later M1-*.md)
   dataset/                gitignored: downloaded + materialized rows (auto-rebuilt)
-  out/                    gitignored: run outputs (per-arm score rows + summary.json)
+  out/                    gitignored: run outputs (per-arm score rows + summary.json; M1 rounds)
 ```
 
 The clone cache lives **outside** the worktree at `$PIR_AACR_CACHE` (default `~/.cache/pir-aacr`); nothing under `tests/eval/aacr/dataset/` or `tests/eval/aacr/out/` is committed — every number is rebuildable from the pin in `meta.json`.
@@ -58,6 +70,81 @@ The two rounds must share the dataset, sample digest, model id and arm set — `
 
 Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently.
 
+## M1 · End-to-end benchmark
+
+### What is measured, and by whom
+
+`positive_samples.json` is the upstream **label=1** split: every reference comment is a known-correct review comment. An M1 task is one PR (`instance_id = owner__name@<target_commit[:7]>`, dots preserved). The driver runs the shipped CLI over the PR's diff, normalizes the findings into upstream's OCR-shaped result files, and hands the whole population to the **pinned upstream framework** (`evaluation/judge.py` / `evaluate.py`, commit in `meta.json`'s `framework` block). The upstream file-level semantic metric reports precision (generated comments that hit a previously uncovered reference comment), recall (reference comments covered) and `balanced_score` (their harmonic mean). **`balanced_score` is the external comparison caliber**; missing result files stay in `missing_instances` and out of the denominators. M1 has no self-built judge and no self-invented metric.
+
+Two views are written from one run:
+
+- **reported** = confirmed + uncertain (the uncertain=keep policy ADR-0007 fixed for M0);
+- **confirmedOnly** = confirmed only (the strict precision view).
+
+The same run is judged twice, once per view, so the calibration difference is visible instead of hidden in one number. Reference-comment buckets for the later A1 report (language, comment category, PR size) are carried in the fixture; `comment_meta` stays index-aligned with `reference_comments`.
+
+### Build the fixture (body gitignored)
+
+```sh
+# downloads the pinned upstream positive_samples.json, verifies sha256/size/record
+# count against meta.json's fixtures pin, and writes fixtures/test-set.json
+PIR_EVAL=1 node tests/eval/aacr/fixtures/build-fixture.js
+
+# offline / tests: convert an existing pinned download instead
+PIR_EVAL=1 node tests/eval/aacr/fixtures/build-fixture.js \
+  --from /path/to/positive_samples.json
+```
+
+`fixtures/test-set.json` (and the verified download cache `fixtures/positive_samples.json`) are **gitignored**: the fixture body is derived upstream data. The committed artifacts are the builder, the pin in `meta.json` (URL + sha256 + bytes + records + comment counts + instance-id convention) and the arXiv citation echoed into every fixture header. A tampered or changed upstream file fails the pin before anything is written. `--help` and the `PIR_EVAL` gate are model-free.
+
+### Smoke run (`--limit 20`, manual — not CI)
+
+```sh
+npm run build:cli
+
+# fixture once (above), then 20 model runs:
+PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js \
+  --round 2026-10-19-m1-smoke \
+  --limit 20 --concurrency 4 \
+  --model "opencode-go/deepseek-v4.1-flash:medium" \
+  --view both --judge mock
+```
+
+Why these flags: `--limit 20` is the documented smoke size (ADR-0009; the full 196-PR run plus `--eval-rounds 3` averaging is a separate, later round); `--concurrency 4` runs up to four **different repositories** at once while instances of the same repository stay serial (they share one cache directory); `--judge mock` uses upstream's local similarity judge, so the smoke validates the pipeline at zero judge cost. Use `--judge real` only with `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL`; missing credentials fail before any model run. `--judge off` skips judging. For the full comparison, `--eval-rounds 3` asks the upstream judge for three independent rounds and averages them (the count is recorded in `summary.json`).
+
+Artifacts of the smoke:
+
+```text
+tests/eval/aacr/out/<round>/
+  summary.json                         provenance: round, model, CLI sha256, fixture sha256,
+                                       instance-set digest, views/repeats/limits, per-repo counts,
+                                       incompleteInstances, errors
+  reported/<safe_id>.json              upstream-shaped results (reported view)
+  confirmedOnly/<safe_id>.json         upstream-shaped results (confirmed-only view)
+  rows/<safe_id>.json                  our normalized data: both views, dropped counts,
+                                       usage, duration, exit status, errors
+```
+
+`--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set or repeat count into one round (the same provenance guard M0 established, extended to the M1 inputs).
+
+### Incomplete runs are data, not errors
+
+`pir find` exits 3 when a review is incomplete (budget/round stop) while still printing a valid envelope. The driver keeps that as a normal row with `incomplete: true`, the envelope's `stoppedBecause` and pending count, counts it in `summary.incompleteInstances`, logs an `INCOMPLETE` line, and writes result files that the judge scores normally. Exit 3 with unparseable stdout, any other exit status, or a signal kill (timeout) remains an error row. A round's exit code reflects real errors only; a purely incomplete round exits 0 and its partial nature is visible in the summary and rows.
+
+### Materialization and the synthetic head, honestly stated
+
+M1 reuses the M0 shared cache (`$PIR_AACR_CACHE`, default `~/.cache/pir-aacr`, never inside the worktree) with **depth-1 fetches** of the PR head and the **GitHub-reported merge base** for the dataset's base/head pair; there is no full clone on the normal path. The checkout is the real head tree.
+
+`pir find` computes its diff with `git diff <base>...<head>`, which needs a real ancestry relation. Two depth-1 fetches supply both trees but no ancestry, so merge-base fails in a shallow cache. When (and only when) the cache has no ancestry, the driver creates a **deterministic synthetic head commit** with the head's exact tree and the merge base as parent (fixed identity/date/message, content-addressed), passes it as `--head`, and records both `headCommit` (dataset sha) and `reviewHead`/`syntheticHead` in the row and summary. The reviewer still sees the real head tree and exactly the PR diff; the judge never sees commit shas. If a repository cannot be fetched at depth 1 at all, the instance becomes an error row (and the documented fallback is a blobless partial clone, `--filter=blob:none`); the round never aborts.
+
+### Judge delegation
+
+`m1/judge.js` resolves the pinned upstream clone at `$PIR_AACR_JUDGE_DIR` (default `$PIR_AACR_CACHE/aacr-bench@<commit>`, fetched depth 1 when absent), writes the selected fixture rows as upstream's `evaluation/data/aacr_bench.jsonl`, copies the per-view result files into `evaluation/results/aacr_bench/<reviewer>/<run_id>/`, and runs `python3 -m pipeline run --stage eval` from `evaluation/`, which writes its metrics under `evaluation/metrics/aacr_bench/<reviewer>/<run_id>/`. Only those generated, gitignored upstream directories are written; the clone is never modified and an existing clone at a different commit fails loudly (judge drift invalidates comparisons). Upstream's CLI only accepts `ocr|claude|codex`; M1 writes OCR-shaped files, so the delegation uses `--reviewer ocr`, whose `evaluate.py` builder is exactly that shape. The metrics JSON path and the upstream summary lines are relayed into `summary.json` and the console.
+
+### What is gitignored
+
+`tests/eval/aacr/dataset/`, `tests/eval/aacr/out/`, `tests/eval/aacr/fixtures/test-set.json` and `tests/eval/aacr/fixtures/positive_samples.json`. The shared clone cache and the judge clone live under `$PIR_AACR_CACHE` outside the worktree. Everything gitignored is rebuildable from `meta.json`'s pins; nothing downloaded or generated is committed.
+
 ## Scoring in one paragraph
 
 Label 1 = the comment is correct (should survive), label 0 = incorrect (should be intercepted). Primary policy **uncertain = keep**: `confirmed` and `uncertain` count as keeps, only `rejected` kills; the strict policy **uncertain = miss** is reported beside it and credits an uncertain verdict in neither direction. **killRate** (label-0 comments intercepted) is the north-star metric, **falseKillRate** (label-1 comments destroyed) is its cost side and B4's merge gate, **interceptPrecision** says how much of what was killed was actually noise. Accuracy/precision/recall/F1 are over keeps; AUC ranks the verifier's confidence. Buckets: `source_model`, `category`, `context`, `is_ai_comment`. Error rows and unresolved verdicts count as misses — never as silent exclusions.
@@ -68,7 +155,7 @@ The dataset carries commit SHAs but no diff bodies. Per repository the materiali
 
 ## Attribution and citation
 
-The dataset and framework are Apache-2.0 and are **not** redistributed here. Using AACR-Bench data requires citing arXiv 2601.19494:
+The dataset, the M1 `positive_samples` fixture and the evaluation framework are Apache-2.0 and are **not** redistributed here: M0 commits only the HF dataset pin, M1 commits only the raw-GitHub pin in `meta.json`, and both bodies are re-downloaded on demand. Using AACR-Bench data requires citing arXiv 2601.19494:
 
 ```bibtex
 @misc{zhang2026aacrbenchevaluatingautomaticcode,
