@@ -7,10 +7,14 @@ dist/
 .DS_Store
 tests/eval/reviewbench/.cache/
 tests/eval/rb-out/
-# AACR-Bench (M0/M1): upstream data, materialized rows and run outputs are
-# re-downloaded/rebuilt on demand; only scripts, meta, fixtures and results
-# are committed. The clone cache lives outside the worktree ($PIR_AACR_CACHE).
+# AACR-Bench (M0/M1): upstream data, materialized rows, M1 fixture bodies and
+# run outputs are re-downloaded/rebuilt on demand; only scripts, meta pins,
+# docs and results are committed. Fixture bodies are derived upstream data
+# (ADR-0007 §10 / ADR-0009): the pin lives in meta.json, the body does not.
+# The clone cache lives outside the worktree ($PIR_AACR_CACHE).
 tests/eval/aacr/dataset/
 tests/eval/aacr/out/
+tests/eval/aacr/fixtures/test-set.json
+tests/eval/aacr/fixtures/positive_samples.json
 tests/web-e2e/test-results/
 test-results/
