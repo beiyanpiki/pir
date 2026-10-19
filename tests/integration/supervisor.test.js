@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { findIssues } from "../../dist/core/supervisor.js";
+import { ChangeCoverage } from "../../dist/core/change-coverage.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { verifyFix } from "../../dist/app/services.js";
 import { runFind } from "../../dist/app/find.js";
@@ -2074,6 +2075,68 @@ test("findIssues: a failed fan-out's id maps carry no dangling targets (dogfood 
     }
   } finally {
     process.env.PIR_TRANSCRIPTS = savedEnv;
+    ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("findIssues: the change-mode gate keeps excluded diff bodies out of get_change and coverage", async () => {
+  const repo = createTempGitRepo("pir-change-filter-");
+  repo.write("src/pay.ts", "export function retry(): void {}\n");
+  repo.commit("init");
+  repo.write("src/pay.ts", "export function retry(): void { consumeQuota(); }\n");
+  repo.write(".env", "API_TOKEN=SUPER_SECRET_VALUE\n");
+  repo.write("dist/generated.js", "const generated = 'BUILD_OUTPUT_BODY';\n");
+  repo.commit("introduce bug next to filtered files");
+  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
+  const factory = new FakeSessionFactory({
+    reviewerScript: async (tool) => {
+      const overview = (await tool("get_change").execute({})).text;
+      // Metadata stays visible: the reviewer knows the files changed and why.
+      assert.match(overview, /"\.env" \[added\]/);
+      assert.match(overview, /excluded from diff review: secret path \(dotenv file\); never sent to a model/);
+      assert.match(overview, /default policy: build output/);
+      // ... but not a byte of their diff bodies.
+      assert.doesNotMatch(overview, /SUPER_SECRET_VALUE/);
+      assert.doesNotMatch(overview, /BUILD_OUTPUT_BODY/);
+      // Paging a hunk of an excluded file is a tool-boundary error, not content.
+      const paged = await tool("get_change").execute({ path: ".env", hunkIndex: 0 });
+      assert.match(paged.text, /was excluded from diff review/);
+      assert.doesNotMatch(paged.text, /SUPER_SECRET_VALUE/);
+      await reviewerRecordsCandidate(tool);
+    },
+    verifierScript: async (tool) => {
+      await submitVerdictWithEvidence(tool, {
+        verdict: "confirmed",
+        rationale: "consumeQuota runs before the gateway call",
+        confidence: 0.9,
+      });
+    },
+  });
+  try {
+    const outcome = await findIssues({
+      repoRoot: repo.dir,
+      memory: ctx.memory,
+      codeMap: ctx.codeMap,
+      factory,
+      options: { maxRounds: 1 },
+    });
+    const env = outcome.changeSet.files.find((f) => f.path === ".env");
+    assert.equal(env.excluded, true);
+    assert.equal(env.excludedReason, "secret path (dotenv file); never sent to a model");
+    assert.deepEqual(env.hunks, [], "excluded hunks must not be reachable");
+    assert.equal(env.additions, 1, "churn metadata stays visible");
+    assert.equal(env.deletions, 0);
+    const generated = outcome.changeSet.files.find((f) => f.path === "dist/generated.js");
+    assert.equal(generated.excluded, true);
+    assert.equal(generated.excludedReason, "default policy: build output");
+    assert.equal(outcome.changeSet.files.find((f) => f.path === "src/pay.ts").excluded, undefined);
+    // The coverage denominator only accounts for what the reviewer could read.
+    const coverage = new ChangeCoverage(outcome.changeSet);
+    assert.equal(coverage.counts().filesTotal, 1);
+    assert.deepEqual(coverage.summary().files.map((f) => f.path), ["src/pay.ts"]);
+    assert.equal(outcome.findings.length, 1);
+  } finally {
     ctx.memory.close();
     repo.cleanup();
   }

@@ -1,4 +1,5 @@
 import { buildChangeSet, type ChangeSet } from "../changes/change-set.js";
+import { applyChangeFilter } from "../changes/filter.js";
 import { getHeadCommit } from "../changes/git.js";
 import { buildRepoSnapshot } from "../changes/snapshot.js";
 import type { CodeMapProvider } from "../codemap/types.js";
@@ -469,7 +470,13 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   });
 
   const requestedHead = options.head ?? (await getHeadCommit(deps.repoRoot));
-  const changeSet = await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead);
+  // B1: the change-mode gate runs once, before any session exists — binary,
+  // secret paths (non-overridable), skip patterns, oversized single-file diff.
+  // Excluded files keep their path/status/churn metadata but arrive with no
+  // hunks, so no reviewer/verifier tool can put their diff body in a prompt.
+  const changeSet = applyChangeFilter(
+    await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead),
+  );
   // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
   // pages accumulate across rounds. No behavior change — accounting only.
   const changeCoverage = new ChangeCoverage(changeSet);

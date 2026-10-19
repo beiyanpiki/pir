@@ -238,7 +238,7 @@ async function searchCommit(repoRoot: string, commit: string, pattern: string, o
 export function createGetChangeTool(ctx: ToolContext): ReviewTool {
   return {
     name: "get_change",
-    description: "Get the merge-base -> head diff. Defaults to a concise file overview (small diffs include full hunks). Select path+hunkIndex for raw diff lines, including removed code; follow offset/limit and charOffset continuation to recover all content.",
+    description: "Get the merge-base -> head diff. Defaults to a concise file overview (small diffs include full hunks). Select path+hunkIndex for raw diff lines, including removed code; follow offset/limit and charOffset continuation to recover all content. Files excluded by the change-mode filter (binary/secret/skip/oversized) appear with their metadata and an exclusion reason but have no readable hunks.",
     promptSnippet: "get_change: merge-base -> head overview; path+hunkIndex+offset pages recover both sides",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Filter by current or old repository-relative path" })),
@@ -270,8 +270,13 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
           throw new Error("path identifies multiple changed files; use an unambiguous current path");
         }
         const file = files[0]!;
-        const fileLabel = (f: typeof file) => `## ${JSON.stringify(f.path)} [${f.status}] (+${f.additions}/-${f.deletions}); hunks: ${f.hunks.length}${f.oldPath ? `; renamed from ${JSON.stringify(f.oldPath)}` : ""}`;
+        const fileLabel = (f: typeof file) => `## ${JSON.stringify(f.path)} [${f.status}] (+${f.additions}/-${f.deletions}); hunks: ${f.hunks.length}${f.oldPath ? `; renamed from ${JSON.stringify(f.oldPath)}` : ""}${f.excluded ? `; excluded from diff review: ${f.excludedReason ?? "policy"}` : ""}`;
         if (hunkIndex !== undefined) {
+          // B1: an excluded file's diff body is not reachable — say so at the
+          // tool boundary instead of "hunkIndex is beyond the available hunks".
+          if (file.excluded) {
+            throw new Error(`${JSON.stringify(file.path)} was excluded from diff review (${file.excludedReason ?? "policy"}); only its path/status/churn metadata is available`);
+          }
           const hunk = file.hunks[hunkIndex];
           if (!hunk) throw new Error("hunkIndex is beyond the available hunks");
           const page = pageLines(hunk.lines, offset, limit, charOffset);

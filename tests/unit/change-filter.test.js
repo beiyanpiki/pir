@@ -6,8 +6,13 @@ import {
   DEFAULT_SKIP_PATTERNS,
   FILTER_VERSION,
   MAX_AUDIT_FILE_BYTES,
+  MAX_DIFF_FILE_BYTES,
+  applyChangeFilter,
   classifyEntry,
+  diffBodyBytes,
   normalizeIncludePath,
+  selectChangeFile,
+  selectChangeFile as select,
 } from "../../dist/changes/filter.js";
 import { buildRepoSnapshot } from "../../dist/changes/snapshot.js";
 
@@ -78,4 +83,124 @@ test("B1: audit selection is unchanged — include narrows, then skip and the de
   } finally {
     repo.cleanup();
   }
+});
+
+// ---------------------------------------------------------------------------
+// the four gates (roadmap B1/T2)
+// ---------------------------------------------------------------------------
+
+const HEADER = "@@ -1,1 +1,1 @@";
+
+/** A changed file with one small text hunk, overridable per case. */
+function file(path, over = {}) {
+  return {
+    path,
+    status: "modified",
+    hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["+const a = 1;"] }],
+    additions: 1,
+    deletions: 0,
+    ...over,
+  };
+}
+
+test("B1 gate 1 (binary): extension policy, on both sides of a rename, before everything else", () => {
+  assert.deepEqual(select(file("assets/logo.png")), {
+    path: "assets/logo.png", selected: false, gate: "binary",
+    reason: "binary file (diff bodies are not machine-reviewable text)",
+  });
+  assert.equal(select(file("src/A.PNG")).gate, "binary");
+  // A source file renamed away from a binary name still has binary content.
+  assert.equal(select(file("src/notes.txt", { oldPath: "assets/logo.png" })).gate, "binary");
+  assert.equal(select(file("src/app.ts")).selected, true);
+});
+
+test("B1 gate 2 (secret): dotenv/.ssh/credential paths are excluded and .env examples are exempt", () => {
+  for (const path of [
+    ".env", "config/.env", "config/.env.production", ".ssh/id_rsa", ".ssh/config",
+    "id_rsa", "keys/id_ed25519", ".netrc", "sub/.npmrc", ".pypirc", ".dockercfg",
+  ]) {
+    const decision = select(file(path));
+    assert.equal(decision.gate, "secret", `${path} must be excluded as a secret path`);
+    assert.match(decision.reason, /never sent to a model/);
+  }
+  // A checked-in example is not a secret.
+  for (const path of [".env.example", ".env.sample", "config/.env.template"]) {
+    assert.equal(select(file(path)).selected, true, `${path} must stay reviewable`);
+  }
+  // Renaming a secret away does not launder it: the old side changed too.
+  assert.equal(select(file("config/example.txt", { oldPath: ".env" })).gate, "secret");
+});
+
+test("B1 gate 3 (skip patterns): explicit --skip first, then the versioned default policy", () => {
+  const skipped = select(file("src/api.gen.ts"), { skipGlobs: ["*.gen.ts"] });
+  assert.equal(skipped.gate, "skip-pattern");
+  assert.equal(skipped.reason, "--skip *.gen.ts");
+  const policy = select(file("dist/bundle.js"));
+  assert.equal(policy.gate, "skip-pattern");
+  assert.equal(policy.reason, "default policy: build output");
+  assert.equal(select(file("package-lock.json")).reason, "default policy: lockfile");
+  assert.equal(select(file("src/app.ts")).selected, true);
+});
+
+test("B1 gate 4 (oversized diff): bytes of the pageable diff body, cap boundary exact", () => {
+  const atCap = file("src/exact.ts", { hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["x".repeat(MAX_DIFF_FILE_BYTES - HEADER.length - 2)] }] });
+  assert.equal(diffBodyBytes(atCap), MAX_DIFF_FILE_BYTES);
+  assert.equal(select(atCap).selected, true, "exactly at the cap is still reviewable");
+  const overCap = file("src/big.ts", { hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["x".repeat(MAX_DIFF_FILE_BYTES)] }] });
+  const decision = select(overCap);
+  assert.equal(decision.gate, "oversized-diff");
+  assert.match(decision.reason, new RegExp(`oversized file diff \\(\\d+ bytes > ${MAX_DIFF_FILE_BYTES}\\)`));
+  // Multi-byte content is measured in bytes, not UTF-16 code units.
+  const multibyte = file("src/i18n.ts", { hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["+\u4e2d".repeat(MAX_DIFF_FILE_BYTES / 3 + 1)] }] });
+  assert.ok(diffBodyBytes(multibyte) > MAX_DIFF_FILE_BYTES);
+});
+
+test("B1 include bypass: include rescues skip patterns and oversized diffs, never binary or secret", () => {
+  // Bypass: an explicit include overrides the default policy and the size cap.
+  assert.equal(select(file("dist/bundle.js"), { includePaths: ["dist/bundle.js"] }).selected, true);
+  assert.equal(select(file("dist"), { includePaths: ["dist"] }).selected, true, "dir prefixes include a subtree");
+  const big = file("src/big.ts", { hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["x".repeat(MAX_DIFF_FILE_BYTES)] }] });
+  assert.equal(select(big, { includePaths: ["src"] }).selected, true);
+  // No bypass: the non-overridable gates still win.
+  assert.equal(select(file("assets/logo.png"), { includePaths: ["assets/logo.png"] }).gate, "binary");
+  const secret = select(file(".env"), { includePaths: [".env"] });
+  assert.equal(secret.gate, "secret");
+  assert.match(secret.reason, /never sent to a model/);
+  // Include is also a scope: a file outside it is not selected.
+  const outside = select(file("src/app.ts"), { includePaths: ["docs"] });
+  assert.equal(outside.gate, "not-included");
+  assert.equal(outside.reason, "outside the include scope");
+  // Either side of a rename satisfies the include.
+  assert.equal(select(file("src/new.ts", { oldPath: "src/old.ts" }), { includePaths: ["src/old.ts"] }).selected, true);
+});
+
+test("applyChangeFilter: metadata and churn stay, hunks go, clean change sets pass through", () => {
+  const changeSet = {
+    repoRoot: "/repo", base: "base", head: "head", mergeBase: "merge",
+    files: [
+      file("src/app.ts", { additions: 4, deletions: 2, language: "ts" }),
+      file(".env", { additions: 3, deletions: 1, language: "" }),
+      file("dist/bundle.js", { additions: 9, deletions: 0, language: "js" }),
+    ],
+    patch: "raw merge-base..head patch",
+    churn: 19,
+  };
+  const filtered = applyChangeFilter(changeSet);
+  const env = filtered.files.find((f) => f.path === ".env");
+  assert.equal(env.excluded, true);
+  assert.match(env.excludedReason, /secret path \(dotenv file\); never sent to a model/);
+  assert.deepEqual(env.hunks, [], "the diff body must not be reachable");
+  assert.equal(env.additions, 3);
+  assert.equal(env.deletions, 1);
+  const generated = filtered.files.find((f) => f.path === "dist/bundle.js");
+  assert.equal(generated.excluded, true);
+  assert.equal(generated.excludedReason, "default policy: build output");
+  assert.equal(filtered.files.find((f) => f.path === "src/app.ts").excluded, undefined);
+  assert.equal(filtered.files.find((f) => f.path === "src/app.ts").hunks.length, 1);
+  // Churn stays the change-set total: filtered files are visible, not deleted.
+  assert.equal(filtered.churn, 19);
+  assert.equal(filtered.patch, "raw merge-base..head patch");
+  // Nothing excluded -> identical object, i.e. zero behavioral change.
+  const clean = { ...changeSet, files: [file("src/app.ts")] };
+  assert.equal(applyChangeFilter(clean), clean);
 });

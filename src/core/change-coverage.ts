@@ -56,8 +56,9 @@ export class ChangeCoverage {
 
   constructor(changeSet: ChangeSet) {
     for (const file of changeSet.files) {
-      // Files without hunks (binary, pure rename) have nothing observable to
-      // account for; including them would make full coverage unreachable.
+      // Files without hunks (binary, pure rename, change-filter-excluded)
+      // have nothing observable to account for; including them would make
+      // full coverage unreachable.
       if (file.hunks.length === 0) continue;
       this.regions.set(
         file.path,

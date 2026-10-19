@@ -4,6 +4,15 @@ import { parseUnifiedDiff, type FileDiff } from "./diff.js";
 export interface ChangedFile extends FileDiff {
   /** File extension derived language hint, e.g. "ts". */
   language: string;
+  /**
+   * Change-mode filter (B1): the file was excluded from diff review. Its
+   * metadata (path/status/churn) stays visible to previews, the reviewer and
+   * the run record, while `hunks` is emptied so the diff body cannot reach a
+   * model.
+   */
+  excluded?: boolean;
+  /** Why the filter excluded it; present exactly when `excluded` is true. */
+  excludedReason?: string;
 }
 
 export interface ChangeSet {
