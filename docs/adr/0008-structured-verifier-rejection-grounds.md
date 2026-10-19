@@ -148,3 +148,25 @@ truth) applies to any per-bucket reading of the result.
   that share one instead of implying a comparison. The B4 rounds were
   re-recorded with the digest in place; the before/after numbers themselves
   are unchanged by the fix.
+- **Gate result (2026-10-19, fixed 100-comment sample, one run per side).**
+  Pre-B4 build `9fd6ea7` (dist digest `b6214403…`) vs this branch
+  (`64734461…`), same model and material:
+  `falseKillRate` 77.1% (54/70) → 78.6% (55/70),
+  `killRate` 80.0% (20/25) → 80.0% (20/25),
+  `interceptPrecision` 27.0% (20/74) → 26.7% (20/75). The net false-kill
+  delta is **one comment**, and it is smaller than the run-to-run reshuffle:
+  five label-1 comments swapped sides (three newly killed with grounds
+  `speculative`, `speculative`, `contradicted-by-code`; two recovered as
+  `confirmed`), while the **label-0 kill set is identical** (the same 20
+  comments), so the interception side did not change at all. The strict
+  "must not regress" rule is therefore not satisfied *as proof* — a
+  one-comment delta is exactly this sample's resolution (1.4 pp) — and the
+  gate is recorded as **not proven either way, with no evidence of a
+  systematic increase in false kills**. Landing B4 rests on that reading
+  plus the mechanism being additive and auditable; the post-B4 full-corpus
+  round scores 2,012 comments and carries the same three kill-family numbers
+  and the ground distribution, which is where a systematic shift would show.
+  This is a concrete variance datapoint for M2's change protocol: a 95-row
+  sample cannot gate a prompt change at the one-comment level, so a
+  before/after claim of "no regression" needs repeats (or the full corpus)
+  before it is treated as evidence.
