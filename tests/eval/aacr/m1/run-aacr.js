@@ -186,9 +186,15 @@ class MergeBaseStore {
 
 /**
  * One spawned `pir find`. Async on purpose: the worker pool must overlap
- * cross-repo runs. Exit 0 and 1 are both accepted (1 = findings at/above
- * --fail-on; the default is none, but the benchmark must not turn a report
- * into a failure).
+ * cross-repo runs.
+ *
+ * Exit status handling follows the CLI contract: 0 = clean, 1 = a finding met
+ * the severity threshold, 3 = incomplete / runtime failure WITH a valid
+ * envelope on stdout (`data.incomplete`, `data.stoppedBecause`). Exit 3 is a
+ * real review that hit its budget or round limit, so it is accepted and the
+ * row is flagged incomplete; dropping it would turn a truncated run into a
+ * missing instance. Any other status, a signal kill (timeout), or unparseable
+ * stdout stays an error.
  */
 export function runCliOnce({ cli, checkout, base, head, maxRounds, model, runDir, timeoutMs, env }) {
   const args = [
@@ -237,7 +243,9 @@ export function runCliOnce({ cli, checkout, base, head, maxRounds, model, runDir
     };
     child.on("error", (error) => finish({ ok: false, exitCode: null, signal: null, error: `spawn failed: ${error.message}` }));
     child.on("close", (status, signal) => {
-      if (status !== 0 && status !== 1) {
+      // 0 clean, 1 threshold finding, 3 incomplete with a valid envelope.
+      // status null means a signal kill (timeout) and is never accepted.
+      if (status !== 0 && status !== 1 && status !== 3) {
         finish({
           ok: false, exitCode: status, signal,
           error: `CLI exited ${status}${signal ? ` signal ${signal} (task timeout ${timeoutMs}ms)` : ""}`,
@@ -249,7 +257,10 @@ export function runCliOnce({ cli, checkout, base, head, maxRounds, model, runDir
         if (!envelope?.data || !Array.isArray(envelope.data.findings)) throw new Error("missing data.findings array");
         finish({ ok: true, exitCode: status, signal, envelope, data: envelope.data });
       } catch (error) {
-        finish({ ok: false, exitCode: status, signal, error: `CLI stdout is not the expected JSON: ${error.message}` });
+        finish({
+          ok: false, exitCode: status, signal,
+          error: `CLI exited ${status} without a usable JSON envelope: ${error.message}`,
+        });
       }
     });
   });
@@ -301,6 +312,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     console.log("PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js [--fixture fixtures/test-set.json] [--limit N] [--only <instance-id>]... [--repeats N] [--resume] [--round name] [--out-root out] [--cache ~/.cache/pir-aacr] [--cli dist/cli/cli.js] [--model provider/model] [--concurrency N] [--max-rounds N] [--timeout ms] [--view reported|confirmedOnly|both] [--judge off|mock|real] [--eval-rounds N] [--json]\n" +
       "Runs pir find once per positive_samples PR (same-repo serial, cross-repo concurrent) with rb-grade isolation, writing upstream-shaped results per view and per-instance rows incrementally.\n" +
       "Smoke: --limit 20 --concurrency 4 --model opencode-go/deepseek-v4.1-flash:medium (costs 20 model runs; never a CI gate).\n" +
+      "Exit status 3 with a valid envelope is recorded as an incomplete row, not an error; unexpected statuses, signal kills and unparseable stdout are errors.\n" +
       "--judge mock uses upstream's local similarity (zero cost); --judge real needs JUDGE_BASE_URL/JUDGE_API_KEY/JUDGE_MODEL.");
     return 0;
   }
@@ -427,6 +439,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       population,
       instances: [],
       repoCounts: {},
+      incompleteInstances: 0,
       errors: [],
       // --judge off preserves a resumed round's prior judge results; an
       // active judge mode re-judges from scratch (the result dirs are the
@@ -452,6 +465,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         else bucket.ok += 1;
         summary.repoCounts[entry.repo] = bucket;
       }
+      summary.incompleteInstances = sorted.filter((entry) => entry.incomplete === true).length;
       const instanceErrors = sorted.filter((entry) => entry.status === "error")
         .map((entry) => `${entry.instanceId} repeat ${entry.repeat}: ${entry.error}`);
       const judgeErrors = summary.judge.filter((result) => result.ok === false)
@@ -547,6 +561,9 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
           writeJson(file, toUpstreamResult(normalized, { view }));
           upstreamFiles[view] = file;
         }
+        // Exit 3 always means incomplete even if the envelope does not repeat
+        // it; the envelope's own flag/pending work is additive.
+        const incomplete = run.exitCode === 3 || run.data?.incomplete === true || (run.data?.pendingCandidates ?? 0) > 0;
         const entry = {
           ...provenance,
           status: "ok",
@@ -564,7 +581,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
           exitCode: run.exitCode,
           wallTimeMs: run.wallTimeMs,
           stoppedBecause: run.data?.stoppedBecause ?? null,
-          incomplete: run.data?.incomplete === true || (run.data?.pendingCandidates ?? 0) > 0,
+          incomplete,
           pendingCandidates: run.data?.pendingCandidates ?? 0,
           stderrTail: stderrTail(run.stderr),
           upstreamFiles,
@@ -574,8 +591,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
           findings: { reported: normalized.reported, confirmedOnly: normalized.confirmedOnly },
         };
         writeJson(rowFileFor(repeatDir, id), rowFile);
-        console.error(`OK ${id} repeat ${repeat} ${normalized.reported.length} reported (${normalized.confirmedOnly.length} confirmed)` +
+        const label = incomplete ? "INCOMPLETE" : "OK";
+        console.error(`${label} ${id} repeat ${repeat} ${normalized.reported.length} reported (${normalized.confirmedOnly.length} confirmed)` +
           `${normalized.dropped.anchorless > 0 ? ` [WARN dropped ${normalized.dropped.anchorless} anchorless]` : ""}` +
+          ` exit=${run.exitCode}${incomplete ? ` stoppedBecause=${run.data?.stoppedBecause ?? "?"} pending=${run.data?.pendingCandidates ?? 0}` : ""}` +
           ` diffBase=${diffBaseKind}${syntheticHead ? " synthetic-head" : ""} ${run.wallTimeMs}ms tokens=${normalized.usage?.total_tokens ?? "?"}`);
         return entry;
       } catch (error) {
@@ -668,6 +687,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         views: options.views,
         repeats: options.repeats,
         repoCounts: summary.repoCounts,
+        incompleteInstances: summary.incompleteInstances,
         judge: summary.judge.map((result) => ({
           judgeMode: result.judgeMode, runId: result.runId, ok: result.ok,
           metricsPath: result.metricsPath ?? null, balanced_score: result.summary?.balanced_score ?? null,

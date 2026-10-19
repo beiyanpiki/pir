@@ -117,7 +117,8 @@ Artifacts of the smoke:
 ```text
 tests/eval/aacr/out/<round>/
   summary.json                         provenance: round, model, CLI sha256, fixture sha256,
-                                       instance-set digest, views/repeats/limits, per-repo counts, errors
+                                       instance-set digest, views/repeats/limits, per-repo counts,
+                                       incompleteInstances, errors
   reported/<safe_id>.json              upstream-shaped results (reported view)
   confirmedOnly/<safe_id>.json         upstream-shaped results (confirmed-only view)
   rows/<safe_id>.json                  our normalized data: both views, dropped counts,
@@ -125,6 +126,10 @@ tests/eval/aacr/out/<round>/
 ```
 
 `--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set or repeat count into one round (the same provenance guard M0 established, extended to the M1 inputs).
+
+### Incomplete runs are data, not errors
+
+`pir find` exits 3 when a review is incomplete (budget/round stop) while still printing a valid envelope. The driver keeps that as a normal row with `incomplete: true`, the envelope's `stoppedBecause` and pending count, counts it in `summary.incompleteInstances`, logs an `INCOMPLETE` line, and writes result files that the judge scores normally. Exit 3 with unparseable stdout, any other exit status, or a signal kill (timeout) remains an error row. A round's exit code reflects real errors only; a purely incomplete round exits 0 and its partial nature is visible in the summary and rows.
 
 ### Materialization and the synthetic head, honestly stated
 

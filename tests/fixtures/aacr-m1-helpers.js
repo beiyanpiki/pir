@@ -3,7 +3,7 @@
  * fixture document, a local bare mirror that accepts exact-SHA fetches, and a
  * fake `pir` CLI. None of these touch the network or a model.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTempGitRepo, git } from "./helpers.js";
@@ -88,8 +88,13 @@ export function buildLocalRepo(root) {
   return { mirrorDir, base, head };
 }
 
-/** Fake CLI: records its argv + checkout HEAD and emits the `find --json` envelope. */
-export function writeFakeCli(dir) {
+/**
+ * Fake CLI: records its argv + checkout HEAD and emits the `find --json`
+ * envelope. Options let tests exercise the incomplete path (exit 3 with a
+ * valid envelope) and the malformed path (exit 3 with garbage stdout).
+ */
+export function writeFakeCli(dir, { exitCode = 0, incomplete = false, pendingCandidates = 0, stoppedBecause = null, garbage = false } = {}) {
+  mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "fake-pir.js");
   writeFileSync(file, `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -99,7 +104,7 @@ const cwd = args[args.indexOf("--cwd") + 1];
 let cwdHead = null;
 try { cwdHead = cp.execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(); } catch {}
 if (process.env.FAKE_CLI_LOG) fs.appendFileSync(process.env.FAKE_CLI_LOG, JSON.stringify({ args, cwdHead }) + "\\n");
-process.stdout.write(JSON.stringify({ data: {
+${garbage ? "process.stdout.write(\"this is not the find envelope\\n\");" : `process.stdout.write(JSON.stringify({ data: {
   findings: [
     { displayId: "F-1", status: "confirmed", title: "Race", claim: "Counter race", trigger: "two writers", anchors: [{ path: "src/app.ts", startLine: 2, endLine: 2 }] },
     { displayId: "F-2", status: "uncertain", title: "Maybe", claim: "Possible issue", trigger: "", anchors: [{ path: "src/app.ts", startLine: 1 }] },
@@ -107,10 +112,11 @@ process.stdout.write(JSON.stringify({ data: {
   ],
   usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 },
   durationMs: 1500,
-  pendingCandidates: 0,
-  incomplete: false,
-  stoppedBecause: null
-} }));
+  pendingCandidates: ${pendingCandidates},
+  incomplete: ${incomplete},
+  stoppedBecause: ${JSON.stringify(stoppedBecause)}
+} }));`}
+process.exitCode = ${exitCode};
 `);
   return file;
 }

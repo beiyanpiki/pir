@@ -332,3 +332,66 @@ test("driver: result/row writing, synthetic shallow head, and resume provenance"
     );
   });
 });
+
+test("driver: exit 3 with a valid envelope is an incomplete row; garbage stays an error", async () => {
+  await temporary(async (dir) => {
+    const { mirrorDir, base, head } = buildLocalRepo(dir);
+    const { doc } = makeMeta([positiveSample({ source_commit: base, target_commit: head })]);
+    doc.rows[0].clone_url = pathToFileURL(mirrorDir).href;
+    const fixturePath = path.join(dir, "test-set.json");
+    writeFileSync(fixturePath, `${JSON.stringify(doc, null, 2)}\n`);
+    const home = path.join(dir, "home");
+    const env = {
+      ...process.env,
+      PIR_EVAL: "1",
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_CACHE_HOME: path.join(home, ".cache"),
+      XDG_STATE_HOME: path.join(home, ".state"),
+      PIR_CONFIG_DIR: path.join(dir, "pir-config"),
+      PI_CODING_AGENT_DIR: path.join(dir, "agent"),
+      PIR_AACR_CACHE: path.join(dir, "cache"),
+    };
+    const deps = { resolveMergeBase: async () => ({ sha: null, error: "offline test" }) };
+    const outRoot = path.join(dir, "out");
+    const run = (round, cli) => runMain([
+      "--fixture", fixturePath, "--out-root", outRoot, "--round", round, "--cli", cli,
+      "--model", "test/model", "--timeout", "20000", "--view", "both", "--json",
+    ], env, deps);
+
+    // Exit 3 + valid envelope: a real, truncated review, not a failed run.
+    const incompleteCli = writeFakeCli(path.join(dir, "cli-incomplete"), {
+      exitCode: 3, incomplete: true, pendingCandidates: 2, stoppedBecause: "budget",
+    });
+    assert.equal(await run("incomplete", incompleteCli), 0);
+    const roundDir = path.join(outRoot, "incomplete");
+    const summary = JSON.parse(readFileSync(path.join(roundDir, "summary.json"), "utf8"));
+    assert.deepEqual(summary.errors, []);
+    assert.equal(summary.incompleteInstances, 1);
+    const instance = summary.instances[0];
+    assert.equal(instance.status, "ok");
+    assert.equal(instance.incomplete, true);
+    assert.equal(instance.exitCode, 3);
+    assert.equal(instance.stoppedBecause, "budget");
+    assert.equal(instance.pendingCandidates, 2);
+    const row = JSON.parse(readFileSync(rowFileFor(roundDir, instance.safeId), "utf8"));
+    assert.equal(row.status, "ok");
+    assert.equal(row.incomplete, true);
+    assert.equal(row.exitCode, 3);
+    assert.equal(existsSync(resultFileFor(roundDir, "reported", instance.safeId)), true);
+    assert.equal(existsSync(resultFileFor(roundDir, "confirmedOnly", instance.safeId)), true);
+
+    // Exit 3 with unparseable stdout is still an error row.
+    const garbageCli = writeFakeCli(path.join(dir, "cli-garbage"), { exitCode: 3, garbage: true });
+    assert.equal(await run("garbage", garbageCli), 1);
+    const garbageDir = path.join(outRoot, "garbage");
+    const garbageSummary = JSON.parse(readFileSync(path.join(garbageDir, "summary.json"), "utf8"));
+    const failed = garbageSummary.instances[0];
+    assert.equal(failed.status, "error");
+    assert.equal(failed.exitCode, 3);
+    assert.match(failed.error, /without a usable JSON envelope/);
+    assert.equal(garbageSummary.incompleteInstances, 0);
+    assert.equal(garbageSummary.errors.length, 1);
+    assert.equal(existsSync(resultFileFor(garbageDir, "reported", failed.safeId)), false);
+  });
+});

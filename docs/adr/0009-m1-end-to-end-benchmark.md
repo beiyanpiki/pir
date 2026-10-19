@@ -112,9 +112,15 @@ of that measurement.
    the run). Instances of one repository are processed serially because they
    share one cache directory; different repositories run concurrently up to
    `--concurrency`. Every failure — fetch, merge-base resolution,
-   materialization, timeout, CLI error, malformed JSON — becomes an error row
-   and a round never aborts. The CLI under test is the built artifact
-   (`dist/cli/cli.js`), never an import of `dist`.
+   materialization, timeout, unexpected CLI status, unparseable stdout —
+   becomes an error row and a round never aborts. Exit status 3 with a valid
+   envelope is **not** a failure: it is an incomplete review that hit its
+   budget or round limit, and it is kept as a normal row with
+   `incomplete: true`, the envelope's `stoppedBecause`/pending count and its
+   result files; `summary.incompleteInstances` counts it and the console logs
+   an `INCOMPLETE` line. Only exit 3 without a usable envelope (or any other
+   status, or a signal kill) is an error row. The CLI under test is the built
+   artifact (`dist/cli/cli.js`), never an import of `dist`.
 
 4. **Two views, both judged.** `normalize-aacr.js` turns one envelope into
    `reported` (status confirmed + uncertain) and `confirmedOnly` (confirmed).
