@@ -91,6 +91,8 @@ export interface VerifyCommentResult {
   verdict?: VerifierResult["verdict"];
   confidence?: number | null;
   uncertaintyReason?: string | null;
+  /** B4: the ground a rejected verdict named (change-mode only). */
+  rejectionGround?: string | null;
   rationale?: string | null;
   ocrDecision?: string;
   ocrReason?: string | null;
@@ -336,6 +338,7 @@ export async function runVerifierArm(ctx: AppContext, task: VerifyCommentTask, m
     verdict: verdict.verdict,
     confidence: typeof verdict.confidence === "number" ? verdict.confidence : null,
     uncertaintyReason: verdict.uncertaintyReason ?? null,
+    rejectionGround: verdict.rejectionGround ?? null,
     rationale: verdict.rationale,
     usage: summarizeUsage(verdict.usage),
     durationMs: Math.round(performance.now() - started),

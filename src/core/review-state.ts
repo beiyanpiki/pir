@@ -129,6 +129,7 @@ export function applyVerdict(
     ...candidate,
     status,
     verifierRationale: verdict.rationale,
+    ...(verdict.rejectionGround === undefined ? {} : { rejectionGround: verdict.rejectionGround }),
     memoryMatches: annotated,
     confidence: verdict.confidence,
   };

@@ -140,9 +140,11 @@ test("migration v6: an existing (pre-updated_at) db upgrades in place", async ()
   db.exec(`INSERT INTO review_runs_v5 SELECT id, project_id, mode, base, head, target, started_at, finished_at, status, rounds, candidates, confirmed, rejected, uncertain, notes FROM review_runs`);
   db.exec("DROP TABLE review_runs");
   db.exec("ALTER TABLE review_runs_v5 RENAME TO review_runs");
-  // Also strip the later findings column: a genuine pre-v6 db has no
-  // confidence column, so replaying v6+ must not collide with it (Q4 v7).
+  // Also strip the later findings columns: a genuine pre-v6 db has neither
+  // confidence (v7) nor rejection_ground (v8), so replaying v6+ must not
+  // collide with them.
   db.exec("ALTER TABLE findings DROP COLUMN confidence");
+  db.exec("ALTER TABLE findings DROP COLUMN rejection_ground");
   db.exec("DELETE FROM _migrations WHERE version >= 6");
   db.exec("COMMIT");
   db.close();

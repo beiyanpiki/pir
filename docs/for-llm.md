@@ -283,6 +283,9 @@ evidence: [{ kind, path?, startLine?, excerpt?, description? }]
 verifierRationale, memoryMatches, round, createdAt
 lineCorrected: true when at least one anchor was re-located locally from its excerpt
 confidence: verifier self-assessment 0–1 (null when not on record)
+rejectionGround: why a change-mode rejection happened
+  (no-such-code | contradicted-by-code | pre-existing | guarded | speculative | not-introduced-by-change | other;
+  null for kept/uncertain/audit rows and rows recorded before this field)
 ```
 
 Status handling:

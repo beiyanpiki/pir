@@ -47,7 +47,8 @@ export function renderFinding(finding: FindingView): string {
     lines.push(`  at: ${anchor.path}:${anchor.startLine}${anchor.endLine ? `-${anchor.endLine}` : ""}${corrected}`);
   }
   if (finding.verifierRationale) {
-    lines.push(`  verifier: ${finding.verifierRationale.slice(0, 300)}`);
+    const ground = finding.rejectionGround ? ` [ground: ${finding.rejectionGround}]` : "";
+    lines.push(`  verifier: ${finding.verifierRationale.slice(0, 300)}${ground}`);
   }
   for (const match of finding.memoryMatches.slice(0, 3)) {
     const m = match as { decision?: string; stillApplies?: boolean; source?: string };
