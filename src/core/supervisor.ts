@@ -506,7 +506,13 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
     featureKeys: [], entityKeys: [], headCommit: head,
   });
-  const toolCtx: ToolContext = { repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory };
+  // B1: change mode also guards the pinned read channels, so the secret gate
+  // is not bypassed by read_code/search_text on a filtered path. Audit builds
+  // its own context without the guard — its behavior is unchanged.
+  const toolCtx: ToolContext = {
+    repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory,
+    blockSecretPaths: true,
+  };
   const languagePacks = await resolveLanguagePacks({
     repoRoot: deps.repoRoot,
     headCommit: head,

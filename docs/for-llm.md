@@ -263,7 +263,11 @@ For review results, inspect these fields in order:
    `excluded: true` (+ `excludedReason`) had its diff body withheld by the
    file filter (binary, secret path, skip pattern, oversized diff). Metadata
    is intact, the patch is not: do not claim to have reviewed those files,
-   and do not ask a session for their diff — `get_change` refuses.
+   and do not ask a session for their diff — `get_change` refuses. For the
+   secret gates (dotenv/SSH/credential files) `read_code` and `search_text`
+   refuse the path on every revision in change mode, so the file body is
+   unreachable through the review tools as well; the builtin filesystem tools
+   read the working tree and are not evidence.
 6. `usage`, `usageComplete`, `estimatedTokens`, and `durationMs`: report
    measured cost/usage only when available.
 

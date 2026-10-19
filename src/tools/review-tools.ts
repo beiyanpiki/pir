@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ReviewTool } from "../agents/types.js";
 import { readReviewFile, resolveReviewRevision, safeResolve, toolError, type ReviewRevision, type ToolContext } from "./context.js";
+import { secretPathReason } from "../changes/filter.js";
 import type { CodeSymbol } from "../codemap/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
 
@@ -64,7 +65,7 @@ function pageLines(lines: string[], offset: number, limit: number, charOffset = 
 export function createReadCodeTool(ctx: ToolContext): ReviewTool {
   return {
     name: "read_code",
-    description: "Read an explicit path at an immutable review snapshot, never the working tree. For deletes/renames use the old path with revision=merge-base (or base). Returns numbered, bounded pages and provenance.",
+    description: "Read an explicit path at an immutable review snapshot, never the working tree. For deletes/renames use the old path with revision=merge-base (or base). Returns numbered, bounded pages and provenance. Secret paths excluded by the change-mode filter are refused on every revision.",
     promptSnippet: "read_code: pinned head/base/merge-base source, with window continuation",
     parameters: Type.Object({
       path: Type.String({ description: "Repository-relative path at the selected revision; no automatic rename mapping" }),
@@ -117,7 +118,7 @@ export function createReadCodeTool(ctx: ToolContext): ReviewTool {
 export function createSearchTextTool(ctx: ToolContext): ReviewTool {
   return {
     name: "search_text",
-    description: "Case-sensitive search of tracked text at one immutable review commit, not the working tree. Counts matching lines (not occurrences); bounded results have offset continuation. Regex uses Git extended regular expressions.",
+    description: "Case-sensitive search of tracked text at one immutable review commit, not the working tree. Counts matching lines (not occurrences); bounded results have offset continuation. Regex uses Git extended regular expressions. Secret paths excluded by the change-mode filter are never searched.",
     promptSnippet: "search_text: bounded literal/ERE search of pinned head/base/merge-base",
     parameters: Type.Object({
       pattern: Type.String({ minLength: 1, maxLength: 4096, description: "Single-line literal or extended regex" }),
@@ -139,7 +140,12 @@ export function createSearchTextTool(ctx: ToolContext): ReviewTool {
         const offset = integer(params.offset, 0, "offset");
         const pathspec = searchPathspec(ctx.repoRoot, params.glob);
         const commit = await resolveReviewRevision(ctx, revision);
-        const result = await searchCommit(ctx.repoRoot, commit, params.pattern, { isRegex, pathspec, limit, offset });
+        const result = await searchCommit(ctx.repoRoot, commit, params.pattern, {
+          isRegex, pathspec, limit, offset,
+          // B1: in change mode the non-overridable secret paths are invisible
+          // to every pinned channel, including grep results.
+          ...(ctx.blockSecretPaths ? { skipPath: (file: string) => secretPathReason(file) !== undefined } : {}),
+        });
         const continuation = result.hasMore ? { pattern: params.pattern, revision, isRegex, ...(params.glob === undefined ? {} : { glob: params.glob }), limit, offset: offset + result.matches.length } : null;
         return bounded([`snapshot: revision=${revision} commit=${commit}`,
           `matchingLines: ${result.hasMore ? ">=" : ""}${result.seen}; returned: ${result.matches.length}; offset: ${offset}; truncated: ${result.hasMore}`,
@@ -168,6 +174,8 @@ function searchPathspec(repoRoot: string, value: unknown): string[] {
 /** Stream grep records; keep only one bounded preview and stop after one extra hit. */
 async function searchCommit(repoRoot: string, commit: string, pattern: string, opts: {
   isRegex: boolean; pathspec: string[]; limit: number; offset: number;
+  /** Paths dropped entirely (not counted, not returned): the secret gate. */
+  skipPath?: (path: string) => boolean;
 }): Promise<{ matches: string[]; hasMore: boolean; seen: number }> {
   const args = ["-C", repoRoot, "--no-pager", "grep", "--no-color", "--full-name", "--no-textconv",
     "--no-column", "--no-heading", "--no-break", "--no-show-function", "--no-function-context",
@@ -205,6 +213,7 @@ async function searchCommit(repoRoot: string, commit: string, pattern: string, o
         if (field === 0) { file = token.slice(commit.length + 1); field = 1; }
         else if (field === 1) { line = token; field = 2; }
         else {
+          if (opts.skipPath?.(file)) { field = 0; token = ""; continue; }
           seen++;
           if (seen > opts.offset) {
             const displayPath = /[\r\n\t]/.test(file) ? JSON.stringify(file) : file;

@@ -31,10 +31,10 @@ MAX_TOKENS → `too_large`). Entry `Agent.Run` is `internal/agent/agent.go`
 :284. Three properties of that design are load-bearing here:
 
 1. **The secret gate is not rescuable by any user rule.** Everything else is
-   negotiable; a credential that reaches a model prompt cannot be recalled.
+   negotiable; a credential in a prompt cannot be recalled.
 2. **`--preview` and the real run call the same `selectFiles` pure
-   function** — "what you preview is what gets reviewed" is a structural
-   property, not a promise to maintain two code paths in sync.
+   function** — "what you preview is what gets reviewed" is structural, not a
+   promise to keep two code paths in sync.
 3. **Dispatched subtasks see global change metadata but not other groups'
    patches** (`dispatchSubtasks`, `internal/agent/agent.go`:629): the model
    gets `STATUS path (+N/-M)` lines, never the bodies — the same split pir
@@ -54,15 +54,15 @@ hence B1 combines a filter with an exclusion record and a preview.
    `snapshot.ts` consumes the module and re-exports the pre-split names;
    `pir audit --dry-run` output is byte-identical to before (pinned by
    tests), so the two modes cannot drift on what counts as reviewable.
-2. **Change mode applies four gates after `buildChangeSet()`, in this
-   fixed order**, with include treated as the escape hatch for the last two:
+2. **Change mode applies four gates after `buildChangeSet()`, fixed order**,
+   with include as the escape hatch for the last two:
    - **gate 1 — binary**: the binary-extension policy, checked on both sides
      of a rename. There is no text to review; not overridable.
    - **gate 2 — secret paths**: the table below; not overridable by any
      include or skip option. Renames are checked on both paths, so moving a
      key out of `.ssh/` does not launder it.
-   - **include scope**: literal file/directory prefixes (audit `--path`
-     semantics). A file outside a non-empty include set is `not-included`.
+   - **include scope**: `--path`-style literal prefixes; outside a non-empty
+     include set a file is `not-included`.
    - **gate 3 — skip patterns**: explicit `--skip` globs, then the default
      policy (vendored dependencies, build output, lockfiles, minified output).
    - **gate 4 — oversized single-file diff**: `MAX_DIFF_FILE_BYTES`.
@@ -86,14 +86,17 @@ hence B1 combines a filter with an exclusion record and a preview.
    it ("excluded from diff review"), the coverage ledger never counts its
    hunks (no unreachable denominator, so full coverage stays achievable), and
    the reviewer knows the file changed even though it cannot read the patch.
-   A change set with nothing excluded is returned unchanged, so the common
-   path is behaviorally identical to pre-B1.
+   Emptying hunks only covers the *diff* channel, so the secret gate is also
+   enforced at the pinned read channels: in change mode `read_code`,
+   `search_text` and collector evidence reads refuse a secret path on every
+   revision (dogfood F-177). Audit never sets that guard. A change set with
+   nothing excluded is returned unchanged, so the common path is
+   behaviorally identical to pre-B1.
 5. **Envelope change is purely additive.** `data.run.files[]` gains
-   `excluded` (always present, boolean) and `excludedReason` (present only
-   when excluded); the four pre-B1 keys keep their names and values. The run
-   manifest records the same projection through one shared
-   `changedFileSummary()` function, so envelope and manifest cannot drift.
-   Zero consumer changes (acceptance A2).
+   `excluded` (always boolean) and `excludedReason` (excluded only); the four
+   pre-B1 keys keep their names and values, and envelope plus run manifest
+   record one shared `changedFileSummary()` projection. Zero consumer changes
+   (acceptance A2).
 6. **`MAX_DIFF_FILE_BYTES = 200_000`**, measured on the pageable diff body
    (hunk headers plus raw diff lines, in UTF-8 bytes). At ~4 chars/token that
    is ~50k tokens for one file, and `get_change` pages at most 120 raw lines
@@ -102,16 +105,15 @@ hence B1 combines a filter with an exclusion record and a preview.
    *below* audit's `MAX_AUDIT_FILE_BYTES` (1MB) because audit spreads a file
    across work units while change mode hands it to one session. The boundary
    is exact and pinned: at the cap selected, one byte over excluded.
-7. **`pir find --preview` reuses the same pure function.** The preview calls
+7. **`pir find --preview` reuses the same pure function.** It calls
    `buildChangeSet()` plus the very `selectChangeFiles()` that
-   `applyChangeFilter()` runs, and prints the per-file result (path, status,
+   `applyChangeFilter()` runs, printing the per-file result (path, status,
    churn, selected/excluded, gate, reason) as text and `--json`, with the
    policy that produced it. No run row, no model session, no writes;
    run-shaping flags (`--max-rounds`, `--max-tokens`, `--max-findings`,
    `--verify-concurrency`, `--min-confidence`, `--fail-on`, `--model`,
-   `--verify-model`, `--angles`, `--plugins`) are rejected with a usage
-   error rather than silently ignored — the `audit --dry-run` precedent
-   (#56).
+   `--verify-model`, `--angles`, `--plugins`) are usage errors, not silent
+   no-ops — the `audit --dry-run` precedent (#56).
 8. **No new user-facing include flag in B1.** find passes default options;
    the include/exclude parameters are the seam the B5 rule file wires into
    (roadmap dependency B1 → B5) — a behavior gate, not a configuration feature.
@@ -119,12 +121,11 @@ hence B1 combines a filter with an exclusion record and a preview.
 ## Consequences
 
 - **Positive:** change mode stops spending reviewer budget on binaries,
-  lockfiles, generated output and vendored trees; secret files structurally
-  cannot reach a model prompt, a transcript or a provider log; audit and
-  change mode share one policy table; the coverage denominator stays
-  reachable; and the selection becomes auditable *before* a run is paid for,
-  through the same function the run uses. M1 measures the effect on real PRs
-  (roadmap: "B1's effect measured by M1").
+  lockfiles, generated output and vendored trees; secret paths cannot reach a
+  model prompt through any pinned channel; audit and change mode share one
+  policy table; the coverage denominator stays reachable; and the selection
+  becomes auditable *before* a run is paid for. M1 measures the effect on
+  real PRs (roadmap: "B1's effect measured by M1").
 - **Negative:** a genuinely interesting lockfile or generated-file change is
   no longer diff-reviewed by default — a real recall trade, deliberate, but
   worth reading together with OCR's own recall stance. B5's rule file is the
@@ -136,5 +137,8 @@ hence B1 combines a filter with an exclusion record and a preview.
   semantics differ by mode — audit's `--path` narrows the scope without
   bypassing its default policy (as before), while change mode's include
   bypasses skip/size gates. Both are pinned by tests and stated in the
-  preview output. Per-file terminal coverage states remain decision point
-  D-B8's contract; B1 records the exclusion pair additively.
+  preview output. The SDK's builtin filesystem tools (`read`/`grep`) read
+  the working tree, not the pinned revision, and stay outside this gate; the
+  reviewer prompt already treats them as non-evidence. Per-file terminal
+  coverage states remain decision point D-B8's contract; B1 records the
+  exclusion pair additively.

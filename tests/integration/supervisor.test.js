@@ -2103,6 +2103,16 @@ test("findIssues: the change-mode gate keeps excluded diff bodies out of get_cha
       const paged = await tool("get_change").execute({ path: ".env", hunkIndex: 0 });
       assert.match(paged.text, /was excluded from diff review/);
       assert.doesNotMatch(paged.text, /SUPER_SECRET_VALUE/);
+      // Secret paths are invisible to the pinned read channels too (F-177):
+      // reading the whole file at head would leak strictly more than the diff.
+      for (const revision of ["head", "base", "merge-base"]) {
+        const read = await tool("read_code").execute({ path: ".env", revision });
+        assert.match(read.text, /excluded from this review/, `read_code ${revision} must refuse the secret path`);
+        assert.doesNotMatch(read.text, /SUPER_SECRET_VALUE/);
+      }
+      const searched = await tool("search_text").execute({ pattern: "SUPER_SECRET_VALUE" });
+      assert.match(searched.text, /No matches\./);
+      assert.doesNotMatch(searched.text, /SUPER_SECRET_VALUE/);
       await reviewerRecordsCandidate(tool);
     },
     verifierScript: async (tool) => {

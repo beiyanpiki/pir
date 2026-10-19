@@ -511,3 +511,48 @@ test("coverage observers: read_code credits only the lines actually returned (do
     repo.cleanup();
   }
 });
+
+test("B1 dogfood F-177: the change-mode secret guard covers read_code and search_text", async () => {
+  const repo = createTempGitRepo("pir-secret-guard-");
+  try {
+    repo.write("src/app.ts", "const token = readEnv();\n");
+    repo.write(".env", "API_TOKEN=SECRET-GUARD-VALUE\n");
+    repo.write(".env.example", "API_TOKEN=your-token-here\n");
+    repo.commit("base");
+    repo.write("src/app.ts", "const token = readEnv()!;\n");
+    repo.write(".env", "API_TOKEN=SECRET-GUARD-VALUE-2\n");
+    repo.commit("head");
+    const base = await context(repo);
+    assert.deepEqual(base.changeSet.files.map((f) => f.path), [".env", "src/app.ts"]);
+
+    // Change mode: the gate is not just a diff-body property — the pinned read
+    // channels refuse the secret path on every revision.
+    const guarded = { ...base, blockSecretPaths: true };
+    for (const revision of ["head", "base", "merge-base"]) {
+      const read = await createReadCodeTool(guarded).execute({ path: ".env", revision });
+      assert.match(read.text, /excluded from this review/, `read_code ${revision} must refuse .env`);
+      assert.match(read.text, /never sent to a model/);
+      assert.doesNotMatch(read.text, /SECRET-GUARD-VALUE/);
+    }
+    // A direct chokepoint call is refused too (collector evidence reads).
+    await assert.rejects(readReviewFile(guarded, ".env"), /excluded from this review/);
+    // grep results drop secret-path records, and a glob aimed at the file
+    // yields nothing rather than its content.
+    const search = createSearchTextTool(guarded);
+    const byValue = await search.execute({ pattern: "SECRET-GUARD-VALUE" });
+    assert.match(byValue.text, /No matches\./);
+    assert.doesNotMatch(byValue.text, /SECRET-GUARD-VALUE/);
+    const byGlob = await search.execute({ pattern: "API_TOKEN", glob: ".env" });
+    assert.match(byGlob.text, /No matches\./);
+    assert.doesNotMatch(byGlob.text, /SECRET-GUARD-VALUE/);
+    // The exemption stays readable, and normal sources are unaffected.
+    assert.match((await createReadCodeTool(guarded).execute({ path: ".env.example" })).text, /your-token-here/);
+    assert.match((await search.execute({ pattern: "readEnv" })).text, /src\/app\.ts:1: /);
+
+    // Audit (no guard) is byte-identical to before: .env is readable there.
+    assert.match((await createReadCodeTool(base).execute({ path: ".env", revision: "base" })).text, /SECRET-GUARD-VALUE/);
+    assert.match((await createSearchTextTool(base).execute({ pattern: "API_TOKEN" })).text, /\.env:1: /);
+  } finally {
+    repo.cleanup();
+  }
+});
