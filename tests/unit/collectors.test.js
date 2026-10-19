@@ -150,6 +150,31 @@ test("single-ID legacy boolean is compatible but cannot conflict or suppress unk
   }
 });
 
+test("B4: a change-mode rejection must name its ground, and unknown wording normalizes to other", async () => {
+  const rejected = { verdict: "rejected", rationale: "The caller guards this path at src/next.ts:2", confidence: 0.8 };
+  const required = createSubmitVerdictTool({}, undefined, undefined, { requireRejectionGround: true });
+  const missing = await required.execute(rejected);
+  assert.match(missing.text, /rejectionGround is required/);
+  assert.match(missing.text, /no-such-code, contradicted-by-code/, "the error lists the vocabulary so a retry can comply");
+  // A vocabulary miss is recorded, never a dead session: the ground is normalized.
+  const unknown = {};
+  assert.equal((await createSubmitVerdictTool(unknown, undefined, undefined, { requireRejectionGround: true }).execute({ ...rejected, rejectionGround: "because I said so" })).terminate, true);
+  assert.equal(unknown.verdict.rejectionGround, "other");
+  const canonical = {};
+  await createSubmitVerdictTool(canonical, undefined, undefined, { requireRejectionGround: true }).execute({ ...rejected, rejectionGround: "  Guarded " });
+  assert.equal(canonical.verdict.rejectionGround, "guarded");
+  // An empty ground is malformed, not "other".
+  assert.match((await required.execute({ ...rejected, rejectionGround: "   " })).text, /nonempty/);
+  // Non-rejected verdicts keep today's contract and carry no ground.
+  const confirmed = {};
+  await createSubmitVerdictTool(confirmed, undefined, undefined, { requireRejectionGround: true }).execute({ verdict: "confirmed", rationale: "Failure reachable from src/next.ts:2" });
+  assert.equal(confirmed.verdict.rejectionGround, undefined);
+  // Audit mode has no attribution grounds: the requirement stays off.
+  const audit = {};
+  assert.equal((await createSubmitVerdictTool(audit).execute(rejected)).terminate, true);
+  assert.equal(audit.verdict.rejectionGround, undefined);
+});
+
 test("uncertain verdict uses classified reason and caps code-only feedback", async () => {
   const collector = {};
   await createSubmitVerdictTool(collector).execute({ verdict: "uncertain", rationale: "Caller not available", confidence: 0, codeFeedback: "x".repeat(2000) });

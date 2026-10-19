@@ -298,4 +298,14 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE findings ADD COLUMN confidence REAL`,
     ],
   },
+  {
+    version: 8,
+    statements: [
+      // Verifier rejection ground (roadmap B4): the audited reason a
+      // change-mode rejection gave, so a false-kill cluster can be traced to a
+      // ground instead of a rationale archive. Nullable: kept/uncertain rows,
+      // audit rows and rows persisted before this column have no ground.
+      `ALTER TABLE findings ADD COLUMN rejection_ground TEXT`,
+    ],
+  },
 ];

@@ -169,6 +169,26 @@ export function bucketize(rows, key) {
 
 export const BUCKET_KEYS = ["source_model", "category", "context", "is_ai_comment"];
 
+/**
+ * B4: rejection grounds, counted per arm. A ground is the auditable reason a
+ * comment died, so a false-kill cluster can be attributed to "guarded" or
+ * "pre-existing" instead of a rationale archive. Rows from builds that
+ * predate B4 carry no ground and are counted as `unknown` rather than
+ * dropped — a mixed round must not look clean.
+ */
+export function rejectionGroundCounts(rows) {
+  const groups = new Map();
+  for (const row of rows ?? []) {
+    const ground = row?.rejectionGround ?? "unknown";
+    if (!groups.has(ground)) groups.set(ground, { ground, killed: 0, label0: 0, label1: 0 });
+    const group = groups.get(ground);
+    group.killed += 1;
+    if (row?.label === 1) group.label1 += 1;
+    else if (row?.label === 0) group.label0 += 1;
+  }
+  return [...groups.values()].sort((a, b) => (b.killed - a.killed) || a.ground.localeCompare(b.ground));
+}
+
 /** Full scorecard: both policies overall plus every requested bucket. */
 export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
   const byArm = new Map();
@@ -197,7 +217,9 @@ export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
       const kind = row?.diffBaseKind ?? "unknown";
       diffBaseKinds[kind] = (diffBaseKinds[kind] ?? 0) + 1;
     }
-    arms[arm] = { rows: armRows.length, diffBaseKinds, policies };
+    // B4 grounds describe kills, which both policies agree on (a kill is a
+    // rejected verdict either way), so the distribution is policy-independent.
+    arms[arm] = { rows: armRows.length, diffBaseKinds, rejectionGrounds: rejectionGroundCounts(armRows.filter((row) => classify(row, PRIMARY_POLICY) === "kill")), policies };
   }
   return { primaryPolicy: PRIMARY_POLICY, strictPolicy: STRICT_POLICY, arms };
 }

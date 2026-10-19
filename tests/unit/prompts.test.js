@@ -106,6 +106,22 @@ test("verifier prompt includes candidate evidence and real per-ID historical con
   assert.ok(truncated.length < 23000);
 });
 
+test("B4: the change-mode verifier prompt states the ground vocabulary, the cost asymmetry and the protected subjects", () => {
+  const prompt = verifierPrompt({ candidate, base: "base-sha", head: "head-sha", mergeBase: "merge-sha", priorDecisions: [], fixHistory: [], structuralQueries: false });
+  for (const ground of ["no-such-code", "contradicted-by-code", "pre-existing", "guarded", "speculative", "not-introduced-by-change", "other"]) {
+    assert.ok(prompt.includes(ground), ground);
+  }
+  assert.ok(prompt.includes("rejectionGround"), "names the field the tool validates");
+  assert.match(prompt, /a false rejection destroys a real finding/i);
+  assert.match(prompt, /concurrency, memory safety or security/);
+  assert.match(prompt, /absence of proof is not proof of absence/i);
+  // Audit mode has no change attribution, so the change-mode grounds do not
+  // leak into its prompt: its rejects answer a different question.
+  const audit = auditVerifierPrompt({ candidate, head: "head-sha", priorDecisions: [], fixHistory: [], structuralQueries: false });
+  assert.ok(!audit.includes("rejectionGround"));
+  assert.ok(!audit.includes("not-introduced-by-change"));
+});
+
 test("reviewer captures usage before disposal and defaults optional round fields", async () => {
   const f = factory(async (tool, prompt, config) => {
     assert.match(prompt, /pinned-head/);
@@ -238,7 +254,7 @@ test("code feedback survives only with neither initial matches nor issue lookup"
       const f = factory(async (tool) => {
         if (lookup) await tool("get_relevant_issue_memory").execute({ claim: candidate.claim });
         await tool("read_code").execute({ path: "counter.ts" });
-        await tool("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_REASON (counter.ts:1)", codeFeedback: "CHECK_CODE_ONLY" });
+        await tool("submit_verdict").execute({ verdict: "rejected", rationale: "PRIVATE_REASON (counter.ts:1)", rejectionGround: "contradicted-by-code", codeFeedback: "CHECK_CODE_ONLY" });
       });
       const result = await runVerifier({ factory: f, ctx: evidence.ctx, candidate, priorDecisions: [] });
       assert.equal(result.codeFeedback, lookup ? undefined : "CHECK_CODE_ONLY");

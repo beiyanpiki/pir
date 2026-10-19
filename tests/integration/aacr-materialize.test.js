@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,7 +13,7 @@ import {
   rememberMergeBase, writeMaterialized,
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
-import { assertResumeCompatible, materializeTask, parseOptions as runOptions, releaseTask, scoreRow } from "../eval/aacr/run-m0.js";
+import { assertResumeCompatible, buildDigest, materializeTask, parseOptions as runOptions, releaseTask, scoreRow, sha256 } from "../eval/aacr/run-m0.js";
 
 function temporary(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "pir-aacr-mat-"));
@@ -60,6 +60,31 @@ test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
   assert.throws(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "b".repeat(64) }), /refuses to mix CLI builds/);
   // A previous summary without provenance (older format) is not a mismatch.
   assert.doesNotThrow(() => assertResumeCompatible({}, { model: "m-b", cliSha256: "b".repeat(64) }));
+});
+
+test("B4: buildDigest distinguishes builds that share the CLI entry file", () => {
+  temporary((root) => {
+    const dist = path.join(root, "dist");
+    const cliDir = path.join(dist, "cli");
+    const agentDir = path.join(dist, "agents");
+    mkdirSync(cliDir, { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(path.join(cliDir, "cli.js"), "import('../agents/verifier.js');\n");
+    writeFileSync(path.join(agentDir, "verifier.js"), "export const prompt = 'v1';\n");
+    const entryBefore = sha256(readFileSync(path.join(cliDir, "cli.js")));
+    const before = buildDigest(dist);
+    assert.match(before, /^[0-9a-f]{64}$/);
+    // The dispatcher does not change; the behavior does (B4's real shape).
+    writeFileSync(path.join(agentDir, "verifier.js"), "export const prompt = 'v2';\n");
+    const after = buildDigest(dist);
+    assert.notEqual(after, before);
+    assert.equal(sha256(readFileSync(path.join(cliDir, "cli.js"))), entryBefore, "the entry file alone cannot see the change — which is why the digest exists");
+    // Deterministic and order-independent across filesystem enumeration order.
+    assert.equal(buildDigest(dist), after);
+    // A round recorded with one build refuses to resume on the other.
+    assert.throws(() => assertResumeCompatible({ model: "m", cli: { sha256: entryBefore, buildSha256: before } }, { model: "m", cliSha256: entryBefore, buildSha256: after }), /refuses to mix CLI builds/);
+    assert.doesNotThrow(() => assertResumeCompatible({ model: "m", cli: { sha256: entryBefore, buildSha256: after } }, { model: "m", cliSha256: entryBefore, buildSha256: after }));
+  });
 });
 
 test("M0 dogfood F-181: a failed merge-base lookup is never cached, so later runs retry", () => {

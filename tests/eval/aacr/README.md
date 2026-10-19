@@ -13,8 +13,8 @@ tests/eval/aacr/
   sample.js               pure seeded sampling + comment ids (shared by the materializer and the driver)
   materialize.js          T2: shared clone cache (depth 1) -> per-comment diff + head file -> intermediate JSONL
   run-m0.js               T4: spawn `pir _verify-comment` per comment per arm with rb-grade isolation
-  score.js                T5: pure scoring (policies, accuracy/P/R/F1, AUC, kill-rate, buckets)
-  report.js               A1: results document renderer (protocol, per-bucket tables, citation)
+  score.js                T5: pure scoring (policies, accuracy/P/R/F1, AUC, kill-rate, buckets, rejection grounds)
+  report.js               A1: results document renderer (protocol, per-bucket tables, citation, optional before/after baseline)
   results/                committed results files (M0-*.md)
   dataset/                gitignored: downloaded + materialized rows (auto-rebuilt)
   out/                    gitignored: run outputs (per-arm score rows + summary.json)
@@ -46,6 +46,15 @@ node tests/eval/aacr/score.js --run tests/eval/aacr/out/2026-10-19-m0 --json
 node tests/eval/aacr/report.js --run tests/eval/aacr/out/2026-10-19-m0 \
   --out tests/eval/aacr/results/M0-2026-10-19-limit100.md
 ```
+
+A controlled before/after (B4's merge gate, ADR-0008) runs the same sample twice — once with the pre-change build (`--cli` pointing at its `dist/cli/cli.js`), once with the build under test — into two round directories, then renders the comparison from the after-round with the before-round as baseline:
+
+```sh
+node tests/eval/aacr/report.js --run tests/eval/aacr/out/<after> --baseline tests/eval/aacr/out/<before> \
+  --out tests/eval/aacr/results/<comparison>.md
+```
+
+The two rounds must share the dataset, sample digest, model id and arm set — `report.js` refuses to compare otherwise — and only the CLI build may differ. A round's rejection grounds (`rejectionGrounds` in `score.js`, "Rejection grounds (B4)" in the results file) come from the verifier's required `rejectionGround` on a rejected verdict; rows recorded before B4 or by the OCR arm count as `unknown` rather than disappearing.
 
 Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently.
 

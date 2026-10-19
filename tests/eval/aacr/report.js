@@ -23,6 +23,35 @@ export const pct = (value) => (value === null || value === undefined ? "—" : (
 
 const aucText = (auc) => (auc === null || auc === undefined ? "—" : auc.toFixed(3));
 
+/**
+ * Provenance a before/after pair must share (ADR-0008 §6). Only the CLI build
+ * may differ between the two rounds; a different dataset, sample, model or arm
+ * set makes the two numbers unrelated rather than a controlled comparison.
+ */
+export const COMPARABLE_FIELDS = [
+  ["dataset sha256", (run) => run?.dataset?.sha256],
+  ["sample digest", (run) => run?.sample?.digest],
+  ["model id", (run) => run?.model],
+  ["arm set", (run) => (run?.limits?.arms ?? []).join(",")],
+];
+
+export function assertComparableRuns(before, after) {
+  for (const [label, read] of COMPARABLE_FIELDS) {
+    const a = read(before);
+    const b = read(after);
+    if (!a || !b) throw new Error("before/after comparison needs " + label + " on both runs (before " + (a ?? "missing") + ", after " + (b ?? "missing") + ")");
+    if (a !== b) throw new Error("before/after runs differ in " + label + ": " + a + " vs " + b + " — only the CLI build may differ, so these are not a controlled comparison");
+  }
+}
+
+/** "80.0% → 76.8% (−3.2 pp)" — a delta in percentage points, not a ratio. */
+export function deltaText(before, after) {
+  if (typeof before !== "number" || typeof after !== "number") return "—";
+  const points = (after - before) * 100;
+  const sign = points > 0 ? "+" : points < 0 ? "−" : "±";
+  return pct(before) + " → " + pct(after) + " (" + sign + Math.abs(points).toFixed(1) + " pp)";
+}
+
 function metricLine(metrics, auc) {
   return [
     "acc " + pct(metrics.accuracy), "P " + pct(metrics.precision), "R " + pct(metrics.recall),
@@ -49,9 +78,12 @@ function bucketTable(bucketRows) {
 /**
  * Render one results document. `run` is a run-m0.js summary.json object and
  * `scores` is scoreRun()'s scorecard; missing provenance fields throw rather
- * than rendering a table nobody can reproduce.
+ * than rendering a table nobody can reproduce. An optional `baseline`
+ * (`{ run, scores }`) adds the controlled before/after section ADR-0008's B4
+ * gate is read from; it must share the after-run's dataset, sample, model and
+ * arms, and is rejected otherwise.
  */
-export function renderResultsMd({ run, scores, title, notes = [] }) {
+export function renderResultsMd({ run, scores, baseline = null, title, notes = [] }) {
   if (!run?.model) throw new Error("run.model is required (results must name the exact model id)");
   if (!run?.dataset?.sha256) throw new Error("run.dataset.sha256 is required");
   if (!run?.sample?.digest) throw new Error("run.sample.digest is required");
@@ -71,6 +103,10 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
   lines.push("Comment-level binary classification: label 1 = the comment is correct (should survive), label 0 = incorrect (should be intercepted).",
     " The pir arm runs the shipped verifier (" + code("pir _verify-comment --arm verifier") + ", production " + code("runVerifier") +
     " with the full repository checkout at the comment's capture-time head commit); the OCR arm runs the ported open-code-review reflection prompt on the same material (diff only, no tools), same model id, same scoring code. Per ADR-0007:");
+  if (!Object.keys(scores.arms).includes("ocr")) {
+    lines.push("");
+    lines.push("**This round ran the pir verifier arm only** (the arms row in Run configuration names it): no OCR row was scored, so the comparison sentences below describe the two-arm protocol and not a second arm of this run.");
+  }
   lines.push("");
   lines.push("- Primary policy **uncertain = keep**: " + code("confirmed") + " and " + code("uncertain") + " both count as keeps, only " + code("rejected") + " kills." +
     " The strict policy **uncertain = miss** is reported beside it: an uncertain verdict earns no credit in either direction (neither a keep nor a kill).");
@@ -80,7 +116,7 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
     " AUC ranks rows by the verifier's keep-score: confirmed = 0.5 + c/2, rejected = 0.5 − c/2, uncertain = 0.5 (OCR arm: approve = 1, remove = 0).",
     " Rows with no decision (error, invalid, or strict-policy uncertain) count as misses, never as silent exclusions.");
   lines.push("- Sample variance rules copied from " + code("tests/eval/reviewbench/RESULTS.md") + ": a \"no regression\" claim needs both comparison runs no worse than the comparison's worse run; a model or prompt change voids comparability.",
-    " M0 is single-run per arm in Iteration 1 — these are one sample's numbers, not a variance floor; repeats are Iteration 2's job.");
+    " Every M0 round publishes one run per arm — these are one sample's numbers, not a variance floor; repeats are a separate round's job.");
   lines.push("- No judge is involved (ADR-0007 §9): the dependent variable is the dataset's expert label, so these numbers are judge-drift-free by construction and are **not** comparable to M1's " + code("balanced_score") + ".");
   lines.push("");
   lines.push("## Run configuration");
@@ -91,6 +127,7 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
   lines.push("| date | " + (run.startedAt ?? "—") + " → " + (run.finishedAt ?? "(unfinished)") + " |");
   lines.push("| model (both arms) | " + code(run.model) + " |");
   lines.push("| CLI sha256 | " + code(run.cli?.sha256 ?? "—") + " |");
+  lines.push("| build sha256 (dist digest) | " + code(run.cli?.buildSha256 ?? "—") + " |");
   lines.push("| dataset sha256 | " + code(run.dataset.sha256) + " |");
   lines.push("| sample | limit " + (run.sample.limit ?? run.sample.eligible) + ", seed " + run.sample.seed + ", digest " + code(run.sample.digest) + " |");
   lines.push("| arms | " + (run.limits?.arms ?? Object.keys(scores.arms)).join(", ") + " |");
@@ -114,6 +151,47 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
     lines.push([ "", arm, "errors / invalid / strict-unresolved", primary.errors + " / " + primary.invalid + " / " + (primary.unresolvedPositive + primary.unresolvedNegative), "", "" ].join(" | "));
   }
   lines.push("");
+  if (baseline) {
+    assertComparableRuns(baseline.run, run);
+    lines.push("## Before/after (controlled build comparison)");
+    lines.push("");
+    lines.push("Same dataset, sample, model and arms; only the CLI build differs (− = the pre-change build, + = the build under test). This is a point comparison: the rb variance rule (a \"no regression\" claim needs both runs no worse than the comparison's worse run) cannot be satisfied by one run per side, and repeats remain a separate round.");
+    lines.push("");
+    lines.push("| side | arm | n | label1/label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | invalid/errors |");
+    lines.push("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    for (const shoulder of [["−", baseline.run, baseline.scores], ["+", run, scores]]) {
+      const [mark, sideRun, sideScores] = shoulder;
+      // The build digest, not the entry-file sha256: cli.js is a thin
+      // dispatcher and the two builds can share it byte for byte (B4 did).
+      const buildId = sideRun.cli?.buildSha256 ?? sideRun.cli?.sha256 ?? "?";
+      for (const arm of Object.keys(sideScores.arms).sort()) {
+        const armScore = sideScores.arms[arm];
+        const overall = armScore.policies[PRIMARY_POLICY].overall;
+        lines.push(["", mark + " " + code(String(buildId).slice(0, 8)), arm,
+          String(overall.sampleSize), overall.label1 + " / " + overall.label0,
+          pct(overall.accuracy), pct(overall.precision), pct(overall.recall), pct(overall.f1),
+          pct(overall.killRate), pct(overall.falseKillRate), pct(overall.interceptPrecision),
+          overall.invalid + " / " + overall.errors, ""].join(" | "));
+      }
+    }
+    const beforeBuild = baseline.run.cli?.buildSha256 ?? baseline.run.cli?.sha256;
+    const afterBuild = run.cli?.buildSha256 ?? run.cli?.sha256;
+    if (beforeBuild && afterBuild && beforeBuild === afterBuild) {
+      lines.push("");
+      lines.push("> **The two sides report the same build digest** — either the change did not alter any built module or the rounds used the same build. A comparison of one build against itself cannot demonstrate a regression or its absence; check the CLI path/`--cli` before reading this section.");
+    }
+    lines.push("");
+    for (const arm of Object.keys(scores.arms).sort()) {
+      const before = baseline.scores.arms[arm]?.policies?.[PRIMARY_POLICY]?.overall;
+      const after = scores.arms[arm].policies[PRIMARY_POLICY].overall;
+      if (!before) continue;
+      const gate = after.falseKillRate !== null && before.falseKillRate !== null && after.falseKillRate <= before.falseKillRate;
+      lines.push("- **" + arm + " — B4 gate**: falseKillRate " + deltaText(before.falseKillRate, after.falseKillRate) + " ⇒ **" + (gate ? "no regression" : "REGRESSION") + "**;" +
+        " killRate " + deltaText(before.killRate, after.killRate) + "; interceptPrecision " + deltaText(before.interceptPrecision, after.interceptPrecision) + "." +
+        " The three are read together (roadmap R9): a falseKillRate that fell by rejecting fewer comments overall is not automatically an improvement.");
+    }
+    lines.push("");
+  }
   for (const [arm, armScore] of Object.entries(scores.arms)) {
     lines.push("## " + arm + " — per-bucket metrics");
     lines.push("");
@@ -126,6 +204,17 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
         lines.push(...bucketTable(bucketRows));
         lines.push("");
       }
+    }
+    const grounds = armScore.rejectionGrounds ?? [];
+    if (grounds.some((entry) => entry.ground !== "unknown")) {
+      lines.push("### Rejection grounds (B4)");
+      lines.push("");
+      lines.push("| ground | kills | label0 | label1 | false-kill share of ground |");
+      lines.push("| --- | --- | --- | --- | --- |");
+      for (const entry of grounds) lines.push(["", entry.ground, String(entry.killed), String(entry.label0), String(entry.label1), pct(entry.killed === 0 ? null : entry.label1 / entry.killed), ""].join(" | "));
+      lines.push("");
+      lines.push("A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date B4 or belong to the OCR arm, which has no ground vocabulary; they are counted as " + code("unknown") + " rather than dropped.");
+      lines.push("");
     }
   }
   lines.push("## Notes and limits");
@@ -154,8 +243,8 @@ export function renderResultsMd({ run, scores, title, notes = [] }) {
 }
 
 export function parseOptions(argv = [], env = process.env) {
-  const values = { run: env.PIR_AACR_RUN, out: env.PIR_AACR_RESULTS, title: env.PIR_AACR_TITLE, notes: [], json: env.PIR_EVAL_JSON === "1", help: false };
-  const flags = { "--run": "run", "--out": "out", "--title": "title" };
+  const values = { run: env.PIR_AACR_RUN, baseline: env.PIR_AACR_BASELINE, out: env.PIR_AACR_RESULTS, title: env.PIR_AACR_TITLE, notes: [], json: env.PIR_EVAL_JSON === "1", help: false };
+  const flags = { "--run": "run", "--baseline": "baseline", "--out": "out", "--title": "title" };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--json") { values.json = true; continue; }
     if (argv[i] === "--help") { values.help = true; continue; }
@@ -174,26 +263,31 @@ export function parseOptions(argv = [], env = process.env) {
 export function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
-    console.log("node tests/eval/aacr/report.js --run <out-root>/<round> --out <results file> [--title <title>] [--note <text>]... [--json]\n" +
+    console.log("node tests/eval/aacr/report.js --run <out-root>/<round> --out <results file> [--baseline <pre-change round dir>] [--title <title>] [--note <text>]... [--json]\n" +
       "Scores a finished M0 round and renders the results document (per-bucket metrics, sample sizes, model versions, variance notes, arXiv citation).\n" +
+      "--baseline adds the controlled before/after section (ADR-0008): the two rounds must share dataset, sample digest, model and arms, so only the CLI build differs.\n" +
       "--note <text> appends one bullet to the report's Notes and limits section (repeatable).");
     return 0;
   }
   if (!options.run) throw new Error("--run <round-directory> is required");
-  const runDir = path.resolve(options.run);
-  const summaryPath = path.join(runDir, "summary.json");
-  if (!existsSync(summaryPath)) throw new Error("no summary.json in " + runDir);
-  const run = JSON.parse(readFileSync(summaryPath, "utf8"));
-  const { rows, arms } = readRunDir(runDir, { arms: run.limits?.arms ?? null });
-  const scores = scoreRun(rows);
-  const markdown = renderResultsMd({ run, scores, title: options.title, notes: [...(run.notes ?? []), ...options.notes] });
+  const readRound = (dir) => {
+    const resolved = path.resolve(dir);
+    const summary = path.join(resolved, "summary.json");
+    if (!existsSync(summary)) throw new Error("no summary.json in " + resolved);
+    const summaryJson = JSON.parse(readFileSync(summary, "utf8"));
+    const { rows, arms } = readRunDir(resolved, { arms: summaryJson.limits?.arms ?? null });
+    return { run: summaryJson, scores: scoreRun(rows), arms, rows: rows.length, dir: resolved };
+  };
+  const { run, scores, arms } = readRound(options.run);
+  const baseline = options.baseline ? readRound(options.baseline) : null;
+  const markdown = renderResultsMd({ run, scores, baseline, title: options.title, notes: [...(run.notes ?? []), ...options.notes] });
   if (options.out) {
     writeFileSync(path.resolve(options.out), markdown);
     console.error("wrote " + options.out);
   } else {
     console.log(markdown);
   }
-  if (options.json) console.log(JSON.stringify({ run: runDir, arms, scores }, null, 2));
+  if (options.json) console.log(JSON.stringify({ run: options.run, arms, scores, ...(baseline ? { baseline: { run: baseline.dir, arms: baseline.arms, scores: baseline.scores } } : {}) }, null, 2));
   return 0;
 }
 

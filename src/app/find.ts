@@ -43,6 +43,11 @@ export interface FindingView {
   evidence: Array<{ kind: string; path?: string; startLine?: number; excerpt?: string; description?: string }>;
   memoryMatches: MemoryMatch[];
   verifierRationale: string | null;
+  /**
+   * B4: the ground a change-mode rejection named, null for kept/uncertain
+   * rows and for rows persisted before the ground was recorded.
+   */
+  rejectionGround: string | null;
   /** Verifier 0–1 self-assessment; null when no confidence is on record. */
   confidence: number | null;
   round: number;
@@ -71,6 +76,7 @@ export function toFindingView(ctx: AppContext, row: FindingRow): FindingView {
     evidence: ctx.memory.findings.evidence(row.id),
     memoryMatches: ctx.memory.findings.memoryMatches(row),
     verifierRationale: row.verifierRationale,
+    rejectionGround: row.rejectionGround ?? null,
     confidence: row.confidence,
     round: row.round,
     createdAt: row.createdAt,
