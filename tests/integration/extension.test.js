@@ -126,6 +126,32 @@ test("/review-feedback usage errors notify instead of throwing", async () => {
   }
 });
 
+test("B3: --max-tokens uses the shared unlimited-aware contract on both review lanes", async () => {
+  const { extractMaxTokens } = await import("../../dist/extension/commands.js");
+  assert.equal(extractMaxTokens([]), undefined);
+  assert.equal(extractMaxTokens(["--max-tokens", "250000"]), 250000);
+  assert.equal(extractMaxTokens(["--max-tokens", "unlimited"]), null, "the documented opt-out parses to null, never NaN");
+  assert.equal(extractMaxTokens(["--max-tokens", " UNLIMITED "]), null);
+
+  const repo = createTempGitRepo("pir-ext-maxtok-");
+  try {
+    const { commands } = await loadExtension();
+    // Both handlers parse before any session runs, so the dedicated parser's
+    // own message proves the flag is wired on each lane: /review-find
+    // previously ignored --max-tokens entirely, and /review-audit fed it
+    // through a bare Number().
+    for (const command of ["review-find", "review-audit"]) {
+      const ctx = makeCtx(repo.dir);
+      await assert.rejects(
+        commands.get(command).handler("--max-tokens bogus", ctx),
+        (error) => /invalid --max-tokens: bogus \(positive integer or "unlimited" required\)/.test(error.message),
+      );
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test("/review-find rejects an invalid --max-findings with the extension parser (dogfood F-50)", async () => {
   const repo = createTempGitRepo("pir-ext-maxf-");
   try {

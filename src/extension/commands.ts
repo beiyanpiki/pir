@@ -48,11 +48,29 @@ function extractMaxFindings(tokens: string[]): number | null | undefined {
   return value;
 }
 
+/**
+ * --max-tokens (B3, ADR 0006): the same contract as the CLI parser — a
+ * positive integer, or the literal "unlimited" parsed to null (every token
+ * ceiling off). A bare Number() would turn "unlimited" into NaN and die in
+ * the supervisor's positiveInteger guard, making the documented opt-out
+ * unreachable from this lane.
+ */
+export function extractMaxTokens(tokens: string[]): number | null | undefined {
+  const raw = extractFlag(tokens, "--max-tokens");
+  if (raw === undefined) return undefined;
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`invalid --max-tokens: ${raw} (positive integer or "unlimited" required)`);
+  }
+  return value;
+}
+
 export function registerReviewCommands(pi: ExtensionAPI): void {
   pi.registerCommand("review-find", {
     description: "Run the pi-review finding loop on a change range (default HEAD^..HEAD)",
     getArgumentCompletions: (prefix) => {
-      const options = ["--base", "--head", "--max-rounds", "--max-findings", "--model"].filter((o) => o.startsWith(prefix));
+      const options = ["--base", "--head", "--max-rounds", "--max-findings", "--model", "--max-tokens"].filter((o) => o.startsWith(prefix));
       return options.length > 0 ? options.map((value) => ({ value, label: value })) : null;
     },
     handler: async (args: string, ctx: ExtensionCommandContext) => {
@@ -64,6 +82,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           base: extractFlag(tokens, "--base"),
           head: extractFlag(tokens, "--head"),
           maxRounds: extractFlag(tokens, "--max-rounds") !== undefined ? Number(extractFlag(tokens, "--max-rounds")) : undefined,
+          maxTokens: extractMaxTokens(tokens),
           maxFindings: extractMaxFindings(tokens),
           model: extractFlag(tokens, "--model"),
         });
@@ -91,7 +110,7 @@ export function registerReviewCommands(pi: ExtensionAPI): void {
           head: extractFlag(tokens, "--head"),
           includePaths: extractRepeatedFlag(tokens, "--path"),
           skipGlobs: extractRepeatedFlag(tokens, "--skip"),
-          maxTokens: extractFlag(tokens, "--max-tokens") !== undefined ? Number(extractFlag(tokens, "--max-tokens")) : undefined,
+          maxTokens: extractMaxTokens(tokens),
           maxFindings: extractMaxFindings(tokens),
           model: extractFlag(tokens, "--model"),
         });
