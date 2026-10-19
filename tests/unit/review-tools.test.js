@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import { buildChangeSet } from "../../dist/changes/change-set.js";
+import { applyChangeFilter } from "../../dist/changes/filter.js";
 import { readReviewFile, resolveReviewRevision, safeResolve } from "../../dist/tools/context.js";
 import {
   createReadCodeTool, createSearchTextTool, createGetChangeTool,
@@ -552,6 +553,44 @@ test("B1 dogfood F-177: the change-mode secret guard covers read_code and search
     // Audit (no guard) is byte-identical to before: .env is readable there.
     assert.match((await createReadCodeTool(base).execute({ path: ".env", revision: "base" })).text, /SECRET-GUARD-VALUE/);
     assert.match((await createSearchTextTool(base).execute({ pattern: "API_TOKEN" })).text, /\.env:1: /);
+  } finally {
+    repo.cleanup();
+  }
+});
+test("B1 dogfood F-183: a secret renamed away stays unreadable at its new name", async () => {
+  const repo = createTempGitRepo("pir-secret-rename-");
+  try {
+    repo.write("src/app.ts", "const token = readEnv();\n");
+    repo.write(".env", "API_TOKEN=SECRET-RENAME-VALUE\n");
+    repo.commit("base");
+    repo.write("src/app.ts", "const token = readEnv()!;\n");
+    renameSync(path.join(repo.dir, ".env"), path.join(repo.dir, "config-app.txt"));
+    repo.commit("head");
+    const base = await context(repo);
+    // The real flow filters the change set in findIssues before the tools see
+    // it; mirror that so the exclusion and the read guard face the same set.
+    const filtered = applyChangeFilter(base.changeSet);
+    const renamed = filtered.files.find((f) => f.path === "config-app.txt");
+    assert.ok(renamed, `rename not detected: ${JSON.stringify(filtered.files.map((f) => [f.path, f.oldPath]))}`);
+    assert.equal(renamed.oldPath, ".env");
+    assert.equal(renamed.excluded, true, "the diff gate excludes the renamed secret");
+
+    // Change mode: the read channels must not launder the exclusion. Before
+    // F-183 they checked only the requested name, so the new path leaked.
+    const guarded = { ...base, changeSet: filtered, blockSecretPaths: true };
+    for (const revision of ["head", "base"]) {
+      const read = await createReadCodeTool(guarded).execute({ path: "config-app.txt", revision });
+      assert.match(read.text, /excluded from this review/, `read_code ${revision} must refuse the renamed secret`);
+      assert.doesNotMatch(read.text, /SECRET-RENAME-VALUE/);
+    }
+    await assert.rejects(readReviewFile(guarded, "config-app.txt"), /excluded from this review/);
+    const search = createSearchTextTool(guarded);
+    const byValue = await search.execute({ pattern: "SECRET-RENAME-VALUE" });
+    assert.match(byValue.text, /No matches\./);
+    assert.doesNotMatch(byValue.text, /SECRET-RENAME-VALUE/);
+
+    // Audit (no guard) still reads it, exactly as before this change.
+    assert.match((await createReadCodeTool(base).execute({ path: "config-app.txt", revision: "head" })).text, /SECRET-RENAME-VALUE/);
   } finally {
     repo.cleanup();
   }

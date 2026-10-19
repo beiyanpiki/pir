@@ -215,6 +215,29 @@ export function secretPathReason(path: string): string | undefined {
   return hit ? `secret path (${hit.reason})` : undefined;
 }
 
+/**
+ * Rename-aware secret check for the read channels (dogfood F-183).
+ *
+ * The diff gate already checks both sides of a rename, so a secret renamed
+ * away is excluded from the changeset — but a read request names exactly one
+ * path, and without this the model could launder that exclusion with
+ * `git mv .env config/app.txt`: excluded from the diff, yet fully readable at
+ * its new name. A path the change set touches is therefore secret under every
+ * name it appears with, `path` and `oldPath` alike. Audit contexts have no
+ * change set and keep the plain single-name check.
+ */
+export function renameAwareSecretReason(changeSet: ChangeSet | undefined, relPath: string): string | undefined {
+  const direct = secretPathReason(relPath);
+  if (direct !== undefined) return direct;
+  if (!changeSet) return undefined;
+  for (const file of changeSet.files) {
+    if (file.path !== relPath && file.oldPath !== relPath) continue;
+    const reason = secretPathReason(file.path) ?? (file.oldPath === undefined ? undefined : secretPathReason(file.oldPath));
+    if (reason !== undefined) return reason;
+  }
+  return undefined;
+}
+
 export function isBinaryPath(path: string): boolean {
   return BINARY_EXTENSIONS.has(extensionOf(path));
 }

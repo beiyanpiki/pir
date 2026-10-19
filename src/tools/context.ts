@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { ChangeSet } from "../changes/change-set.js";
-import { secretPathReason } from "../changes/filter.js";
+import { renameAwareSecretReason } from "../changes/filter.js";
 import { readFileAtCommit, resolveCommit } from "../changes/git.js";
 import type { CodeMapProvider } from "../codemap/types.js";
 import type { Memory } from "../memory/index.js";
@@ -84,7 +84,9 @@ export async function readReviewFile(ctx: ToolContext, relPath: string, revision
   if (!absolute) throw new Error("invalid repository-relative path");
   const normalized = path.relative(path.resolve(ctx.repoRoot), absolute).split(path.sep).join("/");
   if (ctx.blockSecretPaths) {
-    const reason = secretPathReason(normalized);
+    // Rename-aware (F-183): the changeset's own renames cannot launder a
+    // secret past the gate that excluded it.
+    const reason = renameAwareSecretReason(ctx.changeSet, normalized);
     if (reason !== undefined) {
       throw new Error(`${JSON.stringify(normalized)} is a ${reason} and is excluded from this review; its content is never sent to a model. Report the change from the file-list metadata instead.`);
     }

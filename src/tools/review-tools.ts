@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { Type } from "typebox";
 import type { ReviewTool } from "../agents/types.js";
 import { readReviewFile, resolveReviewRevision, safeResolve, toolError, type ReviewRevision, type ToolContext } from "./context.js";
-import { secretPathReason } from "../changes/filter.js";
+import { renameAwareSecretReason } from "../changes/filter.js";
 import type { CodeSymbol } from "../codemap/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
 
@@ -144,7 +144,7 @@ export function createSearchTextTool(ctx: ToolContext): ReviewTool {
           isRegex, pathspec, limit, offset,
           // B1: in change mode the non-overridable secret paths are invisible
           // to every pinned channel, including grep results.
-          ...(ctx.blockSecretPaths ? { skipPath: (file: string) => secretPathReason(file) !== undefined } : {}),
+          ...(ctx.blockSecretPaths ? { skipPath: (file: string) => renameAwareSecretReason(ctx.changeSet, file) !== undefined } : {}),
         });
         const continuation = result.hasMore ? { pattern: params.pattern, revision, isRegex, ...(params.glob === undefined ? {} : { glob: params.glob }), limit, offset: offset + result.matches.length } : null;
         return bounded([`snapshot: revision=${revision} commit=${commit}`,
