@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "assert/strict";
 
 import { bucketize, classify, confidenceAuc, isNoVerdict, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY } from "../eval/aacr/score.js";
-import { renderResultsMd } from "../eval/aacr/report.js";
+import { assertComparableRuns, deltaText, parseOptions as reportOptions, renderResultsMd } from "../eval/aacr/report.js";
 
 const verifierRow = (over = {}) => ({
   id: "c0001-aaaaaaaa", arm: "verifier", status: "ok", label: 1, decision: "keep", verdict: "confirmed",
@@ -163,6 +163,25 @@ test("scoreRun reports both policies and every bucket per arm", () => {
   }
 });
 
+test("B4: rejection grounds are counted per arm over kills, with unknown kept visible", () => {
+  const scores = scoreRun([
+    verifierRow({ id: "a", label: 1, verdict: "rejected", decision: "kill", rejectionGround: "pre-existing" }),
+    verifierRow({ id: "b", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
+    verifierRow({ id: "c", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
+    verifierRow({ id: "d", label: 1, verdict: "rejected", decision: "kill", rejectionGround: null }),
+    verifierRow({ id: "e", label: 1, verdict: "confirmed", decision: "keep" }),
+    ocrRow({ id: "f", label: 0, decision: "kill" }),
+  ]);
+  const verifierGrounds = scores.arms.verifier.rejectionGrounds;
+  assert.deepEqual(verifierGrounds.map((entry) => entry.ground), ["guarded", "pre-existing", "unknown"]);
+  assert.deepEqual(verifierGrounds.find((entry) => entry.ground === "guarded"), { ground: "guarded", killed: 2, label0: 2, label1: 0 });
+  assert.deepEqual(verifierGrounds.find((entry) => entry.ground === "pre-existing"), { ground: "pre-existing", killed: 1, label0: 0, label1: 1 });
+  assert.deepEqual(verifierGrounds.find((entry) => entry.ground === "unknown"), { ground: "unknown", killed: 1, label0: 0, label1: 1 });
+  assert.deepEqual(scores.arms.ocr.rejectionGrounds, [{ ground: "unknown", killed: 1, label0: 1, label1: 0 }]);
+  // Keeps never appear in the distribution: the table is about kills only.
+  assert.equal(verifierGrounds.reduce((sum, entry) => sum + entry.killed, 0), 4);
+});
+
 test("renderResultsMd refuses to render without provenance and includes the citation when it can", () => {
   const scores = scoreRun([verifierRow({}), ocrRow({ id: "b", label: 0, decision: "kill" })]);
   const run = {
@@ -187,6 +206,69 @@ test("renderResultsMd refuses to render without provenance and includes the cita
   assert.match(markdown, /fixture note/);
   assert.match(markdown, /opencode-go\/deepseek-v4\.1-flash:medium/);
   assert.equal(markdown.endsWith("\n"), true);
+});
+
+test("B4: the results document renders the rejection-ground table when a ground was recorded", () => {
+  const scores = scoreRun([
+    verifierRow({ id: "a", label: 1, verdict: "rejected", decision: "kill", rejectionGround: "pre-existing" }),
+    verifierRow({ id: "b", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
+  ]);
+  const run = {
+    round: "2026-10-19-m0", model: "opencode-go/deepseek-v4.1-flash:medium",
+    dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
+    sample: { limit: 2, seed: 42, digest: "d".repeat(64), eligible: 2 },
+    cli: { sha256: "c".repeat(64) }, limits: { arms: ["verifier"], concurrency: 2, timeoutMs: 600000, cache: "/tmp/cache" },
+    config: { model: "m", thinking: "medium" }, startedAt: "2026-10-19T00:00:00.000Z", finishedAt: "2026-10-19T01:00:00.000Z", cacheBytes: 1024,
+  };
+  const markdown = renderResultsMd({ run, scores });
+  assert.match(markdown, /### Rejection grounds \(B4\)/);
+  assert.match(markdown, /\| guarded \| 1 \| 1 \| 0 \| 0\.0% \|/);
+  assert.match(markdown, /\| pre-existing \| 1 \| 0 \| 1 \| 100\.0% \|/);
+  // An arm with no recorded ground (pre-B4 build / OCR) renders no table.
+  const ungrounded = renderResultsMd({ run, scores: scoreRun([verifierRow({ id: "a", label: 0, verdict: "rejected", decision: "kill" })]) });
+  assert.ok(!ungrounded.includes("Rejection grounds (B4)"));
+});
+
+test("B4: a baseline renders the controlled before/after section and refuses a non-comparable pair", () => {
+  const run = {
+    round: "after", model: "opencode-go/deepseek-v4.1-flash:medium",
+    dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
+    sample: { limit: 100, seed: 42, digest: "d".repeat(64), eligible: 100 },
+    cli: { sha256: "a".repeat(64) }, limits: { arms: ["verifier"], concurrency: 8, timeoutMs: 600000, cache: "/tmp/cache" },
+    config: { model: "m", thinking: "medium" }, startedAt: "2026-10-19T00:00:00.000Z", finishedAt: "2026-10-19T01:00:00.000Z", cacheBytes: 1024,
+  };
+  const beforeRun = { ...run, round: "before", cli: { sha256: "b".repeat(64) } };
+  const scores = scoreRun([
+    verifierRow({ id: "a", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
+    verifierRow({ id: "b", label: 1, verdict: "rejected", decision: "kill", rejectionGround: "pre-existing" }),
+  ]);
+  const baselineScores = scoreRun([
+    verifierRow({ id: "a", label: 0, verdict: "rejected", decision: "kill" }),
+    verifierRow({ id: "b", label: 1, verdict: "rejected", decision: "kill" }),
+  ]);
+  const markdown = renderResultsMd({ run, scores, baseline: { run: beforeRun, scores: baselineScores } });
+  assert.match(markdown, /## Before\/after \(controlled build comparison\)/);
+  assert.match(markdown, /- \*\*verifier — B4 gate\*\*: falseKillRate 100\.0% → 100\.0% \(±0\.0 pp\) ⇒ \*\*no regression\*\*/);
+  assert.match(markdown, /killRate 100\.0% → 100\.0%/);
+  // Only the CLI build may differ.
+  assert.throws(() => renderResultsMd({ run, scores, baseline: { run: { ...beforeRun, sample: { ...run.sample, digest: "e".repeat(64) } }, scores: baselineScores } }), /differ in sample digest/);
+  assert.throws(() => renderResultsMd({ run, scores, baseline: { run: { ...beforeRun, model: "other/model" }, scores: baselineScores } }), /differ in model id/);
+  assert.throws(() => renderResultsMd({ run, scores, baseline: { run: { ...beforeRun, limits: { ...beforeRun.limits, arms: ["verifier", "ocr"] } }, scores: baselineScores } }), /differ in arm set/);
+  assert.throws(() => assertComparableRuns(beforeRun, { ...run, dataset: {} }), /needs dataset sha256 on both runs/);
+  // A worse falseKillRate is reported as a regression, never silently rounded.
+  const gentle = scoreRun([verifierRow({ id: "a", label: 1, verdict: "confirmed", decision: "keep" })]);
+  const regressed = renderResultsMd({ run, scores, baseline: { run: beforeRun, scores: gentle } });
+  assert.match(regressed, /⇒ \*\*REGRESSION\*\*/);
+});
+
+test("deltaText and report parseOptions handle the baseline flag", () => {
+  assert.equal(deltaText(0.8, 0.768), "80.0% → 76.8% (−3.2 pp)");
+  assert.equal(deltaText(0.5, 0.5), "50.0% → 50.0% (±0.0 pp)");
+  assert.equal(deltaText(null, 0.5), "—");
+  const options = reportOptions(["--run", "out/a", "--baseline", "out/b", "--out", "r.md"], {});
+  assert.equal(options.baseline, "out/b");
+  assert.equal(reportOptions(["--run", "out/a"], {}).baseline, undefined);
+  assert.throws(() => reportOptions(["--baseline"], {}), /missing value/);
 });
 
 test("scoreRun: per-arm diffBaseKinds counts degraded rows (M0 dogfood F-181)", () => {

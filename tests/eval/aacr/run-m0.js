@@ -177,6 +177,8 @@ export function scoreRow(task, arm, run) {
     verdict: data.verdict ?? null,
     confidence: data.confidence ?? null,
     uncertaintyReason: data.uncertaintyReason ?? null,
+    // B4: the ground a rejection named, so score.js can bucket kills by reason.
+    rejectionGround: data.rejectionGround ?? null,
     rationale: data.rationale ?? null,
     ocrDecision: data.ocrDecision ?? null,
     ocrReason: data.ocrReason ?? null,
