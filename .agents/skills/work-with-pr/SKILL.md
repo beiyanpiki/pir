@@ -1,14 +1,15 @@
 ---
 name: work-with-pr
-description: "Full PR lifecycle for developing pir itself (github.com/beiyanpiki/pir, any worktree of it): implement in an isolated sibling git worktree → local gates (npm typecheck/test + pir-dogfood self-review: P0–P2 findings fixed, P3 findings deferred to a backlog file) → PR to dev following the repo's PR template → CI verification loop on the self-hosted runner → merge commit → worktree cleanup. Splits work into the smallest atomic, independently mergeable PRs and builds independent ones in parallel. Use whenever implementation work on this repo needs to land as a PR: 'create a PR', 'implement and PR', 'implement issue #N', 'land this as a PR', 'split into atomic PRs', '提 PR', '提个 PR 再合并', 'work-with-pr', even when the user just says 'implement X' if PR delivery is implied. NOT for other repositories — there use the plain git/gh flow."
+description: "Full PR lifecycle for developing pir itself (github.com/beiyanpiki/pir, any worktree of it): implement in an isolated sibling git worktree → local gates (npm typecheck/test + pir-dogfood self-review: P0–P2 findings fixed, P3 findings deferred to a backlog file) → PR to the target branch (`dev` unless the task declares another) following the repo's PR template → CI verification loop on the self-hosted runner → merge commit → worktree cleanup. Splits work into the smallest atomic, independently mergeable PRs and builds independent ones in parallel. Use whenever implementation work on this repo needs to land as a PR: 'create a PR', 'implement and PR', 'implement issue #N', 'land this as a PR', 'split into atomic PRs', '提 PR', '提个 PR 再合并', 'work-with-pr', even when the user just says 'implement X' if PR delivery is implied. NOT for other repositories — there use the plain git/gh flow."
 ---
 
 # Work With PR — pir development PR lifecycle
 
 You are executing a complete PR lifecycle for pir: from an isolated
 task-owned worktree, through implementation with model-free tests and
-real-surface QA, a dogfood self-review gate, PR creation against `dev`, an
-unbounded verification loop (CI + dogfood), to merge and worktree cleanup.
+real-surface QA, a dogfood self-review gate, PR creation against the target
+branch (`dev` by default, or the branch the user declares), an unbounded
+verification loop (CI + dogfood), to merge and worktree cleanup.
 A failing gate sends you back into that PR's worktree to fix and re-QA; you
 keep cycling until every gate passes on the exact code being pushed.
 
@@ -26,8 +27,9 @@ Phase 0: Setup         → Split into atomic PRs, then branch + sibling worktree
                          (parallel when independent, one subagent per PR)
 Phase 1: Implement     → One slice per PR: model-free tests + real-surface QA
                          (drive the built CLI), atomic conventional commits
-Phase 2: PR Creation   → Push, create PR to the base branch (dev, or the
-                         parent branch of a stack) filling the repo's PR template
+Phase 2: PR Creation   → Push, create PR to the target branch (dev unless
+                         declared; a stacked PR uses its parent branch) filling
+                         the repo's PR template
 Phase 3: Verify Loop   → Unbounded iteration; a failing gate routes back to Phase 1:
   ├─ Gate B: dogfood   → this worktree's build reviews its own diff (local,
   │                     runs BEFORE every push, never skipped for findings)
@@ -51,28 +53,55 @@ without colliding.
 
 <setup>
 
-### 1. Decide the PR split
+### 1. Resolve the target branch
+
+Every PR in this task lands in the **target branch**: the branch the PR is
+opened against, carried below as `$BASE_BRANCH` (PR side) and `$BASE_REF`
+(git side, `origin/$BASE_BRANCH`). Resolve it once, here, before any work
+starts.
+
+- **Default `dev`.** With no explicit instruction about where the work lands, the target branch is `dev`. Do not ask; just record the assumption in the final report.
+- **A declared target wins.** If the user names another branch — "target branch is release/2.0", "PR 到 main 分支", "base it on next", "merge into release/0.6", or an argument on the skill invocation such as `/work-with-pr base=release/2.0` — that branch becomes the target for every PR in the task. Use the declared name verbatim: no normalization, no guessing at a nearest existing branch.
+- **Per-PR declarations override for that PR only.** A later statement naming a target for one slice applies to that slice; the rest of the task keeps the earlier target.
+- **Stacked PRs:** the root PR targets the target branch; each child PR targets its parent branch (step 2), whatever the target is.
+- **Pass it down.** Every subagent brief (step 2) carries `$BASE_BRANCH` and `$BASE_REF` explicitly, so a parallel PR cannot silently fall back to `dev`.
+
+Set `BASE_BRANCH` to the declared target before running this block; when nothing was declared it stays unset and the default `dev` applies. Verify the branch exists before splitting — never at `gh pr create`, after the implementation is already written:
+
+```bash
+BASE_BRANCH="${BASE_BRANCH:-dev}"          # nothing declared → dev
+BASE_REF="origin/$BASE_BRANCH"             # stacked PR: both = parent branch
+
+git fetch origin "$BASE_BRANCH"
+git ls-remote --heads origin "$BASE_BRANCH"   # empty output = no such branch on origin
+```
+
+Empty output means a declared branch does not exist on origin: stop and ask the user instead of silently falling back to `dev`, which would land the work in the wrong place. A branch that is expected to appear later (a release cut in progress) may be worth confirming and continuing on.
+
+### 2. Decide the PR split
 
 Decompose the task into the smallest atomic PRs that each compile, pass,
 and deliver one reviewable slice. Prefer more small PRs over one large one
 — a 200-line PR gets a real review; a 2000-line PR gets a rubber stamp.
-Sequence by dependency: independent slices branch off `origin/dev` and run
-in parallel; dependent slices stack, each branched off the previous. A PR's
-base is therefore `dev` for an independent slice and its parent branch for
-a stacked one — carry that as `$BASE_REF` (git side) and `$BASE_BRANCH`
-(PR side) through every phase below instead of assuming `dev`.
+Sequence by dependency: independent slices branch off the target branch
+(`$BASE_REF`, `origin/dev` by default) and run in parallel; dependent slices
+stack, each branched off the previous. A PR's base is therefore the target
+branch for an independent slice and its parent branch for a stacked one —
+carry that as `$BASE_REF` (git side) and `$BASE_BRANCH` (PR side) through
+every phase below instead of assuming `dev`.
 
 Building more than one independent PR concurrently is the recommended
 default, not an exotic option: run one subagent (or separate agent
 session) per PR — however your environment expresses parallel work — each
 owning its own worktree, branch, and the full Phase 0→4 lifecycle. Each
 subagent's brief must be self-contained: the task slice, the branch name,
-the worktree path, and an instruction to read this SKILL.md and
-`.agents/skills/pir-dogfood/SKILL.md` before starting. If parallel
+the worktree path, the target branch (`$BASE_BRANCH` / `$BASE_REF`), and an
+instruction to read this SKILL.md and `.agents/skills/pir-dogfood/SKILL.md`
+before starting. If parallel
 subagents aren't available, build the independent PRs sequentially — the
 isolation comes from the per-PR worktree, not from parallelism.
 
-### 2. Create branch + worktree
+### 3. Create branch + worktree
 
 Branch names follow this repo's convention: `<type>/<slug>` where type is
 `feat` / `fix` / `ci` / `chore` / `docs`, optionally carrying the issue
@@ -81,9 +110,9 @@ they provide one.
 
 ```bash
 cd <main repo dir>          # read-only context; never implement here
-git fetch origin dev
+git fetch origin "$BASE_BRANCH"          # target branch resolved in step 1
 BRANCH="feat/short-slug"
-BASE_REF="origin/dev"; BASE_BRANCH="dev"   # stacked PR: both = parent branch
+BASE_REF="origin/$BASE_BRANCH"           # stacked PR: both = parent branch
 git branch "$BRANCH" "$BASE_REF"
 
 WORKTREE="../pir-wt/$BRANCH"   # siblings of the repo, never inside it
@@ -241,8 +270,9 @@ PIR_CONFIG_DIR=/tmp/pir-dogfood-config PIR_NO_WIZARD=1 \
 ```
 
 `--base "$BASE_REF"` reviews the committed branch diff against the PR's
-base — `origin/dev` for an independent PR, the parent branch for a stacked
-one, so a stacked review sees only its own slice; add `--uncommitted`
+base — the target branch (`origin/dev` by default) for an independent PR,
+the parent branch for a stacked one, so a stacked review sees only its own
+slice; add `--uncommitted`
 while mid-work. Exit 1 means a P0/P1/P2 finding is present — P3 findings
 exit 0 and never block the gate; with `--json`,
 stdout is pure JSON (`data.findings[]` with `displayId` F-N, `severity`,
@@ -388,8 +418,8 @@ For base-branch drift or push rejections:
 
 ```bash
 cd "$WORKTREE"
-git fetch origin dev
-git rebase "$BASE_REF"     # origin/dev, or the parent branch of a stack
+git fetch origin "$BASE_BRANCH"
+git rebase "$BASE_REF"     # the target branch, or the parent branch of a stack
 # resolve conflicts, re-run Phase 3 from local checks (code changed),
 # then push --force-with-lease to the PR branch
 ```
@@ -404,7 +434,7 @@ git rebase "$BASE_REF"     # origin/dev, or the parent branch of a stack
 |-----------|-------------|----------|
 | Working in the main repo dir instead of an isolated worktree | Pollutes user's working directory, may destroy uncommitted work | CRITICAL |
 | Pushing without a dogfood pass on exactly that code | Reviewing yourself is this repo's whole point; skips cost real findings later | CRITICAL |
-| Pushing directly to dev | Bypasses PR review entirely | CRITICAL |
+| Pushing directly to the target branch | Bypasses PR review entirely | CRITICAL |
 | Pushing fixes without re-running local checks + dogfood | Code changed → previous gates are stale | CRITICAL |
 | Skipping dogfood because it found issues | Findings must be fixed (P0–P2) or recorded (P3 → backlog + `feedback`), never dodged | HIGH |
 | Fixing P3 dogfood findings inside the verification loop | Scope creep plus extra CI round-trips; P3s are recorded in the backlog and batch-fixed in a dedicated future PR | HIGH |
