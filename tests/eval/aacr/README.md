@@ -1,6 +1,6 @@
 # AACR-Bench verifier offline benchmark (M0)
 
-Comment-level measurement of the **verifier stage** against [AACR-Bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench): 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. The benchmark answers one question — how well does `runVerifier` separate correct comments from incorrect ones — and compares it against the open-code-review reflection prompt on identical material.
+Comment-level measurement of the **verifier stage** against [AACR-Bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench): 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. The benchmark asks one question — how well does `runVerifier`'s defect verdict line up with the dataset's "is this comment correct" label — and compares it against the open-code-review reflection prompt on identical material; the two questions are deliberately not identical, and ADR-0007's Consequences section records the measured consequence.
 
 Protocol, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md); the numbers live in [RESULTS](results/). This surface **extends** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); it does not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline.
 

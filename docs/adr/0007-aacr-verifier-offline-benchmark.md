@@ -185,3 +185,21 @@ in CI, never against a leaderboard.
   (R6), the benchmark degrades into error rows and an explicitly partial
   report; it does not silently score fewer comments. `meta.json`'s sha256
   pin fails the acquisition loudly if the upstream artifact changes.
+- **Measured limitation, discovered by the first `--limit 100` run
+  (2026-10-19): the dataset's label and `runVerifier`'s question are not the
+  same question.** Label 1 means "this comment is correct review feedback";
+  the verifier answers "does a concrete, change-attributable defect exist
+  here". The run's rationales show the difference directly — valid comments
+  are rejected because they are "a stylistic refactoring preference with no
+  concrete failure", because the finding is "pre-existing, not introduced",
+  or because the claim is "subjective wording", all of which the shipped
+  do-not-report contract requires. Operationally `falseKillRate` still
+  counts rejected(label=1)/label=1, but it must **not** be read as "the
+  verifier destroys real findings" and must not be compared with the OCR
+  arm's false-kill as if the two classifiers answered the same question. The
+  comparable signals are `killRate` (label-0 interception) and the
+  per-category view (Maintainability concentrates the mismatch). Iteration 2
+  should add a mapping variant that separates "not a defect" from "defect
+  not attributable" — audit-mode `runVerifier` (current-state verification
+  without change attribution) is the obvious candidate — and report both
+  rows deliberately.
