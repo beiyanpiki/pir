@@ -3,7 +3,7 @@ import assert from "assert/strict";
 
 import { fixtureDigest } from "../eval/aacr/fixtures/build-fixture.js";
 import {
-  assertSelectionCompatible, parseOptions, seededOrder, selectFixtureRows,
+  assertSelectionCompatible, effectiveSelectionLimits, parseOptions, seededOrder, selectFixtureRows,
 } from "../eval/aacr/m1/run-aacr.js";
 
 const row = (id) => ({ instance_id: id, repo: "example/repo", reference_comments: [] });
@@ -54,6 +54,18 @@ test("assertSelectionCompatible: seeds and instance sets are provenance pins", (
   );
   assert.doesNotThrow(() => assertSelectionCompatible({ limits: {} }, { selected }), "a pre-M2 round (no recorded seed) resumes without one");
   assert.throws(() => assertSelectionCompatible({ limits: {} }, { selected, seed: 42 }), /round was recorded with no seed/);
+});
+
+test("effectiveSelectionLimits: a judge-only pass keeps the round's population pin (dogfood F-1)", () => {
+  const normal = effectiveSelectionLimits(parseOptions(["--limit", "50", "--seed", "42"], {}));
+  assert.deepEqual(normal, { limit: 50, seed: 42, only: [] });
+  assert.deepEqual(effectiveSelectionLimits(parseOptions([], {})), { limit: null, seed: null, only: [] });
+  const judgeOnly = effectiveSelectionLimits(
+    parseOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real"], {}),
+    { limit: 50, seed: 42, only: ["a@1111111"] },
+  );
+  assert.deepEqual(judgeOnly, { limit: 50, seed: 42, only: ["a@1111111"] }, "the recorded triple survives the rewrite");
+  assert.throws(() => effectiveSelectionLimits({ judgeOnly: true }, null), /recorded selection/);
 });
 
 test("driver options: --seed parsing and --judge-only restrictions", () => {

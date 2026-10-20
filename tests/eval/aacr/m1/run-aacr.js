@@ -118,6 +118,21 @@ export function selectFixtureRows(rows, { only = [], limit, seed } = {}) {
 }
 
 /**
+ * The selection an invocation actually runs on: the recorded triple for
+ * --judge-only (whose new selection flags are rejected), the flags otherwise.
+ * The summary must record THIS, not the raw options — --judge-only rewrites
+ * the round's summary, and recording the empty options would erase the
+ * population pin and make the round unresumable (dogfood F-1).
+ */
+export function effectiveSelectionLimits(options, recorded = null) {
+  if (options?.judgeOnly) {
+    if (!recorded) throw new Error("--judge-only needs the round's recorded selection");
+    return { limit: recorded.limit ?? null, seed: recorded.seed ?? null, only: recorded.only ?? [] };
+  }
+  return { limit: options?.limit ?? null, seed: options?.seed ?? null, only: options?.only ?? [] };
+}
+
+/**
  * M2 provenance: the subset (and therefore every before/after comparison on
  * it) is a pin, not an implementation detail. A different seed or a different
  * selected instance set is a different round, never a resumable one; a
@@ -434,6 +449,9 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     if (selected.length === 0) throw new Error("--judge-only found no recorded selection to judge");
   }
   if (selected.length === 0) throw new Error("no fixture rows selected");
+  // The summary records the effective selection, never the rejected flags of
+  // a --judge-only invocation (dogfood F-1).
+  const selectionLimits = effectiveSelectionLimits(options, previousSummary?.limits);
 
   const cacheFile = path.join(options.cache, "merge-bases.json");
   const store = new MergeBaseStore(cacheFile, loadMergeBaseCache(cacheFile));
@@ -516,7 +534,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       views: options.views,
       repeats: options.repeats,
       limits: {
-        limit: options.limit ?? null, seed: options.seed ?? null, only: options.only, concurrency: options.concurrency,
+        limit: selectionLimits.limit, seed: selectionLimits.seed, only: selectionLimits.only, concurrency: options.concurrency,
         maxRounds: options.maxRounds, maxTokens: MAX_TOKENS, maxFindings: MAX_FINDINGS,
         timeoutMs: options.timeoutMs, cache: options.cache, judge: options.judge, evalRounds: options.evalRounds,
         // ADR-0009 §10: only a real-judge run with the exact judge model
