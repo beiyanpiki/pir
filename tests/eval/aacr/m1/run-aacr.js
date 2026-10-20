@@ -133,6 +133,35 @@ export function effectiveSelectionLimits(options, recorded = null) {
 }
 
 /**
+ * The reviewer-side run limits a round actually ran with. A --judge-only pass
+ * does not run reviewers, so its own flags are defaults (concurrency 1, the
+ * 30-minute cap): recording them would overwrite what the reviewer pass used
+ * and make the committed document's reproduce block describe a different run
+ * (the same class of pin loss as dogfood F-1/F-4).
+ */
+export function effectiveRunLimits(options, previousSummary = null) {
+  const recorded = previousSummary?.limits ?? null;
+  if (options?.judgeOnly && recorded) {
+    return {
+      concurrency: recorded.concurrency ?? options.concurrency,
+      maxRounds: recorded.maxRounds ?? options.maxRounds,
+      maxTokens: recorded.maxTokens ?? MAX_TOKENS,
+      maxFindings: recorded.maxFindings ?? MAX_FINDINGS,
+      timeoutMs: recorded.timeoutMs ?? options.timeoutMs,
+      cache: recorded.cache ?? options.cache,
+    };
+  }
+  return {
+    concurrency: options.concurrency,
+    maxRounds: options.maxRounds,
+    maxTokens: MAX_TOKENS,
+    maxFindings: MAX_FINDINGS,
+    timeoutMs: options.timeoutMs,
+    cache: options.cache,
+  };
+}
+
+/**
  * The judge provenance a round actually carries. Skipping judging on a resume
  * must not erase what an earlier judge run recorded; a new judging pass sets
  * the identity it ran with (dogfood F-4).
@@ -506,6 +535,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   // Judge identity is a pin too: skipping judging must not erase a recorded
   // real-judge identity, and re-judging must match it (dogfood F-4).
   const judgeLimits = effectiveJudgeLimits(options, previousSummary, judgePin, env);
+  const runLimits = effectiveRunLimits(options, previousSummary);
 
   const cacheFile = path.join(options.cache, "merge-bases.json");
   const store = new MergeBaseStore(cacheFile, loadMergeBaseCache(cacheFile));
@@ -589,9 +619,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       views: options.views,
       repeats: options.repeats,
       limits: {
-        limit: selectionLimits.limit, seed: selectionLimits.seed, only: selectionLimits.only, concurrency: options.concurrency,
-        maxRounds: options.maxRounds, maxTokens: MAX_TOKENS, maxFindings: MAX_FINDINGS,
-        timeoutMs: options.timeoutMs, cache: options.cache,
+        limit: selectionLimits.limit, seed: selectionLimits.seed, only: selectionLimits.only,
+        concurrency: runLimits.concurrency, maxRounds: runLimits.maxRounds,
+        maxTokens: runLimits.maxTokens, maxFindings: runLimits.maxFindings,
+        timeoutMs: runLimits.timeoutMs, cache: runLimits.cache,
         // ADR-0009 §10/§11: only a real-judge run with the exact judge model
         // and framework commit recorded qualifies for comparison, so the
         // identity is recorded and enforced by assertJudgeCompatible.

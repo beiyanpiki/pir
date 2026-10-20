@@ -3,8 +3,8 @@ import assert from "assert/strict";
 
 import { fixtureDigest } from "../eval/aacr/fixtures/build-fixture.js";
 import {
-  assertJudgeCompatible, assertSelectionCompatible, effectiveJudgeLimits, effectiveSelectionLimits,
-  parseOptions, seededOrder, selectFixtureRows,
+  assertJudgeCompatible, assertSelectionCompatible, effectiveJudgeLimits, effectiveRunLimits,
+  effectiveSelectionLimits, parseOptions, seededOrder, selectFixtureRows,
 } from "../eval/aacr/m1/run-aacr.js";
 
 const row = (id) => ({ instance_id: id, repo: "example/repo", reference_comments: [] });
@@ -67,6 +67,16 @@ test("effectiveSelectionLimits: a judge-only pass keeps the round's population p
   );
   assert.deepEqual(judgeOnly, { limit: 50, seed: 42, only: ["a@1111111"] }, "the recorded triple survives the rewrite");
   assert.throws(() => effectiveSelectionLimits({ judgeOnly: true }, null), /recorded selection/);
+});
+
+test("effectiveRunLimits: a judge-only pass keeps the reviewer pass's run limits", () => {
+  const recorded = { limits: { concurrency: 6, maxRounds: 2, maxTokens: "unlimited", maxFindings: "unlimited", timeoutMs: 7200000, cache: "/cache" } };
+  const judgeOnly = effectiveRunLimits(parseOptions(["--resume", "--judge-only", "--judge", "real"], {}), recorded);
+  assert.deepEqual(judgeOnly, { concurrency: 6, maxRounds: 2, maxTokens: "unlimited", maxFindings: "unlimited", timeoutMs: 7200000, cache: "/cache" });
+  const fresh = effectiveRunLimits(parseOptions(["--concurrency", "4", "--timeout", "600000"], {}), null);
+  assert.equal(fresh.concurrency, 4);
+  assert.equal(fresh.timeoutMs, 600000);
+  assert.equal(fresh.maxTokens, "unlimited");
 });
 
 test("effectiveJudgeLimits: skipping a judge pass never erases the recorded identity (dogfood F-4)", () => {
