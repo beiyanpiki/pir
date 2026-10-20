@@ -5,7 +5,7 @@ Two measurement surfaces against [AACR-Bench](https://huggingface.co/datasets/Al
 - **M0 — verifier offline benchmark.** Comment-level measurement of the **verifier stage**: 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. It asks how well `runVerifier`'s defect verdict lines up with the dataset's "is this comment correct" label, and compares it against the open-code-review reflection prompt on identical material; the two questions are deliberately not identical, and ADR-0007's Consequences section records the measured consequence.
 - **M1 — end-to-end benchmark (skeleton).** Whole-`pir find` runs over the upstream `positive_samples` split: 196 PRs, 1,506 known-correct reference comments, 50 repositories. Findings are judged by the **pinned upstream judge** and reported as file-level semantic precision/recall plus **`balanced_score`** — the caliber published OCR / Claude Code / Codex rows use. M1 never builds a judge of its own.
 
-Protocols, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md) (M0) and [ADR 0009](../../../docs/adr/0009-m1-end-to-end-benchmark.md) (M1); the numbers live in [RESULTS](results/). Both surfaces **extend** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); they do not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline. The M1 `--limit 20` smoke costs 20 model runs: it is a manual check, never a CI gate.
+Protocols, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md) (M0) and [ADR 0009](../../../docs/adr/0009-m1-end-to-end-benchmark.md) (M1); the numbers, the locked baseline and the M2 change protocol live in [RESULTS](results/RESULTS.md). Both surfaces **extend** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); they do not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline. The M1 `--limit 20` smoke costs 20 model runs: it is a manual check, never a CI gate.
 
 ## Layout
 
@@ -28,7 +28,7 @@ tests/eval/aacr/
     judge.js              M1 T4: pinned upstream judge delegation (data/results/pipeline eval)
     report-m1.js          M1 A1: results-document renderer (headline, buckets, coverage, cost)
     git-async.js          non-blocking fetch / worktree / synthetic-head plumbing
-  results/                committed results files (M0-*.md, later M1-*.md)
+  results/                committed results files (M0-*.md, M1-*.md) + RESULTS.md (baseline, change protocol, dashboard)
   dataset/                gitignored: downloaded + materialized rows (auto-rebuilt)
   out/                    gitignored: run outputs (per-arm score rows + summary.json; M1 rounds)
 ```
@@ -113,6 +113,12 @@ PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js \
 
 Why these flags: `--limit 20` is the documented smoke size (ADR-0009; the full 196-PR run plus `--eval-rounds 3` averaging is a separate, later round); `--concurrency 4` runs up to four **different repositories** at once while instances of the same repository stay serial (they share one cache directory); `--judge mock` uses upstream's local similarity judge, so the smoke validates the pipeline at zero judge cost. Use `--judge real` only with `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL`; missing credentials fail before any model run. `--judge off` skips judging. For the full comparison, `--eval-rounds 3` asks the upstream judge for three independent rounds and averages them (the count is recorded in `summary.json`).
 
+### M2 change protocol: the fixed 50-PR subset
+
+Behavioural before/after comparisons run on one **fixed subset**, never on whatever rows happen to complete: `--limit 50 --seed 42` selects the first 50 fixture rows in a seeded Fisher-Yates order (the same `mulberry32` PRNG and loop the M0 comment sample uses). The order is reproducible from `(seed, limit)`, and the round records it as `limits.seed` plus `fixture.instanceSetDigest` (sha256 of the selected `instance_id` list, in selection order). The fixture's 196 rows currently yield **subset digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c`** (50 instances, 29 repositories, 333 reference comments) — cite that digest beside any comparison row so a reader can rebuild the exact population.
+
+`--resume` and `--judge-only` refuse to mix a different model, CLI build, fixture, view set, repeat count, seed or selected instance set into one round; `--judge-only` replays the round's recorded `(only, limit, seed)` instead of taking new selection flags. The full protocol (populations, judge pins, variance rules, recording format) is in [RESULTS](results/RESULTS.md).
+
 Artifacts of the smoke:
 
 ```text
@@ -126,7 +132,7 @@ tests/eval/aacr/out/<round>/
                                        usage, duration, exit status, errors
 ```
 
-`--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set or repeat count into one round (the same provenance guard M0 established, extended to the M1 inputs).
+`--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set, repeat count, seed or selected instance set into one round (the same provenance guard M0 established, extended to the M1 inputs).
 
 ### Incomplete runs are data, not errors
 
