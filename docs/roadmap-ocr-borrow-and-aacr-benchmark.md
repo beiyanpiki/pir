@@ -17,7 +17,7 @@
 | --- | --- | --- | --- |
 | Iteration 1 | B1, B2, B3, M0 skeleton | ☑ | B1–B3 merged to the iteration's declared integration branch (`roadmap/ocr-borrow-and-aacr-benchmark`) through the dogfood gate; M0 `--limit 100` produced its first numbers; ADRs 0004–0007 written |
 | Iteration 2 | M0 full run, B4, M1 skeleton | ☑ | M0 full 2,145-comment report + OCR-prompt comparison; B4 merged with no kill-rate regression; M1 `--limit 20` smoke passes |
-| Iteration 3 | M1 full run, B5 | ☐ | First M1 comparison report (balanced_score); B5 merged |
+| Iteration 3 | M1 full run, B5 | ⏸ | B5 merged (#124); the first M1 report is deferred by maintainer direction — the sampled round stopped at 57/196 on 2026-10-20 and its resume state is recorded under §2 M1 |
 | Iteration 4 | M2 baseline lock-in, D-B6/D-B7/D-B8 decisions | ☐ | Change protocol in effect; all three decision points have data-backed adopt/reject records |
 
 ---
@@ -122,8 +122,24 @@ Everything lands under `tests/eval/aacr/`, gated by `PIR_EVAL=1`; upstream asset
 - [x] T6 Large-repo materialization strategy landed (M0's shared depth-1 cache + GitHub merge base, with a deterministic synthetic head when ancestry is absent; `--filter=blob:none` documented as the fallback — ADR 0009 §7)
 
 **Acceptance**
-- [ ] A1 First `results/M1-*.md`: file-level semantic P/R + **balanced_score (the external comparison caliber)** + missing excluded from denominators + buckets by language / category / PR size
+- [ ] A1 First `results/M1-*.md`: file-level semantic P/R + **balanced_score (the external comparison caliber)** + missing excluded from denominators + buckets by language / category / PR size — **deferred, resume state below**
 - [ ] A2 (Optional) contribute an upstream `reviewers/pir.py` PR once numbers are publishable
+
+**Paused (2026-10-20, maintainer direction: "暂时不用继续 … 在这个 docs 结束后再进行" and "抽样即可, 不用每一个都测了")**
+
+M1 is paused, not abandoned, and the pause state is recorded here so no step depends on memory. What exists:
+
+- The **B5** part of Iteration 3 is done and merged (ADR 0010, PR #124).
+- The reviewer side of the full round `2026-10-20-m1-full-glm` was stopped deliberately after **57 of the planned 196 instances** produced both view result files (`zai-coding-cn/glm-5.3:max`, real judge configured but judging stopped with it). Those 57 rows carry 105 reported/confirmed findings, 121.1M session tokens and 17.2h of reviewer wall time; three heads are unfetchable force-pushed commits (`comfyanonymous__ComfyUI@4936d01`, `comfyanonymous__ComfyUI@cfc3122`, `nodejs__node@b225544`) and are error rows. The sample is the first-completed convenience subset, **not a random draw**, so it can seed a first report but must not be recorded as the M2 baseline.
+- Judging was started against the pinned upstream judge (`glm-5.3`, `--eval-rounds 3`) and stopped after the first reported-view judge round; no judge verdicts were written back to the round summary.
+- The round's reviewer result files and `summary.json` are **kept on purpose**, gitignored, in the paused worktree `.worktrees/m1-full-benchmark/tests/eval/aacr/out/2026-10-20-m1-full-glm` (raw data, not reproducible without re-spending the tokens). They live on this machine, not in git.
+- The model-free evaluation infrastructure added during Iteration 3 is preserved on the pushed branch **`feat/m1-full-results`**: the results renderer `tests/eval/aacr/m1/report-m1.js` (headline, buckets, coverage, cost, provenance), the recorded judge model / judge timeout with the "no average file = failure" guard (`limits.judgeModel`, `PIR_AACR_JUDGE_TIMEOUT_MS`), and `run-aacr.js --resume --judge-only` for judging a sampled round without re-running reviewers. ADR 0009 §8 records the timeout/averaging decision.
+
+To resume (after the documentation work this file tracks is finished):
+
+1. Judge the completed rows only: `PIR_EVAL=1 PIR_AACR_CACHE=<cache> JUDGE_BASE_URL=… JUDGE_API_KEY=… JUDGE_MODEL=glm-5.3 PIR_AACR_PYTHON=<python> node tests/eval/aacr/m1/run-aacr.js --round 2026-10-20-m1-full-glm --resume --judge-only --judge real --eval-rounds 3 --view both --model zai-coding-cn/glm-5.3:max`.
+2. Render the report from `feat/m1-full-results`: `node tests/eval/aacr/m1/report-m1.js --round <round dir> --out tests/eval/aacr/results/M1-2026-10-20-sampled.md --title "AACR-Bench M1 — first sampled result (57/196 PRs)" --note "…"`; the document must say it is a convenience sample, that the 139 unrun instances are upstream `missing_instances` excluded from every denominator, and that it is not the M2 baseline.
+3. Flip A1 and the Iteration 3 milestone here, append the change-log row, and decide (M2 T1) whether to extend the sample to a seeded 50-PR subset or rerun the full 196-PR corpus for the baseline.
 
 ### M2 · Baseline lock-in and change protocol `Iteration 4` · ADR: fixed alongside M1's ADR · Status: ☐
 
@@ -181,3 +197,4 @@ The three load-bearing conclusions (details in the companion document):
 | 2026-10-19 | All | Testing model moved to `zai-coding-cn/glm-5.3:max` (max thinking) for the full-corpus M0 round and the M1 smoke; the earlier opencode-go deepseek attempt was abandoned rather than mixed | Maintainer direction after the opencode-go account usage limit was exhausted; each round stays single-model and names its model in its results file |
 | 2026-10-19 | Iteration 2 | Milestone closed: M0 full report, B4 and the M1 smoke merged into the roadmap integration branch; ADRs 0008–0009 written; statuses synced | This PR |
 | 2026-10-20 | B5 | Layered project rule file landed (ADR 0010): three layers with first-match-wins, contained rule/guidance reads, `PROJECT RULES` injection, canonical hash in the manifest, `config show` output; dogfood found and fixed four P0–P2-class issues (F-1/F-2/F-4/F-5) and deferred five P3s | Merge: #124; `feat/b5-layered-rule-file` |
+| 2026-10-20 | Iteration 3 / M1 | Iteration 3 paused: B5 merged; the M1 full sweep was sampled and stopped (57/196 completed, 105 findings, 3 unfetchable heads) and its judging stopped with it. The resume state (round data location, `feat/m1-full-results` infra, `--judge-only` command) is recorded under §2 M1; A1 and the milestone stay open | Maintainer: "暂时不用继续 … 在这个 docs 结束后再进行" + "抽样即可, 不用每一个都测了"; the roadmap records the pause so the next session does not re-spend tokens |
