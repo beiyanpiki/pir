@@ -87,7 +87,7 @@
 
 **Acceptance**
 - [x] A1 Unit tests: layer precedence / merge semantics / mutual exclusion with language packs (`tests/unit/project-rules.test.js` + `tests/integration/project-rules.test.js`; 24 model-free cases)
-- [ ] A2 Dogfood using a rule file to constrain pir's own PRs
+- [x] A2 Dogfood using a rule file to constrain pir's own PRs — final pass `41f9b807-4bb0-458f-acfb-3c60a4366985` (`zai-coding-cn/glm-5.3:max`, explicit `--rule` with `src/rules/**` `mergeBuiltin=false`) reported P3-only findings (F-8, F-9); F-1/F-2/F-4/F-5 were fixed during the loop, F-3/F-6/F-7/F-8/F-9 are deferred to `dogfood-p3-backlog.md`
 
 ---
 
@@ -180,3 +180,4 @@ The three load-bearing conclusions (details in the companion document):
 | 2026-10-19 | M1 | Skeleton landed (ADR 0009): pinned fixture builder, normalizer, `run-aacr.js`, upstream judge delegation; `--limit 20` smoke round recorded; full run and `results/M1-*.md` stay Iteration 3 | Merge: #121; M1 stays ◐ until A1 |
 | 2026-10-19 | All | Testing model moved to `zai-coding-cn/glm-5.3:max` (max thinking) for the full-corpus M0 round and the M1 smoke; the earlier opencode-go deepseek attempt was abandoned rather than mixed | Maintainer direction after the opencode-go account usage limit was exhausted; each round stays single-model and names its model in its results file |
 | 2026-10-19 | Iteration 2 | Milestone closed: M0 full report, B4 and the M1 smoke merged into the roadmap integration branch; ADRs 0008–0009 written; statuses synced | This PR |
+| 2026-10-20 | B5 | Layered project rule file landed (ADR 0010): three layers with first-match-wins, contained rule/guidance reads, `PROJECT RULES` injection, canonical hash in the manifest, `config show` output; dogfood found and fixed four P0–P2-class issues (F-1/F-2/F-4/F-5) and deferred five P3s | Merge: #PR_NUMBER; `feat/b5-layered-rule-file` |
