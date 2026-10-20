@@ -618,6 +618,13 @@ export async function startServer(input: {
       if (argv.includes("serve")) {
         throw new Error("refusing to execute serve recursively");
       }
+      // B5 (ADR-0010, dogfood F-4): --rule names a file on the CLIENT's
+      // machine. /v1/exec forwards argv verbatim, so without this guard a
+      // direct API caller could read an arbitrary server path through find's
+      // rule layer and feed it into a model prompt.
+      if (argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
+        throw new Error("--rule names a client-side file and is not accepted on a server; commit .pir/rule.json in the repository or use the server's global rule.json");
+      }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
       // A repo-context command whose cwd is not a git repository cannot run

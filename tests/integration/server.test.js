@@ -275,6 +275,20 @@ test("/v1/review refuses a client-side --rule path instead of reading it on the 
   }
 });
 
+test("/v1/exec also refuses a client-side --rule path (dogfood F-4)", async (t) => {
+  const { base } = await withServer(t);
+  for (const argv of [["find", "--rule", "/etc/passwd"], ["find", "--rule=/etc/passwd"]]) {
+    const response = await fetch(`${base}/v1/exec`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ argv }),
+    });
+    assert.equal(response.status, 400, `expected rejection for: ${argv.join(" ")}`);
+    const body = await response.json();
+    assert.match(body.error, /--rule names a client-side file/);
+  }
+});
+
 test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree", async (t) => {
   await withServer(t); // server handle only pins env cleanup (TLS off for tests)
   const repo = createTempGitRepo("pir-pin-");
