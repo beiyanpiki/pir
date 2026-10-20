@@ -3,7 +3,8 @@ import assert from "assert/strict";
 
 import { fixtureDigest } from "../eval/aacr/fixtures/build-fixture.js";
 import {
-  assertSelectionCompatible, effectiveSelectionLimits, parseOptions, seededOrder, selectFixtureRows,
+  assertJudgeCompatible, assertSelectionCompatible, effectiveJudgeLimits, effectiveSelectionLimits,
+  parseOptions, seededOrder, selectFixtureRows,
 } from "../eval/aacr/m1/run-aacr.js";
 
 const row = (id) => ({ instance_id: id, repo: "example/repo", reference_comments: [] });
@@ -66,6 +67,37 @@ test("effectiveSelectionLimits: a judge-only pass keeps the round's population p
   );
   assert.deepEqual(judgeOnly, { limit: 50, seed: 42, only: ["a@1111111"] }, "the recorded triple survives the rewrite");
   assert.throws(() => effectiveSelectionLimits({ judgeOnly: true }, null), /recorded selection/);
+});
+
+test("effectiveJudgeLimits: skipping a judge pass never erases the recorded identity (dogfood F-4)", () => {
+  const judged = { limits: { judge: "real", judgeModel: "glm-5.3", judgeTimeoutMs: 10800000, evalRounds: 3, judgeFrameworkCommit: "a".repeat(40) } };
+  const off = effectiveJudgeLimits(parseOptions([], {}), judged, null, {});
+  assert.deepEqual(off, { judge: "real", judgeModel: "glm-5.3", judgeTimeoutMs: 10800000, evalRounds: 3, judgeFrameworkCommit: "a".repeat(40) });
+  const fresh = effectiveJudgeLimits(parseOptions([], {}), null, null, {});
+  assert.deepEqual(fresh, { judge: "off", judgeModel: null, judgeTimeoutMs: null, evalRounds: 1, judgeFrameworkCommit: null });
+  const real = effectiveJudgeLimits(
+    parseOptions(["--judge", "real", "--eval-rounds", "3"], {}), null, { commit: "b".repeat(40) },
+    { JUDGE_MODEL: "glm-5.3", PIR_AACR_JUDGE_TIMEOUT_MS: "900000" },
+  );
+  assert.deepEqual(real, { judge: "real", judgeModel: "glm-5.3", judgeTimeoutMs: 900000, evalRounds: 3, judgeFrameworkCommit: "b".repeat(40) });
+});
+
+test("assertJudgeCompatible: real-judge identity is a refusal, not a footnote (dogfood F-4)", () => {
+  const pin = "a".repeat(40);
+  const recorded = { limits: { judge: "real", judgeModel: "glm-5.3", evalRounds: 3, judgeFrameworkCommit: pin } };
+  const same = { judge: "real", judgeModel: "glm-5.3", evalRounds: 3, judgeFrameworkCommit: pin, judging: true };
+  assert.doesNotThrow(() => assertJudgeCompatible(recorded, same));
+  assert.doesNotThrow(() => assertJudgeCompatible(recorded, { ...same, judging: false }), "not re-judging: nothing to compare");
+  assert.throws(() => assertJudgeCompatible(recorded, { ...same, judgeModel: "other-model" }), /refuses to mix judge model/);
+  assert.throws(() => assertJudgeCompatible(recorded, { ...same, evalRounds: 1 }), /refuses to mix eval-rounds/);
+  assert.throws(() => assertJudgeCompatible(recorded, { ...same, judgeFrameworkCommit: "b".repeat(40) }), /refuses to mix judge framework commit/);
+  assert.throws(() => assertJudgeCompatible(recorded, { ...same, judge: "mock" }), /refuses to replace a real-judge round with a mock re-judge/);
+  assert.doesNotThrow(() => assertJudgeCompatible({ limits: { judge: "mock", evalRounds: 1 } }, same), "a mock round may be upgraded to the real judge");
+  assert.doesNotThrow(() => assertJudgeCompatible({ limits: { judge: "off" } }, same), "an unjudged round accepts its first judge identity");
+  assert.doesNotThrow(
+    () => assertJudgeCompatible({ limits: { judge: "real", judgeModel: null, evalRounds: 3 } }, same),
+    "a round recorded before the framework pin existed is unknown, not a mismatch",
+  );
 });
 
 test("driver options: --seed parsing and --judge-only restrictions", () => {

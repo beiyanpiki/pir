@@ -257,7 +257,7 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
     ["Selection", `${summary.population?.selected ?? rows.length} instances over ${summary.population?.repos ?? "?"} repositories` + (summary.limits?.limit ? `, ${code(`--limit ${summary.limits.limit}`)}` : "")],
     ["Run limits", `${code(`--max-rounds ${summary.limits?.maxRounds ?? "?"}`)}, ${code(`--max-tokens ${summary.limits?.maxTokens ?? "?"}`)}, ${code(`--max-findings ${summary.limits?.maxFindings ?? "?"}`)}, task timeout ${Math.round((summary.limits?.timeoutMs ?? 0) / 60000)} min`],
     ["Judge", `${judgeMode} (${judgeModel}), ${summary.limits?.evalRounds ?? 1} round(s) averaged per view`],
-    ["Judge framework pin", `${meta?.framework?.repo ?? "https://github.com/alibaba/aacr-bench"} @ ${code(meta?.framework?.commit ?? "?")} (Apache-2.0)`],
+    ["Judge framework pin", `${meta?.framework?.repo ?? "https://github.com/alibaba/aacr-bench"} @ ${code(summary.limits?.judgeFrameworkCommit ?? meta?.framework?.commit ?? "?")} (Apache-2.0)`],
     ["Started / finished", `${summary.startedAt ?? "?"} / ${summary.finishedAt ?? "not finished"}`],
     ["Citation", `${code(`arXiv:${arxiv}`)} — ${citation.replace(/\n/g, " ")}`],
   ]));

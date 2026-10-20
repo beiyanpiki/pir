@@ -133,6 +133,57 @@ export function effectiveSelectionLimits(options, recorded = null) {
 }
 
 /**
+ * The judge provenance a round actually carries. Skipping judging on a resume
+ * must not erase what an earlier judge run recorded; a new judging pass sets
+ * the identity it ran with (dogfood F-4).
+ */
+export function effectiveJudgeLimits(options, previousSummary = null, judgePin = null, env = process.env) {
+  const recorded = previousSummary?.limits ?? null;
+  if (options?.judge === "off") {
+    return {
+      judge: recorded?.judge ?? "off",
+      judgeModel: recorded?.judgeModel ?? null,
+      judgeTimeoutMs: recorded?.judgeTimeoutMs ?? null,
+      evalRounds: recorded?.evalRounds ?? options?.evalRounds ?? 1,
+      judgeFrameworkCommit: recorded?.judgeFrameworkCommit ?? null,
+    };
+  }
+  return {
+    judge: options.judge,
+    judgeModel: options.judge === "real" ? (env.JUDGE_MODEL ?? null) : null,
+    judgeTimeoutMs: options.judge === "real" ? resolveJudgeTimeoutMs(env) : null,
+    evalRounds: options.evalRounds,
+    judgeFrameworkCommit: judgePin?.commit ?? null,
+  };
+}
+
+/**
+ * Judge drift is a refusal, not a footnote: a round already judged by the real
+ * judge only accepts a re-judge with the same model, round count and framework
+ * commit, and never a downgrade to mock/off (ADR-0009 §11). Mock rounds are
+ * pipeline checks and may be upgraded to a real judge; unjudged rounds accept
+ * their first identity. Recorded values that older rounds did not carry are
+ * unknown, not a mismatch.
+ */
+export function assertJudgeCompatible(previousSummary, { judge, judgeModel, evalRounds, judgeFrameworkCommit, judging = false } = {}) {
+  const recorded = previousSummary?.limits ?? {};
+  if (!judging || recorded.judge !== "real") return;
+  if (judge !== "real") {
+    throw new Error(`--resume refuses to replace a real-judge round with a ${judge} re-judge (only the real judge that produced the round may re-judge it)`);
+  }
+  const pins = [
+    ["judge model", recorded.judgeModel, judgeModel],
+    ["eval-rounds", recorded.evalRounds, evalRounds],
+    ["judge framework commit", recorded.judgeFrameworkCommit, judgeFrameworkCommit],
+  ];
+  for (const [label, before, after] of pins) {
+    if (before !== undefined && before !== null && before !== after) {
+      throw new Error(`--resume refuses to mix ${label}: round was judged with ${before}, this invocation uses ${after} (judge drift invalidates the comparison and forces a new round)`);
+    }
+  }
+}
+
+/**
  * M2 provenance: the subset (and therefore every before/after comparison on
  * it) is a pin, not an implementation detail. A different seed or a different
  * selected instance set is a different round, never a resumable one; a
@@ -452,6 +503,9 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   // The summary records the effective selection, never the rejected flags of
   // a --judge-only invocation (dogfood F-1).
   const selectionLimits = effectiveSelectionLimits(options, previousSummary?.limits);
+  // Judge identity is a pin too: skipping judging must not erase a recorded
+  // real-judge identity, and re-judging must match it (dogfood F-4).
+  const judgeLimits = effectiveJudgeLimits(options, previousSummary, judgePin, env);
 
   const cacheFile = path.join(options.cache, "merge-bases.json");
   const store = new MergeBaseStore(cacheFile, loadMergeBaseCache(cacheFile));
@@ -478,6 +532,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         throw new Error(`--resume refuses to mix views: round was recorded with ${previousSummary.view}, this invocation uses ${options.view}`);
       }
       assertSelectionCompatible(previousSummary, { selected, seed: options.seed, judgeOnly: options.judgeOnly });
+      assertJudgeCompatible(previousSummary, { ...judgeLimits, judging: options.judge !== "off" });
     }
 
     const dirs = Array.from({ length: options.repeats }, (_, index) => repeatDirFor(roundDir, options.repeats, index + 1));
@@ -536,11 +591,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       limits: {
         limit: selectionLimits.limit, seed: selectionLimits.seed, only: selectionLimits.only, concurrency: options.concurrency,
         maxRounds: options.maxRounds, maxTokens: MAX_TOKENS, maxFindings: MAX_FINDINGS,
-        timeoutMs: options.timeoutMs, cache: options.cache, judge: options.judge, evalRounds: options.evalRounds,
-        // ADR-0009 §10: only a real-judge run with the exact judge model
-        // recorded qualifies for comparison; record it with the other pins.
-        judgeModel: options.judge === "real" ? (env.JUDGE_MODEL ?? null) : null,
-        judgeTimeoutMs: options.judge === "real" ? resolveJudgeTimeoutMs(env) : null,
+        timeoutMs: options.timeoutMs, cache: options.cache,
+        // ADR-0009 §10/§11: only a real-judge run with the exact judge model
+        // and framework commit recorded qualifies for comparison, so the
+        // identity is recorded and enforced by assertJudgeCompatible.
+        judge: judgeLimits.judge, judgeModel: judgeLimits.judgeModel,
+        judgeTimeoutMs: judgeLimits.judgeTimeoutMs, evalRounds: judgeLimits.evalRounds,
+        judgeFrameworkCommit: judgeLimits.judgeFrameworkCommit,
         judgeOnly: options.judgeOnly,
       },
       config,
