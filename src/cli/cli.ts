@@ -92,6 +92,13 @@ async function main(argv: string[]): Promise<number> {
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
+  // B5 (ADR-0010): --rule names a file on the caller's machine. Forwarding the
+  // path would read a server-side file (or fail there) under the same spelling;
+  // the repository and global layers still apply on the server, so reject the
+  // flag rather than resolve it somewhere the user did not mean.
+  if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
+    throw new UsageError("--rule is a local file path and is not forwarded to a server; commit .pir/rule.json, use the server's global rule.json, or run with --local");
+  }
   if (command === "jobs") {
     // jobs talks to the server's job registry directly (GET /v1/jobs) —
     // there is nothing to forward through the executor.

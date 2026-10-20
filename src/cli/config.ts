@@ -1,8 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline/promises";
+import { pirConfigDir } from "../rules/project-rules.js";
 
 /** Usage-level error in config handling; the CLI maps it to exit code 2. */
 export class UsageError extends Error {}
@@ -42,7 +42,8 @@ export type Transport =
   | { mode: "remote"; url: string; token?: string; insecure: boolean };
 
 export function configDir(): string {
-  return process.env.PIR_CONFIG_DIR ?? path.join(os.homedir(), ".pir");
+  // One definition (the client config dir) shared with the project-rule layers.
+  return pirConfigDir();
 }
 
 export function configPath(): string {
