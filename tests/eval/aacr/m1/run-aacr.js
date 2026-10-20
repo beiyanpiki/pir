@@ -52,7 +52,7 @@ import { assertResumeCompatible, ensureFetchedAsync, materializeTaskAsync, relea
 import { fixtureDigest, loadFixture } from "../fixtures/build-fixture.js";
 import { VIEWS, normalizeFindings, safeId, toUpstreamResult } from "./normalize-aacr.js";
 import {
-  DEFAULT_JUDGE_TIMEOUT_MS, assertJudgeEnv, ensureJudgeCheckout, judgeCloneDir, judgeRunId, loadJudgePin, runJudge,
+  DEFAULT_JUDGE_TIMEOUT_MS, assertJudgeEnv, ensureJudgeCheckout, judgeCloneDir, judgeRunId, loadJudgePin, resolveJudgeTimeoutMs, runJudge,
 } from "./judge.js";
 import { createSyntheticHeadAsync, hasAncestryAsync } from "./git-async.js";
 
@@ -434,6 +434,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         limit: options.limit ?? null, only: options.only, concurrency: options.concurrency,
         maxRounds: options.maxRounds, maxTokens: MAX_TOKENS, maxFindings: MAX_FINDINGS,
         timeoutMs: options.timeoutMs, cache: options.cache, judge: options.judge, evalRounds: options.evalRounds,
+        // ADR-0009 §10: only a real-judge run with the exact judge model
+        // recorded qualifies for comparison; record it with the other pins.
+        judgeModel: options.judge === "real" ? (env.JUDGE_MODEL ?? null) : null,
+        judgeTimeoutMs: options.judge === "real" ? resolveJudgeTimeoutMs(env) : null,
       },
       config,
       population,
@@ -660,7 +664,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
               judgeMode: options.judge, judgeDir, pin: judgePin, rows: selected,
               resultsDir: path.join(dirs[repeat - 1], view), view, repeat, runId, env,
               evalRounds: options.evalRounds,
-              timeoutMs: DEFAULT_JUDGE_TIMEOUT_MS,
+              timeoutMs: resolveJudgeTimeoutMs(env),
             });
             summary.judge.push(result);
             if (!result.ok) console.error(`ERROR judge ${runId}: ${result.error}`);

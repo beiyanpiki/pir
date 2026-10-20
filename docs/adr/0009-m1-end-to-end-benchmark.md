@@ -189,8 +189,13 @@ of that measurement.
 8. **Cost and variance stance.** The `--limit 20` smoke is a documented
    manual command (README and this ADR), never a CI gate (roadmap M2 T3,
    ADR-0003 §4). `--repeats` exists for repeated runs; the full comparison
-   uses upstream's `--eval-rounds 3` averaging later, and the smoke reports a
-   single judge round. Every row records per-PR token usage, duration, exit
+   uses upstream's `--eval-rounds 3` averaging, and the smoke reports a single
+   judge round. One judge-pipeline invocation must finish all three rounds: the
+   skeleton's 30-minute ceiling is overridable with
+   `PIR_AACR_JUDGE_TIMEOUT_MS` for a full-corpus run and the effective value is
+   recorded as `limits.judgeTimeoutMs` in the round summary. A missing
+   `_average.json` after an `--eval-rounds 3` run is a judge failure, never a
+   silent fallback to one round's metrics (Iteration 3). Every row records per-PR token usage, duration, exit
    status, `incomplete`/`stoppedBecause`, and whether the diff base was
    degraded or the head synthetic. The exact model id (e.g.
    `opencode-go/deepseek-v4.1-flash:medium`), the CLI sha256, the fixture
