@@ -501,6 +501,11 @@ export interface RunManifest {
   estimatedTokens: number;
   /** Change mode: the reviewed file list (B1 adds the exclusion record). */
   files?: Array<{ path: string; status: string; additions: number; deletions: number; excluded?: boolean; excludedReason?: string }>;
+  /**
+   * B5 (ADR-0010): applied project rules, their canonical hash and the
+   * built-in-guidance suppression flag; absent when no rule file was loaded.
+   */
+  projectRules?: import("../rules/project-rules.js").ProjectRulesSummary;
   /** Audit mode: coverage ledger summary and work-unit states. */
   coverage?: CoverageSummary;
   units?: Array<{ id: string; module: string; state: string; reason?: string; files: number; attempts: number }>;
