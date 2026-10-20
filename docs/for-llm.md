@@ -213,7 +213,7 @@ globs to prevent shell expansion. Default exclusions still apply.
 a rule carries exactly one of inline `guidance` or a repo-relative
 `guidanceFile` (`.md`/`.markdown`/`.txt`, ≤64 KiB, contained in the repo).
 The first matching rule for a reviewed path wins; `mergeBuiltin:false`
-withholds the built-in language-pack guidance for the run. The applied rules
+withholds the built-in language-pack guidance from reviewer sessions for the run (verifiers keep theirs). The applied rules
 and their canonical hash are recorded in `run.json` under `projectRules`, and
 `pir config show [--json]` prints the loaded layers and rules. Rules are
 `find`-only; `--rule` is a local path and is rejected in remote mode.

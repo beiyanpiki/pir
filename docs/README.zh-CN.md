@@ -184,7 +184,7 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 
 ### 项目规则
 
-仓库评审约定可以直接声明，而不必依赖记忆：规则文件把路径 glob 与 guidance 配对，`find` 只注入命中本次评审路径的规则。三层按优先级从高到低加载——`--rule <path>`、`<repo>/.pir/rule.json`、`<config-dir>/rule.json`（默认 `~/.pir/rule.json`）——同一个路径由第一个命中的规则决定（层优先，层内按声明顺序），因此匹配是确定性的代码判断。每层还可带 `include`/`exclude` glob；`mergeBuiltin: false` 表示该规则对其路径拥有最终解释权，并整轮抑制内置语言包 guidance。
+仓库评审约定可以直接声明，而不必依赖记忆：规则文件把路径 glob 与 guidance 配对，`find` 只注入命中本次评审路径的规则。三层按优先级从高到低加载——`--rule <path>`、`<repo>/.pir/rule.json`、`<config-dir>/rule.json`（默认 `~/.pir/rule.json`）——同一个路径由第一个命中的规则决定（层优先，层内按声明顺序），因此匹配是确定性的代码判断。每层还可带 `include`/`exclude` glob；`mergeBuiltin: false` 表示该规则对其路径拥有最终解释权，并整轮抑制 reviewer 会话的内置语言包 guidance（verifier 会话保留自己的可信 guidance）。
 
 ```json
 {

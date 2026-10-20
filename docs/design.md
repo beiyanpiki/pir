@@ -381,7 +381,7 @@ reference is untrusted repository content: absolute paths, `..`, symlink
 escapes, unknown extensions and oversized files fail the run before any
 session exists. `mergeBuiltin` defaults to `true`; `false` makes the project
 rule authoritative for its paths and withholds the built-in language-pack
-guidance for that run, because a pack is rendered once for the whole session.
+guidance from reviewer sessions for that run (verifiers keep theirs), because a pack is rendered once for the whole session.
 The winning rules render into one `PROJECT RULES` section placed after the
 process rules and before the built-in language guidance and the memory pack,
 with an explicit evidence-not-instructions preamble. Groups are sorted by

@@ -118,12 +118,15 @@ ordering would make prompt diffs and the manifest hash unstable.
    repository; memory remains learned and revalidated. They do not replace
    one another. `mergeBuiltin: true` keeps the built-in pack guidance next to
    the project rule. `mergeBuiltin: false` means the project rule is
-   authoritative for its paths and the built-in pack guidance is withheld for
-   the run — a coarse, honest granularity: the pack is rendered once for the
-   whole session, so per-file partial suppression would require per-file
-   sessions. The section states the suppression explicitly, the manifest
-   records it, and a diff that mixes replaced and merged rules gets the
-   conservative (user-wins) behavior.
+   authoritative for its paths and the built-in pack guidance is withheld
+   from **reviewer** sessions for the run — a coarse, honest granularity: the
+   pack is rendered once for the whole session, so per-file partial
+   suppression would require per-file sessions. Verifier sessions are
+   deliberately untouched: they never receive project rules, and their
+   trusted language guidance is what keeps a project preference from being
+   mistaken for technical truth (dogfood F-5). The section states the
+   suppression explicitly, the manifest records it, and a diff that mixes
+   replaced and merged rules gets the conservative (user-wins) behavior.
 6. **The canonical rule-text hash is part of the run record.** The hash is
    `sha256` over a canonical JSON document containing the layers in priority
    order, each layer's include/exclude and each rule's path, canonicalized

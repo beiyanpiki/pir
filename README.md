@@ -261,7 +261,7 @@ match the reviewed paths. Three layers are loaded, highest priority first —
 (layers in priority order, declaration order within a layer), so matching is a
 deterministic code decision. A layer may also carry `include`/`exclude`
 globs, and `mergeBuiltin: false` makes the project rule authoritative for its
-paths by withholding the built-in language-pack guidance for that run.
+paths by withholding the built-in language-pack guidance from reviewer sessions for that run (verifier sessions keep their own trusted pack guidance).
 
 ```json
 {
