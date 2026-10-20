@@ -4,7 +4,7 @@
 > **Companion context: [ocr-borrow-and-aacr-benchmark-context.md](ocr-borrow-and-aacr-benchmark-context.md)** — the full research interpretation (OCR mechanisms with a source-location quick reference, the pir baseline, the dimension-by-dimension comparison, the AACR-Bench assets and metric methodology, risks R1–R10, and the research method). Each item's ADR draws its Context from that document; this file tracks execution only and carries no research detail.
 > Deletion preconditions: (1) every executed item's ADR is merged under `docs/adr/` (numbering continues in sequence), with this file acting only as an index; (2) any §3 decision point that was kicked off has its own ADR; (3) baseline numbers are persisted in `tests/eval/aacr/results/` and the relevant ADR/RESULTS documents, with nothing depending on this file's narrative; (4) content of the companion context document that is still referenced has been absorbed into the ADRs — then delete that document together with this file.
 >
-> Status legend: `☐ not started` · `◐ in progress` · `☑ done` · `⏸ parked (reason noted)` · `➜ decision point (awaiting data)`
+> Status legend: `☐ not started` · `◐ in progress` · `☑ done` · `⏸ parked (reason noted)` · `➜ decision point (awaiting data)` · `✗ rejected (data trigger did not fire; ADR linked)`
 > **ADR rule: each item writes its ADR (Status: Proposed) when execution starts, and flips it to Accepted when the implementation PR merges; at that point replace `ADR: written at execution` in the item header with the actual number. This file tracks execution; it does not replace the ADR.**
 > Research sources: alibaba/open-code-review @ `8eb8334`, alibaba/aacr-bench, HF `Alibaba-Aone/aacr-bench` (all Apache-2.0; data use requires citing arXiv 2601.19494). Research conclusions are summarized in §5.
 > **Update rule: check off each task as it completes and append a row to §6; when status and reality diverge, code wins — fix this file immediately.**
@@ -18,7 +18,7 @@
 | Iteration 1 | B1, B2, B3, M0 skeleton | ☑ | B1–B3 merged to the iteration's declared integration branch (`roadmap/ocr-borrow-and-aacr-benchmark`) through the dogfood gate; M0 `--limit 100` produced its first numbers; ADRs 0004–0007 written |
 | Iteration 2 | M0 full run, B4, M1 skeleton | ☑ | M0 full 2,145-comment report + OCR-prompt comparison; B4 merged with no kill-rate regression; M1 `--limit 20` smoke passes |
 | Iteration 3 | M1 full run, B5 | ⏸ | B5 merged (#124); the first M1 report is deferred by maintainer direction — the sampled round stopped at 57/196 on 2026-10-20 and its resume state is recorded under §2 M1 |
-| Iteration 4 | M2 baseline lock-in, D-B6/D-B7/D-B8 decisions | ☐ | Change protocol in effect; all three decision points have data-backed adopt/reject records |
+| Iteration 4 | M2 baseline lock-in, D-B6/D-B7/D-B8 decisions | ☑ | Change protocol in effect (`results/RESULTS.md`); all three decision points have data-backed **reject** records (ADRs 0011–0013); M2 stays ◐ only for T1b — the numeric M1 baseline run is deferred with the parked M1 sweep, while its population, pins and procedure are locked (M2 T1a) |
 
 ---
 
@@ -139,18 +139,19 @@ To resume (after the documentation work this file tracks is finished):
 
 1. Judge the completed rows only: `PIR_EVAL=1 PIR_AACR_CACHE=<cache> JUDGE_BASE_URL=… JUDGE_API_KEY=… JUDGE_MODEL=glm-5.3 PIR_AACR_PYTHON=<python> node tests/eval/aacr/m1/run-aacr.js --round 2026-10-20-m1-full-glm --resume --judge-only --judge real --eval-rounds 3 --view both --model zai-coding-cn/glm-5.3:max`.
 2. Render the report from `feat/m1-full-results`: `node tests/eval/aacr/m1/report-m1.js --round <round dir> --out tests/eval/aacr/results/M1-2026-10-20-sampled.md --title "AACR-Bench M1 — first sampled result (57/196 PRs)" --note "…"`; the document must say it is a convenience sample, that the 139 unrun instances are upstream `missing_instances` excluded from every denominator, and that it is not the M2 baseline.
-3. Flip A1 and the Iteration 3 milestone here, append the change-log row, and decide (M2 T1) whether to extend the sample to a seeded 50-PR subset or rerun the full 196-PR corpus for the baseline.
+3. Flip A1 and the Iteration 3 milestone here and append the change-log row. **M2 T1's baseline decision is already recorded** (Iteration 4): the baseline population is the seeded 50-PR subset, not the full corpus and not this convenience sample — so after judging this sample, render it as a convenience-sample document only, then run the locked subset with `--limit 50 --seed 42` as the M1 baseline (`tests/eval/aacr/results/RESULTS.md`).
 
-### M2 · Baseline lock-in and change protocol `Iteration 4` · ADR: fixed alongside M1's ADR · Status: ☐
+### M2 · Baseline lock-in and change protocol `Iteration 4` · ADR: 0009 §11 (M2 amendment) · Status: ◐
 
 **Tasks**
-- [ ] T1 Baseline recording: M1 numbers into `tests/eval/aacr/results/` (run_id / model / date / scores / per-PR delta)
-- [ ] T2 Change protocol: behavioral changes (B1/B2/B4/B5 landings) run before/after on a fixed 50-PR subset (`--seed 42`); judge drift invalidates the comparison and forces a rerun (rb variance rules copied verbatim)
-- [ ] T3 Smoke: nightly/manual `--limit 20`; **not a regular CI gate** (cost stance per ADR-0003)
-- [ ] T4 North-star dashboard in RESULTS: balanced_score, kill-rate (M0), per-PR token cost
+- [x] T1a Baseline decision + recording: M1's locked population is the fixed 50-PR subset (`--limit 50 --seed 42`, instance-set digest `754ae13a…`, 50 PRs / 29 repos / 333 reference comments); model, judge pins and procedure recorded in `results/RESULTS.md`, plus the parked sample's per-PR reference table (run_id / model / date / scores-when-available / per-PR cost+duration) — the "extend the sample to a seeded 50-PR subset vs rerun the full 196" decision the Iteration-3 pause note deferred to M2 T1
+- [ ] T1b Baseline score run: the 50-PR subset with the pinned judge and `--eval-rounds 3` → the M1 row in `results/RESULTS.md`. Blocked on the M1 unpark (maintainer pause), not on missing tooling
+- [x] T2 Change protocol: behavioral changes run before/after on the fixed subset — verifier-side changes on M0's fixed 100-comment sample, end-to-end changes on M1's fixed 50-PR subset; `--seed 42` selection is deterministic and recorded, `--resume`/`--judge-only` refuse or replay a different subset; judge drift invalidates the comparison and forces a rerun (rb variance rules copied verbatim)
+- [x] T3 Smoke: nightly/manual `--limit 20` documented with its exact command and cost; **not a regular CI gate** (cost stance per ADR-0003)
+- [x] T4 North-star dashboard in RESULTS: balanced_score (M1 — open until T1b), kill-rate (M0 — locked), per-PR token cost (reference until T1b)
 
 **Acceptance**
-- [ ] A1 First before/after comparison recorded under the protocol
+- [x] A1 First before/after comparison recorded under the protocol — the B4 M0 before/after (fixed 100-comment sample, same model, no judge, builds `b6214403` → `64734461`) is entered in the registry with its parameters, result and point-comparison caveat; the first M1 comparison row follows the T1b baseline.
 
 ---
 
@@ -158,9 +159,9 @@ To resume (after the documentation work this file tracks is finished):
 
 | ID | Topic | Trigger (data source) | Action when triggered | Status |
 | --- | --- | --- | --- | --- |
-| D-B6 | Deterministic slicing of large changesets (find) | M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently | Write the ADR, then implement: slice by hunk adjacency, one round per slice, fingerprint dedup across slices; failure must fall back and never act as a correctness gate (OCR's lesson) | ➜ |
-| D-B7 | Session-audit enhancements (transcripts on by default + web marking / cost breakdown) | Accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence | Write the ADR; implement localStorage mark-and-hide (after the OCR viewer) | ➜ |
-| D-B8 | Change-mode coverage manifest contract (per-file terminal states) | After B1, the envelope already carries exclusion reasons and automation consumers ask for coverage auditing | Write the ADR: reviewed/skipped/excluded terminal states + incomplete tied to coverage | ➜ |
+| D-B6 | Deterministic slicing of large changesets (find) | M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently | Write the ADR, then implement: slice by hunk adjacency, one round per slice, fingerprint dedup across slices; failure must fall back and never act as a correctness gate (OCR's lesson) | ✗ rejected — the fixture has no PR >971 lines and 0/39 local manifests hit a budget stop (ADR 0011) |
+| D-B7 | Session-audit enhancements (transcripts on by default + web marking / cost breakdown) | Accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence | Write the ADR; implement localStorage mark-and-hide (after the OCR viewer) | ✗ rejected — cost attribution ships in the manifest/run summaries, recent debugging used rows/manifests, no recorded replay demand (ADR 0012) |
+| D-B8 | Change-mode coverage manifest contract (per-file terminal states) | After B1, the envelope already carries exclusion reasons and automation consumers ask for coverage auditing | Write the ADR: reviewed/skipped/excluded terminal states + incomplete tied to coverage | ✗ rejected — C1's ledger + B1's exclusion record already deliver it; states are derivable and gating `incomplete` would reverse C1 (ADR 0013) |
 
 ## 4. Dependency graph
 
@@ -169,7 +170,8 @@ B1 (filter gate) ──→ B5 (rule file include/exclude)
 B1 ──→ M1 (filter effect measured by M1)
 B2 (location correction) ──→ M1 (anchor metrics)
 M0 (skeleton) ──→ B4 (merge gate = M0 kill-rate comparison)
-M0 ──→ M1 ──→ M2 ──→ D-B6 decision
+M0 ──→ M1 ──→ M2 ──→ D-B6 decision (recorded: ADR 0011)
+M2 ──→ D-B7 / D-B8 decisions (ADRs 0012–0013)
 B3 and B2 have no dependencies; run in parallel
 ```
 
@@ -181,7 +183,7 @@ The three load-bearing conclusions (details in the companion document):
 
 - OCR = deterministic engineering × agent hybrid; its recall is deliberately low — any external comparison must use balanced_score (R10).
 - What pir already leads on, we do not borrow: per-candidate falsifying verifier with evidence gate, SQLite memory, finding fingerprints, the JSON envelope contract, the rb eval skeleton.
-- Borrowing focuses on the gaps: filter gate (B1), location correction (B2), default budget + graceful truncation (B3), verifier rejection grounds (B4); rule file (B5) next; large-PR slicing and two others are data-triggered decision points (§3).
+- Borrowing focuses on the gaps: filter gate (B1), location correction (B2), default budget + graceful truncation (B3), verifier rejection grounds (B4); rule file (B5) next; large-PR slicing and two others are data-triggered decision points (§3) — all three were evaluated at Iteration 4 and none fired (ADRs 0011–0013).
 
 ## 6. Change log
 
@@ -198,3 +200,4 @@ The three load-bearing conclusions (details in the companion document):
 | 2026-10-19 | Iteration 2 | Milestone closed: M0 full report, B4 and the M1 smoke merged into the roadmap integration branch; ADRs 0008–0009 written; statuses synced | This PR |
 | 2026-10-20 | B5 | Layered project rule file landed (ADR 0010): three layers with first-match-wins, contained rule/guidance reads, `PROJECT RULES` injection, canonical hash in the manifest, `config show` output; dogfood found and fixed four P0–P2-class issues (F-1/F-2/F-4/F-5) and deferred five P3s | Merge: #124; `feat/b5-layered-rule-file` |
 | 2026-10-20 | Iteration 3 / M1 | Iteration 3 paused: B5 merged; the M1 full sweep was sampled and stopped (57/196 completed, 105 findings, 3 unfetchable heads) and its judging stopped with it. The resume state (round data location, `feat/m1-full-results` infra, `--judge-only` command) is recorded under §2 M1; A1 and the milestone stay open | Maintainer: "暂时不用继续 … 在这个 docs 结束后再进行" + "抽样即可, 不用每一个都测了"; the roadmap records the pause so the next session does not re-spend tokens |
+| 2026-10-20 | Iteration 4 / M2 + D-B6–D-B8 | M2 baseline lock-in and change protocol: the fixed 50-PR subset (`--limit 50 --seed 42`, digest `754ae13a…`) is implemented in the M1 driver with provenance guards and tests; `results/RESULTS.md` carries the baseline decision, the protocol, the north-star dashboard and the registry; ADR 0009 §11 records the protocol. All three decision points were evaluated and **rejected** on data (ADRs 0011–0013). T1's numeric M1 baseline (T1b) stays open with the parked M1 sweep; A1 is entered with the B4 M0 comparison | This PR |

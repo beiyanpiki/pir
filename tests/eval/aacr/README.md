@@ -5,7 +5,7 @@ Two measurement surfaces against [AACR-Bench](https://huggingface.co/datasets/Al
 - **M0 — verifier offline benchmark.** Comment-level measurement of the **verifier stage**: 2,145 real PR review comments (1,505 expert-verified correct / 640 incorrect) over 200 PRs in 50 repositories, each with a binary label. It asks how well `runVerifier`'s defect verdict lines up with the dataset's "is this comment correct" label, and compares it against the open-code-review reflection prompt on identical material; the two questions are deliberately not identical, and ADR-0007's Consequences section records the measured consequence.
 - **M1 — end-to-end benchmark (skeleton).** Whole-`pir find` runs over the upstream `positive_samples` split: 196 PRs, 1,506 known-correct reference comments, 50 repositories. Findings are judged by the **pinned upstream judge** and reported as file-level semantic precision/recall plus **`balanced_score`** — the caliber published OCR / Claude Code / Codex rows use. M1 never builds a judge of its own.
 
-Protocols, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md) (M0) and [ADR 0009](../../../docs/adr/0009-m1-end-to-end-benchmark.md) (M1); the numbers live in [RESULTS](results/). Both surfaces **extend** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); they do not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline. The M1 `--limit 20` smoke costs 20 model runs: it is a manual check, never a CI gate.
+Protocols, decisions and their reasons live in [ADR 0007](../../../docs/adr/0007-aacr-verifier-offline-benchmark.md) (M0) and [ADR 0009](../../../docs/adr/0009-m1-end-to-end-benchmark.md) (M1); the numbers, the locked baseline and the M2 change protocol live in [RESULTS](results/RESULTS.md). Both surfaces **extend** `tests/eval/reviewbench/` (same opt-in gate, isolation conventions and variance rules); they do not replace it. Local evaluation only (ADR 0003 §4): no leaderboard, no CI gate, no publishing pipeline. The M1 `--limit 20` smoke costs 20 model runs: it is a manual check, never a CI gate.
 
 ## Layout
 
@@ -26,8 +26,9 @@ tests/eval/aacr/
     normalize-aacr.js     M1 T3: envelope -> reported / confirmedOnly upstream comment views
     run-aacr.js           M1 T2: per-PR `pir find` driver (same-repo serial / cross-repo concurrent)
     judge.js              M1 T4: pinned upstream judge delegation (data/results/pipeline eval)
+    report-m1.js          M1 A1: results-document renderer (headline, buckets, coverage, cost)
     git-async.js          non-blocking fetch / worktree / synthetic-head plumbing
-  results/                committed results files (M0-*.md, later M1-*.md)
+  results/                committed results files (M0-*.md, M1-*.md) + RESULTS.md (baseline, change protocol, dashboard)
   dataset/                gitignored: downloaded + materialized rows (auto-rebuilt)
   out/                    gitignored: run outputs (per-arm score rows + summary.json; M1 rounds)
 ```
@@ -68,7 +69,7 @@ node tests/eval/aacr/report.js --run tests/eval/aacr/out/<after> --baseline test
 
 The two rounds must share the dataset, sample digest, model id and arm set — `report.js` refuses to compare otherwise — and only the CLI build may differ. A round's rejection grounds (`rejectionGrounds` in `score.js`, "Rejection grounds (B4)" in the results file) come from the verifier's required `rejectionGround` on a rejected verdict; rows recorded before B4 or by the OCR arm count as `unknown` rather than disappearing.
 
-Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently.
+Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently. A sampled round that was deliberately stopped can be judged without re-running reviewers: `--resume --judge-only --judge real --eval-rounds 3` reads the completed result files, keeps the round's recorded selection so unrun instances stay in upstream's `missing_instances`, and writes the judge metrics into the same round. This is how the first Iteration-3 report was produced (57 completed instances of the planned 196).
 
 ## M1 · End-to-end benchmark
 
@@ -112,6 +113,12 @@ PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js \
 
 Why these flags: `--limit 20` is the documented smoke size (ADR-0009; the full 196-PR run plus `--eval-rounds 3` averaging is a separate, later round); `--concurrency 4` runs up to four **different repositories** at once while instances of the same repository stay serial (they share one cache directory); `--judge mock` uses upstream's local similarity judge, so the smoke validates the pipeline at zero judge cost. Use `--judge real` only with `JUDGE_BASE_URL` / `JUDGE_API_KEY` / `JUDGE_MODEL`; missing credentials fail before any model run. `--judge off` skips judging. For the full comparison, `--eval-rounds 3` asks the upstream judge for three independent rounds and averages them (the count is recorded in `summary.json`).
 
+### M2 change protocol: the fixed 50-PR subset
+
+Behavioural before/after comparisons run on one **fixed subset**, never on whatever rows happen to complete: `--limit 50 --seed 42` selects the first 50 fixture rows in a seeded Fisher-Yates order (the same `mulberry32` PRNG and loop the M0 comment sample uses). The order is reproducible from `(seed, limit)`, and the round records it as `limits.seed` plus `fixture.instanceSetDigest` (sha256 of the selected `instance_id` list, in selection order). The fixture's 196 rows currently yield **subset digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c`** (50 instances, 29 repositories, 333 reference comments) — cite that digest beside any comparison row so a reader can rebuild the exact population.
+
+`--resume` and `--judge-only` refuse to mix a different model, CLI build, fixture, view set, repeat count, seed or selected instance set into one round; `--judge-only` replays the round's recorded `(only, limit, seed)` instead of taking new selection flags. The full protocol (populations, judge pins, variance rules, recording format) is in [RESULTS](results/RESULTS.md).
+
 Artifacts of the smoke:
 
 ```text
@@ -125,7 +132,7 @@ tests/eval/aacr/out/<round>/
                                        usage, duration, exit status, errors
 ```
 
-`--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set or repeat count into one round (the same provenance guard M0 established, extended to the M1 inputs).
+`--repeats N` repeats each task N times; repeat 1 keeps the paths above and repeats 2…N nest under `repeat-<n>/`. `--resume` reuses completed rows and refuses to mix a different model, CLI build, fixture, view set, repeat count, seed or selected instance set into one round (the same provenance guard M0 established, extended to the M1 inputs).
 
 ### Incomplete runs are data, not errors
 
@@ -139,7 +146,17 @@ M1 reuses the M0 shared cache (`$PIR_AACR_CACHE`, default `~/.cache/pir-aacr`, n
 
 ### Judge delegation
 
-`m1/judge.js` resolves the pinned upstream clone at `$PIR_AACR_JUDGE_DIR` (default `$PIR_AACR_CACHE/aacr-bench@<commit>`, fetched depth 1 when absent), writes the selected fixture rows as upstream's `evaluation/data/aacr_bench.jsonl`, copies the per-view result files into `evaluation/results/aacr_bench/<reviewer>/<run_id>/`, and runs `python3 -m pipeline run --stage eval` from `evaluation/`, which writes its metrics under `evaluation/metrics/aacr_bench/<reviewer>/<run_id>/`. Only those generated, gitignored upstream directories are written; the clone is never modified and an existing clone at a different commit fails loudly (judge drift invalidates comparisons). Upstream's CLI only accepts `ocr|claude|codex`; M1 writes OCR-shaped files, so the delegation uses `--reviewer ocr`, whose `evaluate.py` builder is exactly that shape. The metrics JSON path and the upstream summary lines are relayed into `summary.json` and the console.
+`m1/judge.js` resolves the pinned upstream clone at `$PIR_AACR_JUDGE_DIR` (default `$PIR_AACR_CACHE/aacr-bench@<commit>`, fetched depth 1 when absent), writes the selected fixture rows as upstream's `evaluation/data/aacr_bench.jsonl`, copies the per-view result files into `evaluation/results/aacr_bench/<reviewer>/<run_id>/`, and runs `python3 -m pipeline run --stage eval` from `evaluation/`, which writes its metrics under `evaluation/metrics/aacr_bench/<reviewer>/<run_id>/`. The judge model id is recorded in the round summary (`limits.judgeModel`); an `--eval-rounds N` run must produce the `_average.json` metrics file or the judge is recorded as failed (never silently published from one round). One judge invocation's default 30-minute ceiling can be raised for a full-corpus run with `PIR_AACR_JUDGE_TIMEOUT_MS` (recorded as `limits.judgeTimeoutMs`). Only those generated, gitignored upstream directories are written; the clone is never modified and an existing clone at a different commit fails loudly (judge drift invalidates comparisons). Upstream's CLI only accepts `ocr|claude|codex`; M1 writes OCR-shaped files, so the delegation uses `--reviewer ocr`, whose `evaluate.py` builder is exactly that shape. The metrics JSON path and the upstream summary lines are relayed into `summary.json` and the console.
+
+### Rendering the results document
+
+```sh
+node tests/eval/aacr/m1/report-m1.js \
+  --round tests/eval/aacr/out/<round> \
+  --out tests/eval/aacr/results/M1-<round>.md
+```
+
+Model-free: it reads the round's `summary.json` and the upstream `eval_res` of each judge round, then writes the committed document — headline file-level semantic precision/recall/`balanced_score` per view, buckets by language, PR size and reference-comment category (micro per judge round, averaged across rounds), the coverage/error ledger, token and duration accounting, and the full provenance pins (model, CLI sha256, fixture sha256, instance-set digest, judge model, arXiv citation). A round without `finishedAt` is refused unless `--allow-partial` is passed, and it then says PARTIAL at the top; a missing result file stays in `missing_instances` and out of every denominator.
 
 ### What is gitignored
 

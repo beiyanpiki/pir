@@ -10,7 +10,10 @@ end to end; the full 196-PR run, the `--eval-rounds 3` averaging and the
 first `results/M1-*.md` are Iteration 3's execution, so M1 itself stays
 in progress. M1 is consistent with, and reuses, [ADR-0007](0007-aacr-verifier-offline-benchmark.md)
 (M0): same opt-in surface, same isolation conventions, same provenance
-guards, same unredistributed-data stance.
+guards, same unredistributed-data stance. **Amended 2026-10-20 (M2,
+Iteration 4):** decision 11 records the locked baseline population and the
+change protocol; the full 196-PR run remains parked by maintainer direction
+(see the roadmap's M1 pause note), so M1 still has no published score.
 
 ## Context
 
@@ -189,8 +192,13 @@ of that measurement.
 8. **Cost and variance stance.** The `--limit 20` smoke is a documented
    manual command (README and this ADR), never a CI gate (roadmap M2 T3,
    ADR-0003 §4). `--repeats` exists for repeated runs; the full comparison
-   uses upstream's `--eval-rounds 3` averaging later, and the smoke reports a
-   single judge round. Every row records per-PR token usage, duration, exit
+   uses upstream's `--eval-rounds 3` averaging, and the smoke reports a single
+   judge round. One judge-pipeline invocation must finish all three rounds: the
+   skeleton's 30-minute ceiling is overridable with
+   `PIR_AACR_JUDGE_TIMEOUT_MS` for a full-corpus run and the effective value is
+   recorded as `limits.judgeTimeoutMs` in the round summary. A missing
+   `_average.json` after an `--eval-rounds 3` run is a judge failure, never a
+   silent fallback to one round's metrics (Iteration 3). Every row records per-PR token usage, duration, exit
    status, `incomplete`/`stoppedBecause`, and whether the diff base was
    degraded or the head synthetic. The exact model id (e.g.
    `opencode-go/deepseek-v4.1-flash:medium`), the CLI sha256, the fixture
@@ -213,6 +221,8 @@ of that measurement.
     real-judge run with the exact judge model recorded qualifies for
     comparison. The M1 numbers are not comparable to M0's kill-rate and must
     not be quoted as such.
+
+11. **M2 amendment (2026-10-20): the baseline population and the change protocol.** M1's locked comparison population is the **fixed 50-PR subset** selected by `--limit 50 --seed 42` (instance-set digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c`), not the parked convenience sample and not the full 196. The full corpus is reserved for the publishable baseline and release-level claims; the subset is the before/after face because it is four times cheaper than the full judge-backed sweep and, being paired, its bias cancels in a delta. The subset is reproducible from `(seed, limit)` alone: the driver orders rows with M0's `mulberry32` PRNG and the same backwards Fisher-Yates, applies `--limit` afterwards, records `limits.seed` plus the existing `fixture.instanceSetDigest`, and `--resume` / `--judge-only` refuse or replay a different selection — so a subset is a provenance pin, not a convenience. Verifier-stage changes are compared on M0's fixed 100-comment sample instead (the surface where the dataset label is the dependent variable); end-to-end changes use M1. The rb variance rules are copied verbatim (both comparison runs no worse than the comparison's worse run; judge drift invalidates a comparison and forces a rerun), one run per side is labelled a point comparison, and M1 stays a manual, paid check with the `--limit 20` smoke as its only pipeline gate. The operational record — baseline lock-in, registry, dashboard and the exact procedure — is [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md).
 
 ## Consequences
 

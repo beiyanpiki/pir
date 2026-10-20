@@ -49,10 +49,11 @@ import { fileURLToPath } from "node:url";
 import { snapshotConfig } from "../../run-eval.js";
 import { DEFAULT_CACHE, cachedMergeBase, ensureRepoCache, gitEnv, rememberMergeBase, resolveMergeBase } from "../materialize.js";
 import { assertResumeCompatible, ensureFetchedAsync, materializeTaskAsync, releaseTaskAsync, sha256 } from "../run-m0.js";
+import { mulberry32 } from "../sample.js";
 import { fixtureDigest, loadFixture } from "../fixtures/build-fixture.js";
 import { VIEWS, normalizeFindings, safeId, toUpstreamResult } from "./normalize-aacr.js";
 import {
-  DEFAULT_JUDGE_TIMEOUT_MS, assertJudgeEnv, ensureJudgeCheckout, judgeCloneDir, judgeRunId, loadJudgePin, runJudge,
+  DEFAULT_JUDGE_TIMEOUT_MS, assertJudgeEnv, ensureJudgeCheckout, judgeCloneDir, judgeRunId, loadJudgePin, resolveJudgeTimeoutMs, runJudge,
 } from "./judge.js";
 import { createSyntheticHeadAsync, hasAncestryAsync } from "./git-async.js";
 
@@ -72,6 +73,132 @@ export function repeatDirFor(roundDir, repeats, repeat) {
 }
 export const resultFileFor = (repeatDir, view, id) => path.join(repeatDir, view, `${id}.json`);
 export const rowFileFor = (repeatDir, id) => path.join(repeatDir, "rows", `${id}.json`);
+
+/**
+ * Seeded order for a row list, sharing M0's PRNG and Fisher-Yates loop.
+ *
+ * M2's change protocol runs before/after on a fixed PR subset, so the subset
+ * has to be reproducible from (seed, limit) alone — the same contract M0's
+ * comment sample follows. Reusing `mulberry32` and the same backwards
+ * Fisher-Yates means "seed 42" shuffles consistently across both benchmarks
+ * and does not drift with a Node version or a different PRNG.
+ */
+export function seededOrder(rows, seed) {
+  if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
+  if (seed === undefined || seed === null) return rows.slice();
+  if (!Number.isSafeInteger(seed) || seed < 0) throw new Error("seed must be a non-negative integer");
+  const random = mulberry32(seed);
+  const order = rows.slice();
+  for (let i = order.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
+}
+
+/**
+ * One selection rule for an invocation and for a resumed/--judge-only round:
+ * --only filters, --seed shuffles, --limit truncates — in that order, so the
+ * recorded (limits.only, limits.limit, limits.seed) triple reproduces exactly
+ * the instance set the round ran on. Without --seed the fixture order is kept
+ * (pre-M2 rounds behave identically).
+ */
+export function selectFixtureRows(rows, { only = [], limit, seed } = {}) {
+  if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
+  let selected = rows;
+  if (only.length > 0) {
+    const wanted = new Set(only);
+    selected = rows.filter((row) => wanted.has(row.instance_id));
+    const missing = [...wanted].filter((id) => !rows.some((row) => row.instance_id === id));
+    if (missing.length > 0) throw new Error(`--only ids not in the fixture: ${missing.join(", ")}`);
+  }
+  selected = seededOrder(selected, seed);
+  if (limit !== undefined && limit !== null) selected = selected.slice(0, limit);
+  return selected;
+}
+
+/**
+ * The selection an invocation actually runs on: the recorded triple for
+ * --judge-only (whose new selection flags are rejected), the flags otherwise.
+ * The summary must record THIS, not the raw options — --judge-only rewrites
+ * the round's summary, and recording the empty options would erase the
+ * population pin and make the round unresumable (dogfood F-1).
+ */
+export function effectiveSelectionLimits(options, recorded = null) {
+  if (options?.judgeOnly) {
+    if (!recorded) throw new Error("--judge-only needs the round's recorded selection");
+    return { limit: recorded.limit ?? null, seed: recorded.seed ?? null, only: recorded.only ?? [] };
+  }
+  return { limit: options?.limit ?? null, seed: options?.seed ?? null, only: options?.only ?? [] };
+}
+
+/**
+ * The judge provenance a round actually carries. Skipping judging on a resume
+ * must not erase what an earlier judge run recorded; a new judging pass sets
+ * the identity it ran with (dogfood F-4).
+ */
+export function effectiveJudgeLimits(options, previousSummary = null, judgePin = null, env = process.env) {
+  const recorded = previousSummary?.limits ?? null;
+  if (options?.judge === "off") {
+    return {
+      judge: recorded?.judge ?? "off",
+      judgeModel: recorded?.judgeModel ?? null,
+      judgeTimeoutMs: recorded?.judgeTimeoutMs ?? null,
+      evalRounds: recorded?.evalRounds ?? options?.evalRounds ?? 1,
+      judgeFrameworkCommit: recorded?.judgeFrameworkCommit ?? null,
+    };
+  }
+  return {
+    judge: options.judge,
+    judgeModel: options.judge === "real" ? (env.JUDGE_MODEL ?? null) : null,
+    judgeTimeoutMs: options.judge === "real" ? resolveJudgeTimeoutMs(env) : null,
+    evalRounds: options.evalRounds,
+    judgeFrameworkCommit: judgePin?.commit ?? null,
+  };
+}
+
+/**
+ * Judge drift is a refusal, not a footnote: a round already judged by the real
+ * judge only accepts a re-judge with the same model, round count and framework
+ * commit, and never a downgrade to mock/off (ADR-0009 §11). Mock rounds are
+ * pipeline checks and may be upgraded to a real judge; unjudged rounds accept
+ * their first identity. Recorded values that older rounds did not carry are
+ * unknown, not a mismatch.
+ */
+export function assertJudgeCompatible(previousSummary, { judge, judgeModel, evalRounds, judgeFrameworkCommit, judging = false } = {}) {
+  const recorded = previousSummary?.limits ?? {};
+  if (!judging || recorded.judge !== "real") return;
+  if (judge !== "real") {
+    throw new Error(`--resume refuses to replace a real-judge round with a ${judge} re-judge (only the real judge that produced the round may re-judge it)`);
+  }
+  const pins = [
+    ["judge model", recorded.judgeModel, judgeModel],
+    ["eval-rounds", recorded.evalRounds, evalRounds],
+    ["judge framework commit", recorded.judgeFrameworkCommit, judgeFrameworkCommit],
+  ];
+  for (const [label, before, after] of pins) {
+    if (before !== undefined && before !== null && before !== after) {
+      throw new Error(`--resume refuses to mix ${label}: round was judged with ${before}, this invocation uses ${after} (judge drift invalidates the comparison and forces a new round)`);
+    }
+  }
+}
+
+/**
+ * M2 provenance: the subset (and therefore every before/after comparison on
+ * it) is a pin, not an implementation detail. A different seed or a different
+ * selected instance set is a different round, never a resumable one; a
+ * judge-only run replays the recorded subset and must land on it exactly.
+ */
+export function assertSelectionCompatible(previousSummary, { selected, seed, judgeOnly = false } = {}) {
+  const recordedSeed = previousSummary?.limits?.seed ?? null;
+  if (!judgeOnly && recordedSeed !== (seed ?? null)) {
+    throw new Error(`--resume refuses to mix seeds: round was recorded with ${recordedSeed ?? "no seed"}, this invocation uses ${seed ?? "no seed"}`);
+  }
+  const previousDigest = previousSummary?.fixture?.instanceSetDigest;
+  if (previousDigest && previousDigest !== fixtureDigest(selected)) {
+    throw new Error(`--resume refuses to change the selected instance set: round was recorded with ${previousDigest}, this invocation selects ${fixtureDigest(selected)} (pass the same --limit/--only/--seed)`);
+  }
+}
 
 function writeJson(file, value) {
   mkdirSync(path.dirname(file), { recursive: true });
@@ -94,6 +221,7 @@ export function parseOptions(argv = [], env = process.env) {
     cli: env.PIR_AACR_CLI ?? path.join(ROOT, "dist/cli/cli.js"),
     model: env.PIR_AACR_MODEL ?? env.PIR_MODEL,
     limit: env.PIR_AACR_LIMIT === undefined ? undefined : Number(env.PIR_AACR_LIMIT),
+    seed: env.PIR_AACR_SEED === undefined ? undefined : Number(env.PIR_AACR_SEED),
     repeats: Number(env.PIR_AACR_REPEATS ?? 1),
     round: env.PIR_AACR_ROUND,
     concurrency: Number(env.PIR_AACR_CONCURRENCY ?? 1),
@@ -104,17 +232,19 @@ export function parseOptions(argv = [], env = process.env) {
     evalRounds: Number(env.PIR_AACR_EVAL_ROUNDS ?? 1),
     only: env.PIR_AACR_ONLY ? env.PIR_AACR_ONLY.split(",").map((s) => s.trim()).filter(Boolean) : [],
     resume: false,
+    judgeOnly: false,
     json: env.PIR_EVAL_JSON === "1",
     help: false,
   };
   const flags = {
     "--fixture": "fixture", "--meta": "meta", "--cache": "cache", "--out-root": "outRoot",
-    "--cli": "cli", "--model": "model", "--limit": "limit", "--repeats": "repeats",
+    "--cli": "cli", "--model": "model", "--limit": "limit", "--seed": "seed", "--repeats": "repeats",
     "--round": "round", "--concurrency": "concurrency", "--max-rounds": "maxRounds",
     "--timeout": "timeoutMs", "--view": "view", "--judge": "judge", "--eval-rounds": "evalRounds",
   };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--resume") { values.resume = true; continue; }
+    if (argv[i] === "--judge-only") { values.judgeOnly = true; continue; }
     if (argv[i] === "--json") { values.json = true; continue; }
     if (argv[i] === "--help") { values.help = true; continue; }
     if (argv[i] === "--only") {
@@ -126,16 +256,24 @@ export function parseOptions(argv = [], env = process.env) {
     if (!key || !argv[i + 1] || argv[i + 1].startsWith("--")) throw new Error(`invalid option or missing value: ${argv[i]}`);
     values[key] = argv[++i];
   }
-  for (const key of ["limit", "repeats", "concurrency", "maxRounds", "timeoutMs", "evalRounds"]) {
+  for (const key of ["limit", "seed", "repeats", "concurrency", "maxRounds", "timeoutMs", "evalRounds"]) {
     if (typeof values[key] === "string") values[key] = Number(values[key]);
   }
   for (const key of ["repeats", "concurrency", "maxRounds", "timeoutMs", "evalRounds"]) {
     if (!Number.isSafeInteger(values[key]) || values[key] < 1) throw new Error(`${key} must be a positive integer`);
   }
   if (values.limit !== undefined && (!Number.isSafeInteger(values.limit) || values.limit < 1)) throw new Error("limit must be a positive integer");
+  if (values.seed !== undefined && (!Number.isSafeInteger(values.seed) || values.seed < 0)) throw new Error("seed must be a non-negative integer");
   if (!["both", ...VIEWS].includes(values.view)) throw new Error(`unknown view: ${values.view} (available: both, ${VIEWS.join(", ")})`);
   if (!["off", "mock", "real"].includes(values.judge)) throw new Error(`unknown --judge mode: ${values.judge} (available: off, mock, real)`);
   values.views = values.view === "both" ? [...VIEWS] : [values.view];
+  if (values.judgeOnly) {
+    if (values.judge === "off") throw new Error("--judge-only needs --judge real or mock");
+    if (!values.resume) throw new Error("--judge-only judges an existing round; pass --resume with the same --round");
+    if (values.only.length > 0 || values.limit !== undefined || values.seed !== undefined) {
+      throw new Error("--judge-only judges the round's recorded selection; --limit/--only/--seed are not allowed");
+    }
+  }
   for (const key of ["fixture", "meta", "cache", "outRoot", "cli"]) values[key] = path.resolve(values[key]);
   return values;
 }
@@ -312,8 +450,10 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     console.log("PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js [--fixture fixtures/test-set.json] [--limit N] [--only <instance-id>]... [--repeats N] [--resume] [--round name] [--out-root out] [--cache ~/.cache/pir-aacr] [--cli dist/cli/cli.js] [--model provider/model] [--concurrency N] [--max-rounds N] [--timeout ms] [--view reported|confirmedOnly|both] [--judge off|mock|real] [--eval-rounds N] [--json]\n" +
       "Runs pir find once per positive_samples PR (same-repo serial, cross-repo concurrent) with rb-grade isolation, writing upstream-shaped results per view and per-instance rows incrementally.\n" +
       "Smoke: --limit 20 --concurrency 4 --model opencode-go/deepseek-v4.1-flash:medium (costs 20 model runs; never a CI gate).\n" +
+      "M2 change protocol subset: --limit 50 --seed 42 (deterministic, recorded as limits.seed + fixture.instanceSetDigest; --resume refuses a different subset).\n" +
       "Exit status 3 with a valid envelope is recorded as an incomplete row, not an error; unexpected statuses, signal kills and unparseable stdout are errors.\n" +
-      "--judge mock uses upstream's local similarity (zero cost); --judge real needs JUDGE_BASE_URL/JUDGE_API_KEY/JUDGE_MODEL.");
+      "--judge mock uses upstream's local similarity (zero cost); --judge real needs JUDGE_BASE_URL/JUDGE_API_KEY/JUDGE_MODEL.\n" +
+      "--judge-only --resume judges an existing round's completed result files without re-running reviewers (sampled rounds).");
     return 0;
   }
   if (env.PIR_EVAL !== "1") {
@@ -332,15 +472,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   if (!existsSync(options.cli) || !statSync(options.cli).isFile()) throw new Error(`CLI is not a file: ${options.cli} (run npm run build:cli)`);
   const cliSha256 = sha256(readFileSync(options.cli));
 
-  let selected = fixtureRows;
-  if (options.only.length > 0) {
-    const wanted = new Set(options.only);
-    selected = fixtureRows.filter((row) => wanted.has(row.instance_id));
-    const missing = [...wanted].filter((id) => !fixtureRows.some((row) => row.instance_id === id));
-    if (missing.length > 0) throw new Error(`--only ids not in the fixture: ${missing.join(", ")}`);
-  }
-  if (options.limit !== undefined) selected = selected.slice(0, options.limit);
-  if (selected.length === 0) throw new Error("no fixture rows selected");
+  let selected = selectFixtureRows(fixtureRows, { only: options.only, limit: options.limit, seed: options.seed });
 
   const roundName = options.round ?? `${new Date().toISOString().slice(0, 10)}-m1`;
   const roundDir = path.join(options.outRoot, roundName);
@@ -350,6 +482,30 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume)`);
     if (existsSync(summaryPath)) previousSummary = JSON.parse(readFileSync(summaryPath, "utf8"));
   }
+
+  if (options.judgeOnly) {
+    // ADR-0009 Iteration 3: a sampled round is judged from the completed
+    // result files without re-running reviewers; the judged population is the
+    // round's recorded selection, so unrun instances stay visible in
+    // upstream's missing_instances instead of shrinking the sample silently.
+    // The recorded triple is replayed through the same selection rule, which
+    // is what keeps a seeded (M2) subset stable here.
+    const recorded = previousSummary?.limits;
+    if (!recorded) throw new Error(`--judge-only needs the round's summary.json: ${summaryPath}`);
+    selected = selectFixtureRows(fixtureRows, {
+      only: recorded.only ?? [],
+      limit: recorded.limit ?? undefined,
+      seed: recorded.seed ?? undefined,
+    });
+    if (selected.length === 0) throw new Error("--judge-only found no recorded selection to judge");
+  }
+  if (selected.length === 0) throw new Error("no fixture rows selected");
+  // The summary records the effective selection, never the rejected flags of
+  // a --judge-only invocation (dogfood F-1).
+  const selectionLimits = effectiveSelectionLimits(options, previousSummary?.limits);
+  // Judge identity is a pin too: skipping judging must not erase a recorded
+  // real-judge identity, and re-judging must match it (dogfood F-4).
+  const judgeLimits = effectiveJudgeLimits(options, previousSummary, judgePin, env);
 
   const cacheFile = path.join(options.cache, "merge-bases.json");
   const store = new MergeBaseStore(cacheFile, loadMergeBaseCache(cacheFile));
@@ -375,6 +531,8 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       if (previousSummary.view && previousSummary.view !== options.view) {
         throw new Error(`--resume refuses to mix views: round was recorded with ${previousSummary.view}, this invocation uses ${options.view}`);
       }
+      assertSelectionCompatible(previousSummary, { selected, seed: options.seed, judgeOnly: options.judgeOnly });
+      assertJudgeCompatible(previousSummary, { ...judgeLimits, judging: options.judge !== "off" });
     }
 
     const dirs = Array.from({ length: options.repeats }, (_, index) => repeatDirFor(roundDir, options.repeats, index + 1));
@@ -431,9 +589,16 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       views: options.views,
       repeats: options.repeats,
       limits: {
-        limit: options.limit ?? null, only: options.only, concurrency: options.concurrency,
+        limit: selectionLimits.limit, seed: selectionLimits.seed, only: selectionLimits.only, concurrency: options.concurrency,
         maxRounds: options.maxRounds, maxTokens: MAX_TOKENS, maxFindings: MAX_FINDINGS,
-        timeoutMs: options.timeoutMs, cache: options.cache, judge: options.judge, evalRounds: options.evalRounds,
+        timeoutMs: options.timeoutMs, cache: options.cache,
+        // ADR-0009 §10/§11: only a real-judge run with the exact judge model
+        // and framework commit recorded qualifies for comparison, so the
+        // identity is recorded and enforced by assertJudgeCompatible.
+        judge: judgeLimits.judge, judgeModel: judgeLimits.judgeModel,
+        judgeTimeoutMs: judgeLimits.judgeTimeoutMs, evalRounds: judgeLimits.evalRounds,
+        judgeFrameworkCommit: judgeLimits.judgeFrameworkCommit,
+        judgeOnly: options.judgeOnly,
       },
       config,
       population,
@@ -631,6 +796,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       }
     };
 
+    if (options.judgeOnly) {
+      for (const entry of previousSummary?.instances ?? []) {
+        entries.set(`${entry.repeat}|${entry.safeId}`, entry);
+      }
+    }
     // Cross-repo concurrency, same-repo serial: a repo's instances share one
     // cache directory, so concurrent fetches/worktree mutations would race.
     const queue = [...groups.values()];
@@ -647,7 +817,9 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(options.concurrency, Math.max(1, queue.length)) }, worker));
+    if (!options.judgeOnly) {
+      await Promise.all(Array.from({ length: Math.min(options.concurrency, Math.max(1, queue.length)) }, worker));
+    }
     await store.settle();
 
     if (options.judge !== "off") {
@@ -660,7 +832,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
               judgeMode: options.judge, judgeDir, pin: judgePin, rows: selected,
               resultsDir: path.join(dirs[repeat - 1], view), view, repeat, runId, env,
               evalRounds: options.evalRounds,
-              timeoutMs: DEFAULT_JUDGE_TIMEOUT_MS,
+              timeoutMs: resolveJudgeTimeoutMs(env),
             });
             summary.judge.push(result);
             if (!result.ok) console.error(`ERROR judge ${runId}: ${result.error}`);

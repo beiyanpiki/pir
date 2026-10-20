@@ -234,7 +234,8 @@ test("driver: result/row writing, synthetic shallow head, and resume provenance"
     const deps = { resolveMergeBase: async () => ({ sha: null, error: "offline test" }) };
     const args = [
       "--fixture", fixturePath, "--out-root", outRoot, "--round", "smoke", "--cli", fakeCli,
-      "--model", "test/model", "--timeout", "20000", "--concurrency", "2", "--view", "both", "--json",
+      "--model", "test/model", "--timeout", "20000", "--concurrency", "2", "--view", "both",
+      "--limit", "1", "--seed", "42", "--json",
     ];
 
     const code = await runMain(args, env, deps);
@@ -247,6 +248,9 @@ test("driver: result/row writing, synthetic shallow head, and resume provenance"
     assert.equal(summary.fixture.sha256, sha256(fixtureBytes));
     assert.equal(summary.fixture.upstream.sha256, doc.dataset.sha256);
     assert.match(summary.fixture.instanceSetDigest, /^[0-9a-f]{64}$/);
+    assert.equal(summary.limits.seed, 42);
+    assert.equal(summary.limits.limit, 1);
+    assert.equal(summary.fixture.instanceSetDigest, fixtureDigest([doc.rows[0]]), "the digest pins the seeded selection");
     assert.deepEqual(summary.views, ["reported", "confirmedOnly"]);
     assert.equal(summary.repeats, 1);
     assert.equal(summary.instances.length, 1);
@@ -325,10 +329,21 @@ test("driver: result/row writing, synthetic shallow head, and resume provenance"
     assert.equal(resumedSummary.instances[0].status, "reused");
     assert.deepEqual(resumedSummary.repoCounts["example/repo"], { total: 1, ok: 0, error: 0, reused: 1 });
 
-    // Provenance refusal: a different model cannot be mixed into this round.
+    // Provenance refusal: a different model or a different seeded subset
+    // cannot be mixed into this round.
     await assert.rejects(
       runMain([...args, "--resume", "--model", "other/model"], env, deps),
       /refuses to mix models/,
+    );
+    await assert.rejects(
+      runMain([...args, "--resume", "--seed", "43"], env, deps),
+      /refuses to mix seeds: round was recorded with 42, this invocation uses 43/,
+    );
+    await assert.rejects(
+      runMain(["--fixture", fixturePath, "--out-root", outRoot, "--round", "smoke", "--cli", fakeCli,
+        "--model", "test/model", "--timeout", "20000", "--concurrency", "2", "--view", "both", "--resume"],
+      env, deps),
+      /refuses to mix seeds: round was recorded with 42, this invocation uses no seed/,
     );
   });
 });
