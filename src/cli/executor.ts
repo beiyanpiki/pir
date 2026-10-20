@@ -577,7 +577,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   // installation, so a pir serve instance must never execute them.
   if (command === "config") {
     if (opts.cwdGuard) throw new UsageError("config is a client-side command; run it on your machine");
-    return await cmdConfig(positional.slice(1), json, emit, out);
+    return await cmdConfig(positional.slice(1), flags, json, emit, out);
   }
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
@@ -1915,14 +1915,15 @@ async function cmdVerifyFix(
   return 0;
 }
 
-async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
+async function cmdConfig(args: string[], flags: Map<string, string | boolean>, json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
   const sub = args[0] ?? "show";
 
   if (sub === "show") {
     const config = loadUserConfig();
     // B5 (ADR-0010): the effective rule layers are part of `config show`; a
     // broken rule file fails here with the same loud usage error find gives.
-    const rules = loadRulesForConfig();
+    // --cwd selects the repository whose `.pir/rule.json` layer is read.
+    const rules = loadRulesForConfig(typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd());
     if (json) {
       emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }), rules: projectRulesJson(rules) })}\n`);
     } else if (!config) {
@@ -1984,9 +1985,9 @@ function renderConfig(config: UserConfig, file: string): string {
 }
 
 /** Load the layers `config show` reports; a broken file is a usage error. */
-function loadRulesForConfig(): ProjectRuleSet {
+function loadRulesForConfig(repoRoot: string): ProjectRuleSet {
   try {
-    return loadProjectRules({ repoRoot: process.cwd() });
+    return loadProjectRules({ repoRoot });
   } catch (error) {
     if (error instanceof ProjectRuleError) throw new UsageError(error.message);
     throw error;
@@ -2018,7 +2019,7 @@ function projectRulesJson(rules: ProjectRuleSet): Record<string, unknown> {
 function renderProjectRulesConfig(rules: ProjectRuleSet): string {
   const lines = ["project rules (layers: --rule > repo .pir/rule.json > global rule.json; first matching rule wins)"];
   if (rules.layers.length === 0) {
-    lines.push(`  none (searched ${path.join(process.cwd(), ".pir", "rule.json")} and ${path.join(pirConfigDir(), "rule.json")}; --rule is per invocation)`);
+    lines.push(`  none (searched the repository's .pir/rule.json and ${path.join(pirConfigDir(), "rule.json")}; --rule is per invocation)`);
   } else {
     for (const layer of rules.layers) {
       const scope = `include ${JSON.stringify(layer.include)}${layer.exclude.length > 0 ? `, exclude ${JSON.stringify(layer.exclude)}` : ""}`;

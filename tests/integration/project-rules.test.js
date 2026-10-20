@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
@@ -131,4 +133,40 @@ test("a broken rule file fails before any session, and the manifest records the 
     else process.env.PIR_TRANSCRIPTS = previous;
     f.cleanup();
   }
+});
+
+function runConfigShow(t, repo, extraEnv = {}) {
+  const configDir = mkdtempSync(path.join(tmpdir(), "pir-b5-config-"));
+  t.after(() => rmSync(configDir, { recursive: true, force: true }));
+  const cli = path.resolve(import.meta.dirname, "..", "..", "dist", "cli", "cli.js");
+  return execFileSync(process.execPath, [cli, "config", "show", "--json", "--cwd", repo.dir], {
+    encoding: "utf8",
+    env: { ...process.env, PIR_CONFIG_DIR: configDir, PIR_NO_WIZARD: "1", ...extraEnv },
+  });
+}
+
+test("config show reports the repository rule layer for --cwd, additively in --json", async (t) => {
+  const repo = createTempGitRepo("pir-b5-config-");
+  t.after(() => repo.cleanup());
+  writeRule(path.join(repo.dir, ".pir", "rule.json"), { rules: [{ path: "src/**", guidance: "CONFIG-SHOW-RULE" }] });
+  const parsed = JSON.parse(runConfigShow(t, repo));
+  assert.equal(parsed.command, "config.show");
+  assert.equal(parsed.data.rules.layers.length, 1);
+  assert.equal(parsed.data.rules.layers[0].layer, "repo");
+  assert.match(parsed.data.rules.layers[0].file, /\.pir\/rule\.json$/);
+  assert.equal(parsed.data.rules.layers[0].rules[0].guidance, "CONFIG-SHOW-RULE");
+  assert.match(parsed.data.rules.hash, /^[0-9a-f]{64}$/);
+  // The pre-existing config field keeps its shape (null on a fresh config dir).
+  assert.equal(parsed.data.config, null);
+});
+
+test("config show maps a broken rule file to a usage error (exit 2)", async (t) => {
+  const repo = createTempGitRepo("pir-b5-config-bad-");
+  t.after(() => repo.cleanup());
+  writeRule(path.join(repo.dir, ".pir", "rule.json"), { rules: [{ path: "src/**", guidance: "x" }], nope: 1 });
+  assert.throws(() => runConfigShow(t, repo), (error) => {
+    assert.equal(error.status, 2);
+    assert.match(String(error.stderr), /unknown key "nope"/);
+    return true;
+  });
 });
