@@ -150,6 +150,16 @@ test("rendered document carries the headline, buckets, missing count and health 
   assert.match(markdown, /M1-2026-10-20-test-m1\.md/);
 });
 
+test("a seeded subset is reproducible from the rendered document (dogfood F-7)", () => {
+  const seeded = { ...summary, limits: { ...summary.limits, limit: 2, seed: 42 }, population: { selected: 2, repos: 2, fixtureRows: 3 } };
+  const markdown = renderM1Report({ summary: seeded, fixtureRows, metricsByView, meta: null, renderedAt: "2026-10-20T05:00:00.000Z" });
+  assert.match(markdown, /--limit 2/);
+  assert.match(markdown, /--seed 42/);
+  assert.match(markdown, /this round selected 2/);
+  assert.match(markdown, /the reviewer round \(2 instances/);
+  assert.doesNotMatch(markdown, /196 PRs; costs model runs/);
+});
+
 test("a round without finishedAt is refused unless explicitly partial", () => {
   const partial = { ...summary, finishedAt: undefined };
   assert.throws(

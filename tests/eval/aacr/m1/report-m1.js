@@ -245,16 +245,23 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
     lines.push("");
   }
 
+  // The population pin is the point of the document: a seeded/limited subset
+  // must be reproducible from what the page says (dogfood F-7).
+  const selectionFlags = [
+    summary.limits?.limit !== null && summary.limits?.limit !== undefined ? `--limit ${summary.limits.limit}` : null,
+    summary.limits?.seed !== null && summary.limits?.seed !== undefined ? `--seed ${summary.limits.seed}` : null,
+    Array.isArray(summary.limits?.only) && summary.limits.only.length > 0 ? `--only ${summary.limits.only.join(",")}` : null,
+  ].filter(Boolean);
   lines.push("## Provenance");
   lines.push("");
   lines.push(table(["Input", "Value"], [
     ["Round", code(summary.round)],
     ["Model (reviewer + verifier)", summary.model ? code(summary.model) : "—"],
     ["CLI", `${code(summary.cli?.path ?? "dist/cli/cli.js")} sha256 ${code(String(summary.cli?.sha256 ?? "—").slice(0, 16))}…`],
-    ["Fixture", `${fixtureRows.length} PRs / ${fixtureRows.reduce((sum, row) => sum + (row.reference_comments?.length ?? 0), 0)} reference comments; sha256 ${code(String(summary.fixture?.sha256 ?? "—").slice(0, 16))}…`],
+    ["Fixture", `${fixtureRows.length} PRs / ${fixtureRows.reduce((sum, row) => sum + (row.reference_comments?.length ?? 0), 0)} reference comments; sha256 ${code(String(summary.fixture?.sha256 ?? "—").slice(0, 16))}…; this round selected ${summary.population?.selected ?? rows.length}`],
     ["Instance-set digest", code(String(summary.fixture?.instanceSetDigest ?? "—").slice(0, 24))],
     ["Views", `${views.map(code).join(", ")} (uncertain=keep for ${code("reported")}; strict precision for ${code("confirmedOnly")})`],
-    ["Selection", `${summary.population?.selected ?? rows.length} instances over ${summary.population?.repos ?? "?"} repositories` + (summary.limits?.limit ? `, ${code(`--limit ${summary.limits.limit}`)}` : "")],
+    ["Selection", `${summary.population?.selected ?? rows.length} instances over ${summary.population?.repos ?? "?"} repositories` + (selectionFlags.length > 0 ? `, ${selectionFlags.map(code).join(", ")}` : "")],
     ["Run limits", `${code(`--max-rounds ${summary.limits?.maxRounds ?? "?"}`)}, ${code(`--max-tokens ${summary.limits?.maxTokens ?? "?"}`)}, ${code(`--max-findings ${summary.limits?.maxFindings ?? "?"}`)}, task timeout ${Math.round((summary.limits?.timeoutMs ?? 0) / 60000)} min`],
     ["Judge", `${judgeMode} (${judgeModel}), ${summary.limits?.evalRounds ?? 1} round(s) averaged per view`],
     ["Judge framework pin", `${meta?.framework?.repo ?? "https://github.com/alibaba/aacr-bench"} @ ${code(summary.limits?.judgeFrameworkCommit ?? meta?.framework?.commit ?? "?")} (Apache-2.0)`],
@@ -385,9 +392,9 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
   lines.push("PIR_EVAL=1 node tests/eval/aacr/fixtures/build-fixture.js");
   lines.push("npm run build:cli");
   lines.push("");
-  lines.push(`# 2. the reviewer round (196 PRs; costs model runs, never a CI gate)`);
+  lines.push(`# 2. the reviewer round (${summary.population?.selected ?? rows.length} instances; costs model runs, never a CI gate)`);
   lines.push(`PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js --round ${summary.round} \\`);
-  lines.push(`  --concurrency ${summary.limits?.concurrency ?? 8} --model ${summary.model} \\`);
+  lines.push(`  ${selectionFlags.length > 0 ? `${selectionFlags.join(" ")} ` : ""}--concurrency ${summary.limits?.concurrency ?? 8} --model ${summary.model} \\`);
   lines.push(`  --view both --judge real --eval-rounds ${summary.limits?.evalRounds ?? 1}`);
   lines.push("");
   lines.push(`# 3. this document`);

@@ -9,9 +9,9 @@
 | surface | population | fixed comparison sample | external caliber | status |
 | --- | --- | --- | --- | --- |
 | M0 verifier | 2,134 head-anchorable comments (of 2,145) | `--limit 100 --seed 42`, digest `74f43e2f25442f0e62f97a9b960ae46de6f05eebfe5173298e16c9838aafc07d` | killRate / falseKillRate (labels, no judge) | **baseline locked** (2026-10-19, full-corpus numbers are the reference; the 100-comment sample is the before/after face) |
-| M1 end-to-end | 196 PRs | `--limit 50 --seed 42`, digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c` | `balanced_score` (upstream judge) | **population and pins locked; baseline run pending** — M1 is parked by maintainer direction, see [roadmap §2 M1](../../../docs/roadmap-ocr-borrow-and-aacr-benchmark.md) |
+| M1 end-to-end | 196 PRs | `--limit 50 --seed 42`, digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c` | `balanced_score` (upstream judge) | **baseline locked** (2026-10-20, round `2026-10-20-m1-baseline-glm`: 49/50 instances evaluated, judge `glm-5.3`, 3 rounds averaged per view; scores below) |
 
-The M1 row is deliberately not filled with a number: the only M1 round on disk is the parked convenience sample (57/196 instances, one judge round, no average), which is **not** a baseline and must not be quoted as one. Its reviewer-side data is recorded in Appendix A for cost and coverage planning only.
+The M1 baseline is the locked 50-PR subset, and its one missing instance is an upstream data loss (a force-pushed head), not a review outcome: it stays in the server's `missing_instances` and out of every denominator. The earlier parked convenience sample (57/196, one un-averaged judge round) remains Appendix A — a cost reference, never a score.
 
 ## The change protocol (M2 T2)
 
@@ -26,7 +26,7 @@ The fixed populations are defined only by `(seed, limit)` over the pinned fixtur
 - M0: `materialize.js --limit 100 --seed 42` → sample digest `74f43e2f…c07d`; the full-corpus round used `--limit 2134 --seed 42` → digest `95b5b358…2a92cef`.
 - M1: `run-aacr.js --limit 50 --seed 42` → **instance-set digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c`** (50 PRs, 29 repositories, 333 reference comments; PR sizes p50 176 / p90 498 / max 776 lines). The driver records `limits.seed` and `fixture.instanceSetDigest`; `--resume`/`--judge-only` refuse or replay a different selection. The full 196-PR corpus is for baseline and release-level claims only (`--limit 196` selects everything; the published baseline is the 50-PR subset until a full run exists).
 
-**One round, one provenance.** A round records model id, CLI sha256, fixture sha256, instance-set digest, view set, repeats, seed, judge framework commit, judge model and judge timeout; `--resume` refuses to mix any of them. A judge-model or judge-framework change makes the numbers incomparable and forces a rerun — never a footnote.
+**One round, one provenance.** A round records model id, CLI sha256, fixture sha256, instance-set digest, view set, repeats, seed, judge model, judge round count, judge framework commit and judge timeout; `--resume` refuses to mix the model/build/fixture/subset/view/repeat pins and a real-judge round's judge identity (model, round count, framework commit), and refuses to downgrade a real-judge round to mock/off. The judge timeout is recorded, not compared. A judge-model or judge-framework change makes the numbers incomparable and forces a rerun — never a footnote.
 
 **Variance rules, copied verbatim from [`tests/eval/reviewbench/RESULTS.md`](../../reviewbench/RESULTS.md):** "a 'no regression' claim needs both comparison runs no worse than the baseline's worse run. Judge drift invalidates comparisons — every row records provider/model/SHA." M0's round file states the same rule as "a 'no regression' claim needs both comparison runs no worse than the comparison's worse run; a model or prompt change voids comparability." One run per side is a **point comparison**, and must be labelled as one; it is not a variance floor.
 
@@ -56,39 +56,38 @@ Round `2026-10-19-m0-full-glm` (2026-10-19T15:14:21Z → 2026-10-20T00:05:10Z), 
 
 Full file: [`M0-2026-10-19-full.md`](M0-2026-10-19-full.md). The 100-comment comparison face is [`M0-2026-10-19-limit100.md`](M0-2026-10-19-limit100.md) (digest `74f43e2f…c07d`); [`M0-2026-10-19-b4-before-after.md`](M0-2026-10-19-b4-before-after.md) is the first controlled comparison entered under this protocol.
 
-### M1 baseline (population + pins locked, run pending)
+### M1 baseline (locked 2026-10-20)
 
-The M2 T1 decision is between extending the sample to a seeded 50-PR subset and rerunning the full 196-PR corpus. The decision is **the seeded 50-PR subset**:
+Round `2026-10-20-m1-baseline-glm` ran the locked 50-PR subset (2026-10-20T10:35:24Z → 2026-10-20T15:35:52Z, reviewer side plus judging) on model `zai-coding-cn/glm-5.3:max`, CLI sha256 `8d7de831…`, fixture sha256 `d35d1e42…`, instance-set digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c` — exactly the subset locked by M2 T1. The reviewer side completed **49 of 50 instances** with 102 findings, 129,917,141 session tokens (6,844,426 input / 2,875,211 output) and 16.0 h summed reviewer duration (mean 19.5 min, median 17.7 min per instance at concurrency 6). The single miss is `comfyanonymous__ComfyUI@4936d01`, a force-pushed upstream head that no longer fetches: it is an error row in the driver and lands in the server's `missing_instances`, outside every denominator, never scored as an empty review.
 
-- the full 196-PR judge-backed round costs roughly four times the subset and is already parked by maintainer direction, so it cannot be the first locked baseline;
-- every before/after comparison runs **the same** fixed subset on both sides, so subset bias is common to both sides and cancels in the delta — which is what a change protocol needs;
-- the subset digest is reproducible from `(seed, limit)` and recorded in every round, so a later full-corpus run can be added without invalidating the subset rows; it becomes the publishable baseline when it exists.
+The reviewer pass first ran at the 30-minute task cap and timed out on seven large instances; the documented retry pass (`--resume --timeout 7200000`) completed all seven, which is why the round records the retry's 120-minute cap. Judging used the pinned upstream framework (`ee9d7fe`), judge model `glm-5.3` and `--eval-rounds 3` averaged per view:
 
-Consequently the M1 baseline row records the **locked population and pins** and no score yet:
+| metric | reported (uncertain = keep) | confirmedOnly (strict) |
+| --- | ---: | ---: |
+| instances evaluated / missing | 49 / 1 | 49 / 1 |
+| reference comments expected | 328 | 328 |
+| generated comments | 102 | 102 |
+| file-semantic precision | 32.1% | 31.7% |
+| recall | 11.2% | 11.1% |
+| **balanced_score** | **0.1663** | **0.1647** |
 
-| field | value |
-| --- | --- |
-| round id (to use) | `<date>-m1-baseline-glm` |
-| population | `--limit 50 --seed 42`, digest `754ae13a…db8c` (50 PRs / 29 repos / 333 reference comments) |
-| model | `zai-coding-cn/glm-5.3:max` |
-| judge | upstream framework `ee9d7fe`, model `glm-5.3`, `--eval-rounds 3` |
-| scores | **pending** (the run awaits the M1 unpark; the parked sample is not a substitute) |
-| per-PR delta | will be recorded from the baseline's per-instance rows |
-| blocker | M1 is paused: 57/196 of the convenience round consumed 17.2 h of reviewer wall time and the judge round took hours; the maintainer parked the full sweep until the documentation work is finished |
+Full file: [`M1-2026-10-20-baseline-glm.md`](M1-2026-10-20-baseline-glm.md) — headline, buckets by language / PR size / reference-comment category, coverage ledger, cost and provenance. The two views coincide within one point because every finding this round reported was confirmed: the uncertain=keep margin was zero here, reported rather than averaged away.
 
-What is **explicitly not the baseline**: the parked round `2026-10-20-m1-full-glm` (57 instances, first-completed convenience subset, no `finishedAt`, one judge round without the required average, judge recorded as failed); the `--limit 20` smoke (mock judge, plumbing only); any M0 number used as an M1 score (different caliber).
+The M2 T1 decision that produced this population is recorded in ADR-0009 §11: the seeded 50-PR subset, not the full 196 PRs and not the parked convenience sample. Reasons: the full judge-backed corpus is roughly four times the cost and parked; a paired subset cancels its bias in a delta; and the subset is reproducible from `(seed, limit)` and pinned by the instance-set digest. The full corpus remains the publishable external caliber when it exists — the subset is the locked internal baseline.
+
+What is **explicitly not this baseline**: the parked round `2026-10-20-m1-full-glm` (57 instances, first-completed convenience subset, no `finishedAt`, one judge round without the required average, judge recorded as failed — Appendix A), the `--limit 20` smoke (mock judge, plumbing only), and any M0 number used as an M1 score (different caliber).
 
 ## North-star dashboard (M2 T4)
 
 | metric | surface | value | source | status |
 | --- | --- | ---: | --- | --- |
-| `balanced_score` (primary external caliber) | M1 | — | pending M1 baseline | open |
+| `balanced_score` (primary external caliber) | M1 | **0.1663** reported / 0.1647 confirmedOnly | `2026-10-20-m1-baseline-glm` | **locked** |
 | `killRate` | M0 | **82.7%** | `2026-10-19-m0-full-glm` | locked |
 | `falseKillRate` (cost side) | M0 | **72.0%** | same | locked |
 | `interceptPrecision` | M0 | **32.9%** | same | locked |
-| per-PR token cost (mean) | M1 | **2,124,003** total tokens (129,929 input / 50,437 output) | parked sample, Appendix A | reference, not baseline |
-| per-PR token cost (median) | M1 | 1,322,499 total tokens (104,192 input / 44,306 output) | parked sample | reference, not baseline |
-| per-PR reviewer wall time | M1 | 18.1 min mean / 14.4 min median (concurrency 1) | parked sample | reference, not baseline |
+| per-PR token cost (mean) | M1 | **2,651,370** total tokens (139,682 input / 58,678 output) | `2026-10-20-m1-baseline-glm` | locked |
+| per-PR token cost (median) | M1 | 1,748,438 total tokens | same | locked |
+| per-PR reviewer wall time | M1 | 19.5 min mean / 17.7 min median (concurrency 6) | same | locked |
 
 Read the M0 row with all three numbers together (roadmap R9): a killRate that rises by rejecting more comments is not automatically an improvement, and a falseKillRate that falls by keeping more comments is not automatically safe. Total tokens include cache reads; the input/output columns are the composition. The dashboard is updated only by a round that satisfies the change protocol — never by a partial or mock-judge round.
 
@@ -101,7 +100,7 @@ Read the M0 row with all three numbers together (roadmap R9): a killRate that ri
 | `2026-10-19-m0-full-glm` | 2026-10-19/20 | M0 | limit 2134, seed 42 | 1 | `zai-coding-cn/glm-5.3:max` | — | **M0 baseline locked** | [file](M0-2026-10-19-full.md); 122 unfetchable rows excluded |
 | `2026-10-19-m1-smoke-glm` | 2026-10-19 | M1 | limit 20 (fixture order) | 1 | `zai-coding-cn/glm-5.3:max` | mock (upstream local similarity) | plumbing only, no score | 20/20 rows, 33 reported / 32 confirmed findings; ADR-0009 smoke note |
 | `2026-10-20-m1-full-glm` | 2026-10-20 | M1 | all 196 | 1 | `zai-coding-cn/glm-5.3:max` | real `glm-5.3`, round 1 of 3 only | **parked; NOT a baseline** | 57/196 rows, 4 error rows (3 unfetchable heads + 1 judge failure); no `finishedAt`; Appendix A |
-| M2 (this iteration) | 2026-10-20 | — | — | — | — | — | no new model round | protocol + decisions only; the first M1 comparison awaits the baseline run |
+| `2026-10-20-m1-baseline-glm` | 2026-10-20 | M1 | limit 50, seed 42, digest `754ae13a…` | 1 | `zai-coding-cn/glm-5.3:max` | real `glm-5.3`, 3 rounds averaged per view | **M1 baseline locked** | [file](M1-2026-10-20-baseline-glm.md); 49/50 evaluated (1 unfetchable head); 102 findings; reviewer pass retried at a 120-min cap |
 
 ## First controlled comparison under the protocol (M2 A1)
 
@@ -112,7 +111,7 @@ Read the M0 row with all three numbers together (roadmap R9): a killRate that ri
 - **Result:** falseKillRate 77.1% → 78.6% (+1.4 pp), killRate 80.0% → 80.0% (±0.0 pp), interceptPrecision 27.0% → 26.7% (−0.4 pp); one label-1 comment swapped sides at this sample's one-comment resolution.
 - **Disposition:** B4 merged with the gate recorded as not proven either way and no evidence of a systematic increase (ADR-0008); the comparison is a point comparison, not a variance floor.
 
-The first **M1** comparison is the next registry row and runs on the fixed 50-PR subset once the M1 baseline exists; its row will carry the subset digest, both CLI shas, both judge pins and the before/after `balanced_score` per view.
+The first **M1** comparison is the next registry row: it runs on this baseline's fixed 50-PR subset after the first behavioural change lands, and its row will carry the subset digest, both CLI shas, both judge pins and the before/after `balanced_score` per view.
 
 ## Smoke (M2 T3)
 
@@ -131,7 +130,7 @@ Use `--judge mock` for the smoke (zero judge cost; its `balanced_score` is a lex
 - M0 killRate and M1 `balanced_score` — different populations, metrics and material; never substitute one for the other.
 - A mock-judge score, a partial round, a convenience sample, or a round without `finishedAt` — none of these is a result.
 - Any row whose model, CLI build, fixture sha256, instance-set digest, view set, repeats, judge model or judge framework commit differs from the other side.
-- The 50-PR subset's absolute `balanced_score` as an external claim before the full-corpus baseline exists: use it for deltas, not for a leaderboard-style statement.
+- The 50-PR subset's absolute `balanced_score` as an external, leaderboard-style claim: it is the locked internal baseline; use deltas for change claims and wait for a full-corpus run before quoting it as the external caliber.
 
 ## Appendix A — parked sample per-PR reference (57/196, not a baseline)
 
