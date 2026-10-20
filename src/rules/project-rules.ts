@@ -119,11 +119,15 @@ export function canonicalizeGuidance(text: string): string {
   return text.replace(/\r\n?/g, "\n").split("\n").map((line) => line.replace(/[ \t]+$/, "")).join("\n").trim();
 }
 
-/** Display form of a layer's rule file: repo/global stay symbolic, flag is explicit. */
+/**
+ * Display form of a layer's rule file for the prompt. Symbolic on purpose:
+ * the reviewer prompt carries no absolute host paths (the hash omits them
+ * too), so the same rules render identically on every machine.
+ */
 export function layerLabel(layer: RuleLayer): string {
   if (layer.layer === "repo") return ".pir/rule.json";
   if (layer.layer === "global") return "~/.pir/rule.json";
-  return layer.file;
+  return "--rule";
 }
 
 function compareBytes(a: string, b: string): number {

@@ -57,6 +57,7 @@ test("three layers: flag > repo > global, first match wins per path", (t) => {
   const set = loadProjectRules({ repoRoot: repo, configDir: global, explicitPath: flag });
   const app = applyProjectRules(set, [{ path: "src/a.ts" }]);
   assert.match(app.section, /FLAG-GUIDANCE/);
+  assert.doesNotMatch(app.section, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "no absolute --rule path in the prompt");
   assert.doesNotMatch(app.section, /REPO-GUIDANCE|GLOBAL-GUIDANCE/);
   // A path the flag layer does not cover falls through to the repo layer, and
   // a path the repo layer does not cover to the global layer.
