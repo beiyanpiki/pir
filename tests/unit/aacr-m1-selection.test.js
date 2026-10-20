@@ -1,0 +1,73 @@
+import { test } from "node:test";
+import assert from "assert/strict";
+
+import { fixtureDigest } from "../eval/aacr/fixtures/build-fixture.js";
+import {
+  assertSelectionCompatible, parseOptions, seededOrder, selectFixtureRows,
+} from "../eval/aacr/m1/run-aacr.js";
+
+const row = (id) => ({ instance_id: id, repo: "example/repo", reference_comments: [] });
+const rows = Array.from({ length: 12 }, (_, index) => row("example__repo@" + String(index).padStart(7, "0")));
+const ids = (selected) => selected.map((entry) => entry.instance_id);
+
+test("seededOrder is the M0 sample's PRNG and Fisher-Yates loop", () => {
+  assert.deepEqual(ids(seededOrder(rows, 42)), ids(seededOrder(rows, 42)), "same seed, same order");
+  assert.deepEqual(seededOrder(rows, undefined), rows, "no seed keeps the fixture order");
+  assert.notDeepEqual(ids(seededOrder(rows, 42)), ids(seededOrder(rows, 43)), "a different seed selects a different order");
+  assert.deepEqual([...ids(seededOrder(rows, 42))].sort(), [...ids(rows)].sort(), "a shuffle is a permutation, never a subset");
+  assert.throws(() => seededOrder(rows, -1), /seed must be a non-negative integer/);
+  assert.throws(() => seededOrder(rows, 1.5), /seed must be a non-negative integer/);
+  assert.throws(() => seededOrder("nope", 1), /rows must be an array/);
+});
+
+test("selectFixtureRows: filter, seeded shuffle, then limit", () => {
+  const limited = selectFixtureRows(rows, { limit: 50, seed: 42 });
+  assert.equal(limited.length, 12, "a limit above the population selects the whole permutation");
+  assert.deepEqual(ids(selectFixtureRows(rows, { limit: 5, seed: 42 })), ids(seededOrder(rows, 42)).slice(0, 5));
+  assert.deepEqual(ids(selectFixtureRows(rows, { limit: 5 })), ids(rows).slice(0, 5), "no seed keeps the pre-M2 fixture-order limit");
+  assert.deepEqual(
+    ids(selectFixtureRows(rows, { only: ids(rows).slice(2, 8), limit: 3, seed: 7 })),
+    ids(seededOrder(rows.slice(2, 8), 7)).slice(0, 3),
+    "--only filters before the seeded order",
+  );
+  assert.throws(() => selectFixtureRows(rows, { only: ["missing@1234567"] }), /--only ids not in the fixture/);
+  assert.throws(() => selectFixtureRows("nope", {}), /rows must be an array/);
+});
+
+test("the selection digest is stable, order-sensitive and distinguishes subsets", () => {
+  const a = selectFixtureRows(rows, { limit: 5, seed: 42 });
+  const b = selectFixtureRows(rows, { limit: 5, seed: 42 });
+  assert.equal(fixtureDigest(a), fixtureDigest(b));
+  assert.notEqual(fixtureDigest(a), fixtureDigest(selectFixtureRows(rows, { limit: 5, seed: 43 })));
+  assert.match(fixtureDigest(a), /^[0-9a-f]{64}$/);
+});
+
+test("assertSelectionCompatible: seeds and instance sets are provenance pins", () => {
+  const selected = selectFixtureRows(rows, { limit: 5, seed: 42 });
+  const recorded = { limits: { seed: 42 }, fixture: { instanceSetDigest: fixtureDigest(selected) } };
+  assert.doesNotThrow(() => assertSelectionCompatible(recorded, { selected, seed: 42 }));
+  assert.doesNotThrow(() => assertSelectionCompatible(recorded, { selected, judgeOnly: true }), "judge-only replays the recorded subset");
+  assert.throws(() => assertSelectionCompatible(recorded, { selected, seed: 43 }), /refuses to mix seeds/);
+  assert.throws(
+    () => assertSelectionCompatible(recorded, { selected: selectFixtureRows(rows, { limit: 6, seed: 42 }), seed: 42 }),
+    /refuses to change the selected instance set/,
+  );
+  assert.doesNotThrow(() => assertSelectionCompatible({ limits: {} }, { selected }), "a pre-M2 round (no recorded seed) resumes without one");
+  assert.throws(() => assertSelectionCompatible({ limits: {} }, { selected, seed: 42 }), /round was recorded with no seed/);
+});
+
+test("driver options: --seed parsing and --judge-only restrictions", () => {
+  assert.equal(parseOptions([], {}).seed, undefined);
+  assert.equal(parseOptions(["--seed", "42"], {}).seed, 42);
+  assert.equal(parseOptions([], { PIR_AACR_SEED: "7" }).seed, 7);
+  assert.equal(parseOptions(["--seed", "0"], {}).seed, 0, "seed 0 is a valid seed");
+  assert.equal(parseOptions(["--limit", "50", "--seed", "42"], {}).limit, 50);
+  assert.throws(() => parseOptions(["--seed", "-1"], {}), /seed must be a non-negative integer/);
+  assert.throws(() => parseOptions(["--seed", "2.5"], {}), /seed must be a non-negative integer/);
+  assert.throws(() => parseOptions(["--seed", "nope"], {}), /seed must be a non-negative integer/);
+  assert.throws(() => parseOptions(["--seed"], {}), /missing value/);
+  assert.throws(
+    () => parseOptions(["--judge-only", "--resume", "--judge", "mock", "--seed", "42"], {}),
+    /--limit\/--only\/--seed are not allowed/,
+  );
+});

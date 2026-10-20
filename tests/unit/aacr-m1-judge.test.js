@@ -39,6 +39,7 @@ test("--judge-only judges an existing round: needs --resume, a judge mode, and n
   assert.equal(ok.judgeOnly, true);
   assert.throws(() => parseDriverOptions(["--round", "r", "--judge-only", "--judge", "real"]), /pass --resume/);
   assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "off"]), /needs --judge real or mock/);
-  assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real", "--limit", "5"]), /--limit\/--only are not allowed/);
-  assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real", "--only", "a"]), /--limit\/--only are not allowed/);
+  assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real", "--limit", "5"]), /--limit\/--only\/--seed are not allowed/);
+  assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real", "--only", "a"]), /--limit\/--only\/--seed are not allowed/);
+  assert.throws(() => parseDriverOptions(["--round", "r", "--resume", "--judge-only", "--judge", "real", "--seed", "42"]), /--limit\/--only\/--seed are not allowed/);
 });
