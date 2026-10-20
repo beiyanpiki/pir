@@ -59,11 +59,6 @@ export function buildDigest(distRoot) {
   return hash.digest("hex");
 }
 
-// M1's concurrent driver imports its non-blocking git plumbing from the M0
-// machinery; the implementations live in m1/git-async.js (the M0 driver's own
-// serial loop keeps using the synchronous helpers above unchanged).
-export { ensureFetchedAsync, materializeTaskAsync, releaseTaskAsync } from "./m1/git-async.js";
-
 /** Per-task worktree: detached head checkout, reclaimed after its run. */
 export function materializeTask(repoDir, head, workDir) {
   if (existsSync(workDir)) {
