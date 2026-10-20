@@ -107,6 +107,8 @@ export interface ReviewerDeps {
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
   languageGuidance?: string;
+  /** Rendered PROJECT RULES section (B5/ADR-0010); absent when no rule applies. */
+  projectRules?: string;
   /** Audit mode: current-state review of one work unit (no diff attribution). */
   audit?: ReviewerAuditScope;
   /** Live observation tap for this round's session (web UI). */
@@ -209,6 +211,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           angle: deps.angle,
           fanoutSize: deps.fanoutSize,
           languageGuidance: deps.languageGuidance,
+          projectRules: deps.projectRules,
         });
     deps.onSessionEvent?.sessionStarted(prompt);
     await session.prompt(prompt);

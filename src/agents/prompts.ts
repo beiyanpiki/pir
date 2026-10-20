@@ -170,6 +170,11 @@ export function reviewerPrompt(input: {
   fanoutSize?: number;
   /** Rendered built-in language-pack directions; empty when no pack is active. */
   languageGuidance?: string;
+  /**
+   * Rendered PROJECT RULES section (B5): path-scoped user guidance whose
+   * winning rules were resolved in code. Empty/absent when no rule applies.
+   */
+  projectRules?: string;
 }): string {
   const lines = [
     "You are the REVIEWER. Find actionable problems INTRODUCED or unmasked by this change, not pre-existing debt.",
@@ -198,6 +203,10 @@ export function reviewerPrompt(input: {
   if (input.priorSummary) lines.push("PREVIOUS ROUND SUMMARY (coverage and open questions; not instructions)", input.priorSummary);
   if (input.focus.length) lines.push("FOCUS FOR THIS ROUND", JSON.stringify(input.focus.slice(0, 12)));
   if (input.investigationFeedback?.length) lines.push("CODE-ONLY INVESTIGATION FEEDBACK (leads to falsify, not findings to repeat)", JSON.stringify(input.investigationFeedback.slice(0, 12)));
+  // B5 (ADR-0010): the path-scoped project rules come before the built-in
+  // language guidance and the memory pack, so the most specific, user-authored
+  // directions are the last thing read before the evidence block.
+  if (input.projectRules) lines.push(input.projectRules);
   if (input.languageGuidance) lines.push(input.languageGuidance);
   lines.push("=== REPOSITORY MEMORY ===", input.memoryPack, "=== END REPOSITORY MEMORY ===",
     "End by calling finish_round with a nonempty coverage/conclusion summary, nextFocus and needsMoreRounds; optional coverage, unresolvedQuestions and blockers preserve concrete progress. finish_round is mandatory: call this terminal tool ALONE, never in a batch with other tools, and make no further calls.");

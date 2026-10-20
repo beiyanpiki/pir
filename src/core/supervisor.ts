@@ -14,6 +14,7 @@ import { ReviewerRoundError, runReviewerRound, type ReviewerRoundResult } from "
 import { resolveAngleIds, type AngleDef } from "../agents/prompts.js";
 import { runVerifier } from "../agents/verifier.js";
 import { loadBuiltInPacks, resolveLanguagePacks, type ActivePack } from "../plugins/index.js";
+import { applyProjectRules, loadProjectRules, type ProjectRulesSummary } from "../rules/project-rules.js";
 import type { ToolContext } from "../tools/context.js";
 import { planAuditUnits, PLANNER_VERSION, type ReviewWorkUnit } from "./audit-planner.js";
 import { Budget, DEFAULT_FIND_REVIEWER_INPUT_TOKENS, DEFAULT_FIND_VERIFIER_INPUT_TOKENS, type BudgetCeilingKind } from "./budget.js";
@@ -81,6 +82,11 @@ export interface FindOptions {
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
   manualPlugins?: string[];
+  /**
+   * B5 (ADR-0010): explicit `--rule` layer. The repo and global layers are
+   * discovered from the repository root and the client config dir.
+   */
+  ruleFile?: string;
 }
 
 export interface FindEvent {
@@ -498,6 +504,17 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const changeSet = applyChangeFilter(
     await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead),
   );
+  // B5 (ADR-0010): project rules are resolved and rendered before any run row
+  // or session exists, so a malformed rule file or an unusable guidance
+  // reference fails the invocation instead of producing a silently different
+  // review. Only reviewed (non-excluded) files are matched.
+  const projectRuleSet = loadProjectRules({
+    repoRoot: deps.repoRoot,
+    ...(options.ruleFile ? { explicitPath: options.ruleFile } : {}),
+  });
+  const projectRuleApplication = applyProjectRules(projectRuleSet, changeSet.files);
+  const manifestProjectRules: ProjectRulesSummary | undefined =
+    projectRuleSet.layers.length > 0 ? projectRuleApplication.summary : undefined;
   // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
   // pages accumulate across rounds. No behavior change — accounting only.
   const changeCoverage = new ChangeCoverage(changeSet);
@@ -546,6 +563,17 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     onProgress({
       type: "info",
       message: `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`,
+    });
+  }
+  // ADR-0010: mergeBuiltin=false makes the project rule authoritative for its
+  // paths and withholds the built-in pack guidance for this run (the pack is
+  // rendered once for the whole session). The effective guidance is used for
+  // both the prompt and the budget estimate, so they never disagree.
+  const reviewerLanguageGuidance = projectRuleApplication.summary.builtinSuppressed ? "" : languagePacks.reviewerGuidance;
+  if (manifestProjectRules) {
+    onProgress({
+      type: "info",
+      message: `project rules: ${manifestProjectRules.rules} rule(s) for ${manifestProjectRules.matchedFiles} file(s), hash ${manifestProjectRules.hash.slice(0, 12)}${manifestProjectRules.builtinSuppressed ? ", built-in language guidance withheld" : ""}`,
     });
   }
   let needsReview = true;
@@ -620,7 +648,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
                   verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
                   investigationFeedback: state.investigationFeedback, model: options.model, angle,
                   fanoutSize: roundAngles.length,
-                  languageGuidance: languagePacks.reviewerGuidance,
+                  languageGuidance: reviewerLanguageGuidance,
+                  projectRules: projectRuleApplication.section || undefined,
                   transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
                   onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id,
                     ...(transcriptDir ? { transcriptFile: file } : {}) }),
@@ -639,7 +668,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           for (const { ok } of oks) {
             for (const hunk of ok.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
             for (const read of ok.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, languagePacks.reviewerGuidance, ok.assistantText, ok.summary);
+            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, ok.assistantText, ok.summary);
           }
           const allCandidates = [
             ...oks.flatMap(({ ok }) => ok.candidates),
@@ -775,7 +804,8 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
           investigationFeedback: state.investigationFeedback, model: options.model,
-          languageGuidance: languagePacks.reviewerGuidance,
+          languageGuidance: reviewerLanguageGuidance,
+          projectRules: projectRuleApplication.section || undefined,
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round,
             ...(transcriptDir ? { transcriptFile: reviewerFile } : {}) }),
@@ -785,7 +815,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         // discard the reviewer's deliberate reads from the ledger (F-122).
         for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
         for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-        budget.chargeSession(result.usage, "reviewer", memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
+        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
         freshCount = dedup.fresh.length;
@@ -892,6 +922,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
       files: changeSet.files.map(changedFileSummary),
+      ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
     });
     throw error;
   }
@@ -936,6 +967,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
     files: changeSet.files.map(changedFileSummary),
+    ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
   });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,

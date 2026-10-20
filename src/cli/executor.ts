@@ -19,6 +19,12 @@ import {
 import { createAppContext } from "../app/context.js";
 import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
+import {
+  ProjectRuleError,
+  loadProjectRules,
+  pirConfigDir,
+  type ProjectRuleSet,
+} from "../rules/project-rules.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
 import { FINDER_ANGLES } from "../agents/prompts.js";
@@ -119,6 +125,15 @@ Usage:
                       today; more packs follow): comma-separated names,
                       "none" to disable, or "auto" to detect from marker
                       files at head (default)
+  --rule <path>       project rule file (B5/ADR-0010). Three layers, first
+                      match wins: --rule > <root>/.pir/rule.json >
+                      <config-dir>/rule.json. Each rule pairs a path glob with
+                      guidance (inline or a repo-relative .md/.markdown/.txt
+                      file, 64 KiB and repo-contained) and optionally
+                      mergeBuiltin=false to replace the built-in language
+                      guidance for the run. Applied rules and their hash are
+                      recorded in run.json; \`pir config show\` prints the
+                      layers. Local mode only; find only
   --no-sync-index     skip codegraph index sync
   --preview           print the file selection a real find of the same range
                       would review (#B1): per-file status and churn, plus
@@ -304,7 +319,10 @@ Usage:
   mode local|remote   model <provider/model>|""
   server.url <url>    server.token <t>|""      server.insecure true|false
   server.viewerToken <t>|""  web-tier credential for runs/findings --run
-  server.timeoutSeconds <s>|""  remote response wait (#54)`,
+  server.timeoutSeconds <s>|""  remote response wait (#54)
+
+  pir config show also prints the effective project-rule layers (repo
+  .pir/rule.json + global ~/.pir/rule.json) and their canonical hash`,
 
   footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
@@ -419,6 +437,7 @@ export const VALUE_FLAGS = new Set([
   "--limit",
   "--offset",
   "--plugins",
+  "--rule",
   "--path",
   "--skip",
   "--task-file",
@@ -558,7 +577,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   // installation, so a pir serve instance must never execute them.
   if (command === "config") {
     if (opts.cwdGuard) throw new UsageError("config is a client-side command; run it on your machine");
-    return await cmdConfig(positional.slice(1), json, emit, out);
+    return await cmdConfig(positional.slice(1), flags, json, emit, out);
   }
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
@@ -610,6 +629,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
     if (flags.has("--branch")) throw new UsageError("audit selects a commit with --head; --branch is not supported");
     if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
+    if (flags.has("--rule")) throw new UsageError("--rule applies to find only (audit has no change-mode prompt)");
   }
 
   // Server-side registered repo: fetch the clone, review in a throwaway worktree.
@@ -1075,7 +1095,7 @@ async function cmdFind(
   // session, no writes. Run-shaping flags cannot affect a selection, so they
   // are rejected instead of silently ignored (the audit --dry-run precedent).
   if (flags.get("--preview") === true) {
-    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins"]) {
+    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins", "--rule"]) {
       if (flags.has(shaping)) {
         throw new UsageError(`find --preview previews the file selection only; ${shaping} shapes a real run`);
       }
@@ -1090,20 +1110,33 @@ async function cmdFind(
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
   const maxFindings = maxFindingsFlag(flags);
-  const result = await runFind(ctx, {
-    base: flags.get("--base") as string | undefined,
-    head: flags.get("--head") as string | undefined,
-    maxRounds: positiveIntFlag(flags, "--max-rounds"),
-    maxTokens: maxTokensFlag(flags),
-    maxFindings,
-    verifyConcurrency: verifyConcurrencyFlag(flags),
-    minConfidence: minConfidenceFlag(flags),
-    model: flags.get("--model") as string | undefined,
-    verifierModel: verifierModelFlag(flags),
-    angles: anglesFlag(flags),
-    ...(await parsePluginsFlag(flags)),
-    onProgress: (event) => log(`• ${event.message}`),
-  });
+  const ruleFile = flags.get("--rule");
+  if (ruleFile !== undefined && (typeof ruleFile !== "string" || ruleFile.trim() === "")) {
+    throw new UsageError("--rule requires a path to a project rule file");
+  }
+  let result: Awaited<ReturnType<typeof runFind>>;
+  try {
+    result = await runFind(ctx, {
+      base: flags.get("--base") as string | undefined,
+      head: flags.get("--head") as string | undefined,
+      maxRounds: positiveIntFlag(flags, "--max-rounds"),
+      maxTokens: maxTokensFlag(flags),
+      maxFindings,
+      verifyConcurrency: verifyConcurrencyFlag(flags),
+      minConfidence: minConfidenceFlag(flags),
+      model: flags.get("--model") as string | undefined,
+      verifierModel: verifierModelFlag(flags),
+      angles: anglesFlag(flags),
+      ...(await parsePluginsFlag(flags)),
+      ...(typeof ruleFile === "string" ? { ruleFile } : {}),
+      onProgress: (event) => log(`• ${event.message}`),
+    });
+  } catch (error) {
+    // B5 (ADR-0010): a broken rule file is a configuration error (exit 2),
+    // not a runtime failure, and it never reaches a model session.
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
   const findings = result.findings.map((row) => toFindingView(ctx, row));
   const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
@@ -1882,17 +1915,21 @@ async function cmdVerifyFix(
   return 0;
 }
 
-async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
+async function cmdConfig(args: string[], flags: Map<string, string | boolean>, json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
   const sub = args[0] ?? "show";
 
   if (sub === "show") {
     const config = loadUserConfig();
+    // B5 (ADR-0010): the effective rule layers are part of `config show`; a
+    // broken rule file fails here with the same loud usage error find gives.
+    // --cwd selects the repository whose `.pir/rule.json` layer is read.
+    const rules = loadRulesForConfig(typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd());
     if (json) {
-      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }) })}\n`);
+      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }), rules: projectRulesJson(rules) })}\n`);
     } else if (!config) {
-      emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n`);
+      emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n${renderProjectRulesConfig(rules)}`);
     } else {
-      emit(renderConfig(config, configPath()));
+      emit(`${renderConfig(config, configPath())}${renderProjectRulesConfig(rules)}`);
     }
     return { code: 0, output: out.join("") };
   }
@@ -1944,6 +1981,58 @@ function renderConfig(config: UserConfig, file: string): string {
   }
   if (config.model) lines.push(`model:  ${config.model}`);
   lines.push(`path:   ${file}`);
+  return `${lines.join("\n")}\n`;
+}
+
+/** Load the layers `config show` reports; a broken file is a usage error. */
+function loadRulesForConfig(repoRoot: string): ProjectRuleSet {
+  try {
+    return loadProjectRules({ repoRoot });
+  } catch (error) {
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
+}
+
+/** Machine-readable rule layers (`config show --json`); full guidance text. */
+function projectRulesJson(rules: ProjectRuleSet): Record<string, unknown> {
+  return {
+    schemaVersion: rules.schemaVersion,
+    hash: rules.hash,
+    layers: rules.layers.map((layer) => ({
+      layer: layer.layer,
+      file: layer.file,
+      include: layer.include,
+      exclude: layer.exclude,
+      rules: layer.rules.map((rule) => ({
+        path: rule.path,
+        mergeBuiltin: rule.mergeBuiltin,
+        guidanceSource: rule.guidanceSource,
+        ...(rule.guidanceFile ? { guidanceFile: rule.guidanceFile } : {}),
+        guidance: rule.guidance,
+      })),
+    })),
+  };
+}
+
+/** Human-readable rule layers: source, globs, merge flag and a guidance preview. */
+function renderProjectRulesConfig(rules: ProjectRuleSet): string {
+  const lines = ["project rules (layers: --rule > repo .pir/rule.json > global rule.json; first matching rule wins)"];
+  if (rules.layers.length === 0) {
+    lines.push(`  none (searched the repository's .pir/rule.json and ${path.join(pirConfigDir(), "rule.json")}; --rule is per invocation)`);
+  } else {
+    for (const layer of rules.layers) {
+      const scope = `include ${JSON.stringify(layer.include)}${layer.exclude.length > 0 ? `, exclude ${JSON.stringify(layer.exclude)}` : ""}`;
+      lines.push(`  ${layer.layer}: ${layer.file} — ${layer.rules.length} rule${layer.rules.length === 1 ? "" : "s"}, ${scope}`);
+      for (const rule of layer.rules) {
+        const source = rule.guidanceSource === "file" ? `file ${rule.guidanceFile}` : `inline ${rule.guidance.length} chars`;
+        const firstLine = rule.guidance.split("\n")[0] ?? "";
+        const preview = firstLine.length > 140 ? `${firstLine.slice(0, 140)}…` : firstLine;
+        lines.push(`    - "${rule.path}" mergeBuiltin=${rule.mergeBuiltin} (${source})${preview ? `: ${preview}` : ""}`);
+      }
+    }
+  }
+  lines.push(`  hash: ${rules.hash}`);
   return `${lines.join("\n")}\n`;
 }
 

@@ -251,6 +251,39 @@ Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.
 
+### Project rules
+
+Repository review conventions can be declared instead of remembered: a rule
+file pairs a path glob with guidance, and `find` injects only the rules that
+match the reviewed paths. Three layers are loaded, highest priority first —
+`--rule <path>`, `<repo>/.pir/rule.json`, and `<config-dir>/rule.json`
+(default `~/.pir/rule.json`) — and the first matching rule for a path wins
+(layers in priority order, declaration order within a layer), so matching is a
+deterministic code decision. A layer may also carry `include`/`exclude`
+globs, and `mergeBuiltin: false` makes the project rule authoritative for its
+paths by withholding the built-in language-pack guidance from reviewer sessions for that run (verifier sessions keep their own trusted pack guidance).
+
+```json
+{
+  "schemaVersion": 1,
+  "include": ["src/**"],
+  "exclude": ["**/*.test.ts"],
+  "rules": [
+    { "path": "src/web/**", "guidance": "Never mutate props after mount.", "mergeBuiltin": true },
+    { "path": "src/db/**", "guidanceFile": "docs/db-review.md", "mergeBuiltin": false }
+  ]
+}
+```
+
+Guidance file references are untrusted repository content: repo-relative only,
+`.md`/`.markdown`/`.txt`, at most 64 KiB, resolved through `realpath` and
+required to stay inside the repository. A malformed rule file, an escaping or
+oversized reference, or a rendered section over 48,000 characters fails the
+run before any model session starts. The applied rules and a canonical
+`sha256` hash are recorded in the run manifest (`projectRules`), and `pir
+config show` prints the loaded layers, rules and hash. Rules apply to `find`
+only; `--rule` is a local path and is rejected in remote mode.
+
 ## Output contract
 
 Successful `--json` commands write one result envelope to stdout. A shortened

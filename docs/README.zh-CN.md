@@ -182,6 +182,24 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 
 `pir find --preview` 在付出评审成本之前打印这次选择——逐文件的 status/churn，以及 selected/excluded 与对应原因（文本或 `--json`）。它调用与真实运行完全相同的 change set 构建器与纯过滤函数，不建 run、不开启模型会话、不写入任何内容；run-shaping 类 flag 会直接报用法错误，而不是被静默忽略。
 
+### 项目规则
+
+仓库评审约定可以直接声明，而不必依赖记忆：规则文件把路径 glob 与 guidance 配对，`find` 只注入命中本次评审路径的规则。三层按优先级从高到低加载——`--rule <path>`、`<repo>/.pir/rule.json`、`<config-dir>/rule.json`（默认 `~/.pir/rule.json`）——同一个路径由第一个命中的规则决定（层优先，层内按声明顺序），因此匹配是确定性的代码判断。每层还可带 `include`/`exclude` glob；`mergeBuiltin: false` 表示该规则对其路径拥有最终解释权，并整轮抑制 reviewer 会话的内置语言包 guidance（verifier 会话保留自己的可信 guidance）。
+
+```json
+{
+  "schemaVersion": 1,
+  "include": ["src/**"],
+  "exclude": ["**/*.test.ts"],
+  "rules": [
+    { "path": "src/web/**", "guidance": "组件挂载后不要再修改 props。", "mergeBuiltin": true },
+    { "path": "src/db/**", "guidanceFile": "docs/db-review.md", "mergeBuiltin": false }
+  ]
+}
+```
+
+`guidanceFile` 与仓库层规则文件本身都按不可信仓库内容处理：仓库相对路径、仅限 `.md`/`.markdown`/`.txt`、最大 64 KiB、经 `realpath` 解析后必须仍在仓库根内。规则文件损坏、guidance 逃逸或过大，或渲染后的 PROJECT RULES 超过 48,000 字符，都会在任何模型会话开始前直接失败。实际生效的规则与规范化 `sha256` 会写入 run manifest 的 `projectRules`；`pir config show` 打印已加载的层、规则与哈希。规则仅用于 `find`；`--rule` 是本地路径，远程模式会在客户端与服务端两侧被拒绝。
+
 ## 服务 API 与任务
 
 `pir serve` 提供以下端点：

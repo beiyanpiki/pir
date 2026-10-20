@@ -76,18 +76,18 @@
 - [x] A1 Prompt unit tests updated (plus tool-contract, memory round-trip, scorer and renderer tests)
 - [x] A2 **M0 before/after: kill-rate (rejecting a label=1 comment) does not regress — this is B4's merge gate** — measured on the fixed 100-comment sample (`results/M0-2026-10-19-b4-before-after.md`): falseKillRate 77.1% → 78.6% (one comment, 54/70 → 55/70) with the label-0 kill set identical and five label-1 comments swapping sides; recorded as **not proven either way at this sample's one-comment resolution, no evidence of a systematic increase** (ADR 0008, gate result)
 
-### B5 · Layered user rule file (`.pir/rule.json`) `P1` · ADR: written at execution · Depends on: B1 (include/exclude wiring) · Status: ☐
+### B5 · Layered user rule file (`.pir/rule.json`) `P1` · ADR: 0010 · Depends on: B1 (include/exclude wiring) · Status: ☑
 
 **Tasks**
-- [ ] T0 Write the ADR (must cover: three layers with first-match-wins, safe reading of guidance file references, PROJECT RULES injection position and byte-stable ordering, division of labor vs language packs and memory, rule hash into the manifest)
-- [ ] T1 Three-layer loading (`--rule` > repo > global) + glob matching (reuse `pathMatchesGlob`)
-- [ ] T2 Schema: `rules[{path, guidance, merge_builtin}]` + include/exclude; safe reading of guidance file references (size cap / extension allowlist / within-repo path validation)
-- [ ] T3 Injection into the reviewer prompt as a `PROJECT RULES` section (before the memory pack, evidence-not-instructions preamble, path-sorted for byte stability)
-- [ ] T4 Canonical rule-text hash into the run manifest; `pir config show` prints effective rules
+- [x] T0 Write the ADR (ADR 0010: three layers with first-match-wins, safe reading of guidance file references and of the repository rule file itself, PROJECT RULES position and byte-stable ordering, division of labor vs language packs and memory, rule hash into the manifest)
+- [x] T1 Three-layer loading (`--rule` > repo `.pir/rule.json` > global `<config-dir>/rule.json`) + glob matching through B1's `pathMatchesGlob`; layer-local include/exclude (exclude wins)
+- [x] T2 Schema `rules[{path, guidance|guidanceFile, mergeBuiltin}]` + include/exclude; guidance references are repo-relative, extension-allowlisted (`.md`/`.markdown`/`.txt`), 64 KiB-capped and realpath-contained; a symlinked repository rule file cannot escape the repository root; unknown keys and a missing explicit `--rule` fail loudly
+- [x] T3 Injection into the reviewer prompt as a `PROJECT RULES` section (after the process rules, before the built-in language guidance and the memory pack; evidence-not-instructions preamble; groups sorted by glob and file lists sorted for byte stability; `mergeBuiltin=false` withholds the pack guidance for the run)
+- [x] T4 Canonical rule-text hash into the run manifest (`projectRules` in `run.json`); `pir config show [--json] [--cwd <repo>]` prints the effective layers, rules and hash
 
 **Acceptance**
-- [ ] A1 Unit tests: layer precedence / merge semantics / mutual exclusion with language packs
-- [ ] A2 Dogfood using a rule file to constrain pir's own PRs
+- [x] A1 Unit tests: layer precedence / merge semantics / mutual exclusion with language packs (`tests/unit/project-rules.test.js` + `tests/integration/project-rules.test.js`; 24 model-free cases)
+- [x] A2 Dogfood using a rule file to constrain pir's own PRs — final pass `41f9b807-4bb0-458f-acfb-3c60a4366985` (`zai-coding-cn/glm-5.3:max`, explicit `--rule` with `src/rules/**` `mergeBuiltin=false`) reported P3-only findings (F-8, F-9); F-1/F-2/F-4/F-5 were fixed during the loop, F-3/F-6/F-7/F-8/F-9 are deferred to `dogfood-p3-backlog.md`
 
 ---
 
@@ -180,3 +180,4 @@ The three load-bearing conclusions (details in the companion document):
 | 2026-10-19 | M1 | Skeleton landed (ADR 0009): pinned fixture builder, normalizer, `run-aacr.js`, upstream judge delegation; `--limit 20` smoke round recorded; full run and `results/M1-*.md` stay Iteration 3 | Merge: #121; M1 stays ◐ until A1 |
 | 2026-10-19 | All | Testing model moved to `zai-coding-cn/glm-5.3:max` (max thinking) for the full-corpus M0 round and the M1 smoke; the earlier opencode-go deepseek attempt was abandoned rather than mixed | Maintainer direction after the opencode-go account usage limit was exhausted; each round stays single-model and names its model in its results file |
 | 2026-10-19 | Iteration 2 | Milestone closed: M0 full report, B4 and the M1 smoke merged into the roadmap integration branch; ADRs 0008–0009 written; statuses synced | This PR |
+| 2026-10-20 | B5 | Layered project rule file landed (ADR 0010): three layers with first-match-wins, contained rule/guidance reads, `PROJECT RULES` injection, canonical hash in the manifest, `config show` output; dogfood found and fixed four P0–P2-class issues (F-1/F-2/F-4/F-5) and deferred five P3s | Merge: #124; `feat/b5-layered-rule-file` |

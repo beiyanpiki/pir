@@ -206,6 +206,18 @@ Audit `--path` is a literal file/directory prefix, repeatable as a union.
 `--skip` is repeatable and accepts `*`, `**`, `?`, or a literal prefix. Quote
 globs to prevent shell expansion. Default exclusions still apply.
 
+`find` accepts project rules from three layers, highest priority first:
+`--rule <path>`, `<repo>/.pir/rule.json`, and `<config-dir>/rule.json`
+(default `~/.pir/rule.json`). Each file is
+`{"schemaVersion":1,"include":[...],"exclude":[...],"rules":[{"path":"src/**","guidance":"...","mergeBuiltin":true}]}`;
+a rule carries exactly one of inline `guidance` or a repo-relative
+`guidanceFile` (`.md`/`.markdown`/`.txt`, ≤64 KiB, contained in the repo).
+The first matching rule for a reviewed path wins; `mergeBuiltin:false`
+withholds the built-in language-pack guidance from reviewer sessions for the run (verifiers keep theirs). The applied rules
+and their canonical hash are recorded in `run.json` under `projectRules`, and
+`pir config show [--json]` prints the loaded layers and rules. Rules are
+`find`-only; `--rule` is a local path and is rejected in remote mode.
+
 Limits:
 
 | Option | Default / meaning |
@@ -219,6 +231,7 @@ Limits:
 | `--angles a,b\|all` | experimental (F1, default off, find-only): round 1 fans out one specialized reviewer session per angle (correctness, concurrency, security, contracts, performance) instead of one general session; capped at 4 parallel sessions and shrunk by remaining token/wall-clock budget; later rounds stay general with the merged focus; cross-angle near-duplicates (same entity, near-identical claim) collapse and finding ids are reassigned uniquely |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|frontend,golang,typescript` | `auto`, detected at selected head |
+| `--rule PATH` | no default; explicit highest-priority project rule file (`find` only, local mode) |
 | `--no-sync-index` | skip optional codegraph index synchronization |
 
 `PIR_CODEGRAPH=1` (server/serve deployments) makes throwaway-worktree reviews

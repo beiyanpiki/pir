@@ -43,6 +43,7 @@ The main boundaries are:
 | `src/findings` | finding identity, statuses, deduplication |
 | `src/memory` | SQLite repositories, feedback, bootstrap, refresh, synchronization |
 | `src/plugins` | built-in language guidance and activation |
+| `src/rules` | layered project rule files: loading, glob matching, prompt rendering, hash |
 | `src/server` | HTTPS execution, jobs, read-only web access, live observation |
 | `src/observability` | run events and manifests |
 | `src/extension` | Pi commands and their lifecycle |
@@ -358,6 +359,39 @@ paths; a leading `**/` matches at any depth (root included) and a whole-segment
 `*` matches one directory level. Each provides separate reviewer and
 verifier guidance for change and audit modes. A pack without audit variants
 can be detected for an audit but its change guidance is withheld.
+
+## Project rules
+
+Project rules are the declared counterpart to the learned memory pack: a rule
+file pairs a path glob with review guidance, so a repository can carry review
+conventions that are versioned with the code and applied only where they
+belong. Three layers are loaded independently, highest priority first: the
+`--rule <path>` flag, the repository file `<root>/.pir/rule.json`, and the
+global `<config-dir>/rule.json` (default `~/.pir/rule.json`). For each
+reviewed, non-excluded changed path the first matching rule wins — layers in
+priority order, declaration order within a layer — which makes matching a
+deterministic code decision rather than an instruction for the model to sort
+out. Each layer may also carry its own `include`/`exclude` globs (exclude
+wins), applied before rule matching.
+
+A rule has a `path` glob and exactly one of inline `guidance` or a
+repo-relative `guidanceFile` (`.md`, `.markdown` or `.txt`, at most 64 KiB,
+resolved through `realpath` and required to stay inside the repository). The
+reference is untrusted repository content: absolute paths, `..`, symlink
+escapes, unknown extensions and oversized files fail the run before any
+session exists. `mergeBuiltin` defaults to `true`; `false` makes the project
+rule authoritative for its paths and withholds the built-in language-pack
+guidance from reviewer sessions for that run (verifiers keep theirs), because a pack is rendered once for the whole session.
+The winning rules render into one `PROJECT RULES` section placed after the
+process rules and before the built-in language guidance and the memory pack,
+with an explicit evidence-not-instructions preamble. Groups are sorted by
+glob and file lists are sorted, so the section is byte-stable. A canonical
+hash of the effective rules (canonicalized text, globs, include/exclude and
+`mergeBuiltin`; never absolute paths) is recorded in `run.json` under
+`projectRules`, and `pir config show` prints the loaded layers and rules. Rules
+are allowed in change-mode `find` only: audit has no diff to scope them, and
+`--rule` is a local path, so remote mode rejects it while the repository and
+global layers keep working from the bundle.
 
 ## Related decisions
 

@@ -313,6 +313,13 @@ export async function startServer(input: {
         if (argv[i]!.startsWith("--cwd=")) continue;
         cleanedArgv.push(argv[i]!);
       }
+      // B5 (ADR-0010): --rule names a file on the CLIENT's machine. The local
+      // CLI already refuses to forward it, but a direct API caller can send
+      // argv verbatim; executing it here would read an arbitrary server path
+      // and feed its contents into a model prompt. Refuse it server-side too.
+      if (cleanedArgv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
+        throw new Error("--rule names a client-side file and is not accepted on /v1/review; commit .pir/rule.json in the repository or use the server's global rule.json");
+      }
       const meta = {
         remoteUrl: parsed.remoteUrl ?? null,
         rootCommit: parsed.rootCommit,
@@ -610,6 +617,13 @@ export async function startServer(input: {
       argv = parsed.argv as string[];
       if (argv.includes("serve")) {
         throw new Error("refusing to execute serve recursively");
+      }
+      // B5 (ADR-0010, dogfood F-4): --rule names a file on the CLIENT's
+      // machine. /v1/exec forwards argv verbatim, so without this guard a
+      // direct API caller could read an arbitrary server path through find's
+      // rule layer and feed it into a model prompt.
+      if (argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
+        throw new Error("--rule names a client-side file and is not accepted on a server; commit .pir/rule.json in the repository or use the server's global rule.json");
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];
