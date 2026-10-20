@@ -69,7 +69,7 @@ node tests/eval/aacr/report.js --run tests/eval/aacr/out/<after> --baseline test
 
 The two rounds must share the dataset, sample digest, model id and arm set — `report.js` refuses to compare otherwise — and only the CLI build may differ. A round's rejection grounds (`rejectionGrounds` in `score.js`, "Rejection grounds (B4)" in the results file) come from the verifier's required `rejectionGround` on a rejected verdict; rows recorded before B4 or by the OCR arm count as `unknown` rather than disappearing.
 
-Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently.
+Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently. A sampled round that was deliberately stopped can be judged without re-running reviewers: `--resume --judge-only --judge real --eval-rounds 3` reads the completed result files, keeps the round's recorded selection so unrun instances stay in upstream's `missing_instances`, and writes the judge metrics into the same round. This is how the first Iteration-3 report was produced (57 completed instances of the planned 196).
 
 ## M1 · End-to-end benchmark
 
