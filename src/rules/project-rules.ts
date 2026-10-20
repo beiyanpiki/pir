@@ -256,10 +256,26 @@ export function parseRuleFile(input: {
   return { layer, file, include: include.length > 0 ? include : ["**"], exclude, rules };
 }
 
-/** Load one optional layer; a missing file is absent, a present invalid file is fatal. */
-function loadLayer(input: { file: string | undefined; layer: RuleLayerName; repoRoot: string }): RuleLayer | null {
+/**
+ * Load one optional layer; a missing file is absent, a present invalid file is
+ * fatal. The repository layer is contained by `realpath` inside the repository
+ * root — a committed `.pir/rule.json` is repository content, so a symlink must
+ * not turn it into a read of an arbitrary host file (the same containment its
+ * `guidanceFile` references get). The `--rule` and global layers are
+ * user-selected paths and are read literally.
+ */
+function loadLayer(input: { file: string | undefined; layer: RuleLayerName; repoRoot: string; contain?: boolean }): RuleLayer | null {
   if (!input.file || !existsSync(input.file)) return null;
-  const text = readCappedFile(input.file, RULE_FILE_MAX_BYTES, "rule file");
+  let readPath = input.file;
+  if (input.contain) {
+    const rootReal = realpathOrFail(input.repoRoot, "repository root");
+    const real = realpathOrFail(input.file, "repository rule file");
+    if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
+      fail(input.file, "repository rule file resolves outside the repository root (symlink)");
+    }
+    readPath = real;
+  }
+  const text = readCappedFile(readPath, RULE_FILE_MAX_BYTES, "rule file");
   return parseRuleFile({ text, file: input.file, layer: input.layer, repoRoot: input.repoRoot });
 }
 
@@ -272,7 +288,7 @@ export function loadProjectRules(input: {
   const repoRoot = path.resolve(input.repoRoot);
   const layers = [
     loadLayer({ file: input.explicitPath ? path.resolve(input.explicitPath) : undefined, layer: "flag", repoRoot }),
-    loadLayer({ file: path.join(repoRoot, ".pir", "rule.json"), layer: "repo", repoRoot }),
+    loadLayer({ file: path.join(repoRoot, ".pir", "rule.json"), layer: "repo", repoRoot, contain: true }),
     loadLayer({ file: path.join(input.configDir ?? pirConfigDir(), "rule.json"), layer: "global", repoRoot }),
   ].filter((layer): layer is RuleLayer => layer !== null);
   return { schemaVersion: RULE_SCHEMA_VERSION, layers, hash: hashProjectRules(layers) };

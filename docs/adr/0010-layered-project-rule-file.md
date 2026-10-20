@@ -86,16 +86,20 @@ ordering would make prompt diffs and the manifest hash unstable.
    `mergeBuiltin` defaults to `true`. Unknown keys are rejected, because a
    typo such as `merge_builtn` would otherwise silently change review
    behavior. `schemaVersion`, when present, must be `1`.
-3. **Guidance file references are untrusted input.** A `guidanceFile` must be
+3. **Rule content is untrusted input.** A `guidanceFile` must be
    repo-relative (no absolute path, no `..` segment after normalization), use
    one of `.md`, `.markdown`, `.txt`, resolve — through `realpath`, so a
    symlink cannot escape — to a file inside the repository root, and be at
-   most 64 KiB. Missing, oversized, escaping or disallowed files fail the run
-   before any session starts. Rule files themselves are capped at 256 KiB,
-   and at most 64 rules are accepted per layer. Guidance text is canonicalized
-   (CRLF→LF, trailing whitespace stripped per line, trimmed) so cosmetic
-   edits do not change the hash and byte-identical guidance produces a
-   byte-identical section.
+   most 64 KiB. The repository rule file itself gets the same containment: a
+   committed `.pir/rule.json` is repository content, so its real path must
+   stay inside the repository root and a symlink to a host file is a hard
+   error; the `--rule` and global layers are paths the user chose explicitly
+   and are read literally. Missing, oversized, escaping or disallowed files
+   fail the run before any session starts. Rule files themselves are capped at
+   256 KiB, and at most 64 rules are accepted per layer. Guidance text is
+   canonicalized (CRLF→LF, trailing whitespace stripped per line, trimmed) so
+   cosmetic edits do not change the hash and byte-identical guidance produces
+   a byte-identical section.
 4. **Injection is one deterministic `PROJECT RULES` section, in the reviewer
    prompt only.** The section is rendered after the process/severity rules and
    immediately before the built-in language guidance, with the repository
@@ -138,10 +142,13 @@ ordering would make prompt diffs and the manifest hash unstable.
    created. There is no silent skip and no partial application: a rule file
    that cannot be applied completely is not applied at all.
 8. **Scope: find in local mode.** `--rule` is a local filesystem path and is
-   rejected in remote mode (the repository/global layers still work there:
-   the bundle carries the committed `.pir/rule.json` and the server's own
-   global file applies). Audit rejects `--rule` and the file is not read for
-   audit runs. `--preview` also rejects it, because rules shape the prompt,
+   rejected in remote mode by the CLI before forwarding — and refused again by
+   the server on `/v1/review`, because a direct API caller can send arbitrary
+   argv and the path would otherwise be read on the server and fed to a model
+   prompt (dogfood F-1). The repository/global layers still work remotely: the
+   bundle carries the committed `.pir/rule.json` and the server's own global
+   file applies. Audit rejects `--rule` and the file is not read for audit
+   runs. `--preview` also rejects it, because rules shape the prompt,
    not the file selection. The rule file itself is excluded from review by
    B1's existing `.pir/**` skip pattern.
 

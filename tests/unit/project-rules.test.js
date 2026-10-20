@@ -161,6 +161,25 @@ test("guidance file containment: absolute, .., symlink escape, bad extension, mi
   }
 });
 
+test("the repository rule file itself is contained: an outside symlink is fatal, an inside one is read", (t) => {
+  const repo = tempDir(t);
+  const outside = tempDir(t);
+  writeJson(path.join(outside, "rules.json"), layer({ rules: [rule("**", "OUTSIDE")] }));
+  mkdirSync(path.join(repo, ".pir"), { recursive: true });
+  symlinkSync(path.join(outside, "rules.json"), path.join(repo, ".pir", "rule.json"));
+  assert.throws(
+    () => loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }),
+    /repository rule file resolves outside the repository root/,
+  );
+
+  mkdirSync(path.join(repo, "cfg"), { recursive: true });
+  writeJson(path.join(repo, "cfg", "rules.json"), layer({ rules: [rule("**", "INSIDE")] }));
+  rmSync(path.join(repo, ".pir", "rule.json"));
+  symlinkSync(path.join(repo, "cfg", "rules.json"), path.join(repo, ".pir", "rule.json"));
+  const app = applyProjectRules(loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }), [{ path: "a.ts" }]);
+  assert.match(app.section, /INSIDE/);
+});
+
 test("rule-file validation is strict: unknown keys, both/neither guidance, bad shapes", (t) => {
   const repo = tempDir(t);
   const file = path.join(repo, ".pir", "rule.json");
