@@ -286,8 +286,12 @@ export function loadProjectRules(input: {
   configDir?: string;
 }): ProjectRuleSet {
   const repoRoot = path.resolve(input.repoRoot);
+  // An explicit --rule path is a user assertion, not an optional layer: a typo
+  // must fail the invocation instead of silently reviewing without rules.
+  const explicitPath = input.explicitPath ? path.resolve(input.explicitPath) : undefined;
+  if (explicitPath && !existsSync(explicitPath)) fail(explicitPath, "explicit rule file (--rule) does not exist");
   const layers = [
-    loadLayer({ file: input.explicitPath ? path.resolve(input.explicitPath) : undefined, layer: "flag", repoRoot }),
+    loadLayer({ file: explicitPath, layer: "flag", repoRoot }),
     loadLayer({ file: path.join(repoRoot, ".pir", "rule.json"), layer: "repo", repoRoot, contain: true }),
     loadLayer({ file: path.join(input.configDir ?? pirConfigDir(), "rule.json"), layer: "global", repoRoot }),
   ].filter((layer): layer is RuleLayer => layer !== null);

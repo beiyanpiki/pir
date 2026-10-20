@@ -99,6 +99,14 @@ test("excluded files are never matched; a rename matches through oldPath and rep
   assert.match(renamed.section, /applies to: src\/new\.ts/);
 });
 
+test("an explicit --rule path must exist: a typo fails instead of silently disabling rules", (t) => {
+  const repo = tempDir(t);
+  assert.throws(
+    () => loadProjectRules({ repoRoot: repo, configDir: tempDir(t), explicitPath: path.join(repo, "nope.json") }),
+    /explicit rule file \(--rule\) does not exist/,
+  );
+});
+
 test("no rule file: empty section, zero matches and a stable empty-set hash", (t) => {
   const empty = load(t);
   const app = applyProjectRules(empty, [{ path: "src/a.ts" }]);
