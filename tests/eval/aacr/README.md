@@ -26,6 +26,7 @@ tests/eval/aacr/
     normalize-aacr.js     M1 T3: envelope -> reported / confirmedOnly upstream comment views
     run-aacr.js           M1 T2: per-PR `pir find` driver (same-repo serial / cross-repo concurrent)
     judge.js              M1 T4: pinned upstream judge delegation (data/results/pipeline eval)
+    report-m1.js          M1 A1: results-document renderer (headline, buckets, coverage, cost)
     git-async.js          non-blocking fetch / worktree / synthetic-head plumbing
   results/                committed results files (M0-*.md, later M1-*.md)
   dataset/                gitignored: downloaded + materialized rows (auto-rebuilt)
@@ -68,7 +69,7 @@ node tests/eval/aacr/report.js --run tests/eval/aacr/out/<after> --baseline test
 
 The two rounds must share the dataset, sample digest, model id and arm set — `report.js` refuses to compare otherwise — and only the CLI build may differ. A round's rejection grounds (`rejectionGrounds` in `score.js`, "Rejection grounds (B4)" in the results file) come from the verifier's required `rejectionGround` on a rejected verdict; rows recorded before B4 or by the OCR arm count as `unknown` rather than disappearing.
 
-Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently.
+Resume an interrupted round with `--resume` (both the materializer and the driver reuse completed rows); pick a fresh `--round` name otherwise, so two runs never mix silently. A sampled round that was deliberately stopped can be judged without re-running reviewers: `--resume --judge-only --judge real --eval-rounds 3` reads the completed result files, keeps the round's recorded selection so unrun instances stay in upstream's `missing_instances`, and writes the judge metrics into the same round. This is how the first Iteration-3 report was produced (57 completed instances of the planned 196).
 
 ## M1 · End-to-end benchmark
 
@@ -139,7 +140,17 @@ M1 reuses the M0 shared cache (`$PIR_AACR_CACHE`, default `~/.cache/pir-aacr`, n
 
 ### Judge delegation
 
-`m1/judge.js` resolves the pinned upstream clone at `$PIR_AACR_JUDGE_DIR` (default `$PIR_AACR_CACHE/aacr-bench@<commit>`, fetched depth 1 when absent), writes the selected fixture rows as upstream's `evaluation/data/aacr_bench.jsonl`, copies the per-view result files into `evaluation/results/aacr_bench/<reviewer>/<run_id>/`, and runs `python3 -m pipeline run --stage eval` from `evaluation/`, which writes its metrics under `evaluation/metrics/aacr_bench/<reviewer>/<run_id>/`. Only those generated, gitignored upstream directories are written; the clone is never modified and an existing clone at a different commit fails loudly (judge drift invalidates comparisons). Upstream's CLI only accepts `ocr|claude|codex`; M1 writes OCR-shaped files, so the delegation uses `--reviewer ocr`, whose `evaluate.py` builder is exactly that shape. The metrics JSON path and the upstream summary lines are relayed into `summary.json` and the console.
+`m1/judge.js` resolves the pinned upstream clone at `$PIR_AACR_JUDGE_DIR` (default `$PIR_AACR_CACHE/aacr-bench@<commit>`, fetched depth 1 when absent), writes the selected fixture rows as upstream's `evaluation/data/aacr_bench.jsonl`, copies the per-view result files into `evaluation/results/aacr_bench/<reviewer>/<run_id>/`, and runs `python3 -m pipeline run --stage eval` from `evaluation/`, which writes its metrics under `evaluation/metrics/aacr_bench/<reviewer>/<run_id>/`. The judge model id is recorded in the round summary (`limits.judgeModel`); an `--eval-rounds N` run must produce the `_average.json` metrics file or the judge is recorded as failed (never silently published from one round). One judge invocation's default 30-minute ceiling can be raised for a full-corpus run with `PIR_AACR_JUDGE_TIMEOUT_MS` (recorded as `limits.judgeTimeoutMs`). Only those generated, gitignored upstream directories are written; the clone is never modified and an existing clone at a different commit fails loudly (judge drift invalidates comparisons). Upstream's CLI only accepts `ocr|claude|codex`; M1 writes OCR-shaped files, so the delegation uses `--reviewer ocr`, whose `evaluate.py` builder is exactly that shape. The metrics JSON path and the upstream summary lines are relayed into `summary.json` and the console.
+
+### Rendering the results document
+
+```sh
+node tests/eval/aacr/m1/report-m1.js \
+  --round tests/eval/aacr/out/<round> \
+  --out tests/eval/aacr/results/M1-<round>.md
+```
+
+Model-free: it reads the round's `summary.json` and the upstream `eval_res` of each judge round, then writes the committed document — headline file-level semantic precision/recall/`balanced_score` per view, buckets by language, PR size and reference-comment category (micro per judge round, averaged across rounds), the coverage/error ledger, token and duration accounting, and the full provenance pins (model, CLI sha256, fixture sha256, instance-set digest, judge model, arXiv citation). A round without `finishedAt` is refused unless `--allow-partial` is passed, and it then says PARTIAL at the top; a missing result file stays in `missing_instances` and out of every denominator.
 
 ### What is gitignored
 

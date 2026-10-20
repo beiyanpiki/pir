@@ -46,6 +46,20 @@ export const REAL_JUDGE_ENV = ["JUDGE_BASE_URL", "JUDGE_API_KEY", "JUDGE_MODEL"]
 export const DEFAULT_GIT_TIMEOUT_MS = 600_000;
 export const DEFAULT_JUDGE_TIMEOUT_MS = 1_800_000;
 
+/**
+ * Judge-pipeline ceiling for one view/repeat invocation. The default is the
+ * skeleton's 30 minutes; a full-corpus `--eval-rounds 3` judge can outgrow it
+ * on a slow provider, so an explicit env override is honored and recorded in
+ * the round summary (`limits.judgeTimeoutMs`). Invalid values fall back to the
+ * default rather than producing an unbounded wait.
+ */
+export function resolveJudgeTimeoutMs(env = process.env) {
+  const raw = env.PIR_AACR_JUDGE_TIMEOUT_MS;
+  if (raw === undefined || raw === "") return DEFAULT_JUDGE_TIMEOUT_MS;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) && value > 0 ? value : DEFAULT_JUDGE_TIMEOUT_MS;
+}
+
 const tail = (text, lines = 20) => String(text ?? "").trim().split("\n").slice(-lines).join("\n");
 
 /** The pinned upstream framework from meta.json (repo + 40-char commit). */
@@ -277,8 +291,10 @@ export function findMetricsFile(metricsDir, reviewer, evalRounds = 1) {
     .map((name) => path.join(metricsDir, name));
   if (candidates.length === 0) return null;
   if (evalRounds > 1) {
-    const average = candidates.find((file) => file.endsWith("_average.json"));
-    if (average) return average;
+    // A missing average file means the averaged run did not finish — never
+    // fall back to one round's file and publish it as the N-round average
+    // (ADR-0009 §10: the pinned judge's averaging is part of the result).
+    return candidates.find((file) => file.endsWith("_average.json")) ?? null;
   }
   candidates.sort((a, b) => (statSync(b).mtimeMs ?? 0) - (statSync(a).mtimeMs ?? 0));
   return candidates[0];
@@ -317,7 +333,9 @@ export async function runJudge({
   const ok = result.error == null && result.code === 0 && metricsPath != null && summary != null;
   const error = result.error
     ?? (result.code !== 0 ? `upstream judge exited ${result.code}${result.signal ? ` signal ${result.signal}` : ""}` : null)
-    ?? (metricsPath == null ? `upstream judge wrote no metrics file under ${metricsDir}` : null)
+    ?? (metricsPath == null
+      ? `upstream judge wrote no ${evalRounds > 1 ? `${evalRounds}-round average ` : ""}metrics file under ${metricsDir}`
+      : null)
     ?? metricsError;
   return {
     ok,
@@ -331,6 +349,7 @@ export async function runJudge({
     dataset,
     resultsDir: copied.destDir,
     copiedFiles: copied.copied,
+    evalRounds,
     metricsPath: metricsPath ?? null,
     summary,
     summaryLines: String(result.stdout ?? "").split("\n").map((line) => line.trim()).filter((line) => line && SUMMARY_LINE.test(line)).slice(-20),
