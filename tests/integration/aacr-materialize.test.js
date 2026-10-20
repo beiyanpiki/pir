@@ -13,7 +13,10 @@ import {
   rememberMergeBase, writeMaterialized,
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
-import { assertResumeCompatible, buildDigest, materializeTask, parseOptions as runOptions, releaseTask, scoreRow, sha256 } from "../eval/aacr/run-m0.js";
+import {
+  assertResumeCompatible, buildDigest, ensureFetchedAsync, materializeTask, materializeTaskAsync,
+  parseOptions as runOptions, releaseTask, releaseTaskAsync, scoreRow, sha256,
+} from "../eval/aacr/run-m0.js";
 
 function temporary(fn) {
   const dir = mkdtempSync(path.join(tmpdir(), "pir-aacr-mat-"));
@@ -227,6 +230,36 @@ test("driver worktrees are detached, isolated and reclaimed", () => {
     releaseTask(repoDir, workDir);
     assert.equal(existsSync(workDir), false);
   });
+});
+
+test("async driver helpers match the sync ones and overlap instead of blocking the loop", async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pir-aacr-async-"));
+  try {
+    const { mirrorDir, head } = buildMirror(root);
+    const repoDir = ensureRepoCache(path.join(root, "cache"), "example/repo", { remote: pathToFileURL(mirrorDir).href });
+    assert.deepEqual(await ensureFetchedAsync(repoDir, head), { fetched: true });
+    assert.deepEqual(await ensureFetchedAsync(repoDir, head), { fetched: false });
+    // Two checkouts of the same commit in parallel: both land clean at head.
+    const dirs = [path.join(root, "work", "a"), path.join(root, "work", "b")];
+    const ticks = [];
+    const timer = setInterval(() => ticks.push(1), 1);
+    try {
+      await Promise.all(dirs.map((dir) => materializeTaskAsync(repoDir, head, dir)));
+    } finally {
+      clearInterval(timer);
+    }
+    for (const dir of dirs) {
+      assert.equal(git(dir, ["rev-parse", "HEAD"]).trim(), head);
+      assert.match(git(dir, ["status", "--porcelain"]), /^$/);
+    }
+    // The event loop kept running while git worked: a sync execFile would have
+    // blocked every timer until the checkouts finished.
+    assert.ok(ticks.length > 0, "no timer tick during two async checkouts — git is still blocking the loop");
+    await Promise.all(dirs.map((dir) => releaseTaskAsync(repoDir, dir)));
+    for (const dir of dirs) assert.equal(existsSync(dir), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("driver scoreRow carries labels, buckets and the CLI result", () => {

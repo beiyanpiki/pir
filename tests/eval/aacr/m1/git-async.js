@@ -1,17 +1,15 @@
 /**
  * Non-blocking git plumbing for the M1 driver's worker pool.
  *
- * The M0 driver uses execFileSync throughout; that is fine for its serial
- * loop but would freeze every concurrent worker behind the first git call.
- * M1's same-repo-serial / cross-repo-concurrent model needs async fetch,
- * worktree and ancestry checks, so they live here and are re-exported from
- * ../run-m0.js (the M1 driver keeps importing the M0 machinery by name).
+ * The M0 driver's async fetch/worktree helpers live in ../run-m0.js (M1
+ * imports them from there); this module holds the M1-specific plumbing a
+ * depth-1 cache needs — ancestry probes and the deterministic synthetic head
+ * that gives `pir find` a reviewable range without rewriting history.
  *
  * Pure plumbing only: no cache policy, no fixture knowledge, no model.
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { gitEnv } from "../materialize.js";
 
@@ -57,32 +55,6 @@ export async function hasCommitAsync(repoDir, sha, options = {}) {
 }
 
 /** Depth-1 fetch of exactly one commit; its tree comes with it. */
-export async function ensureFetchedAsync(repoDir, sha, { timeoutMs = DEFAULT_GIT_TIMEOUT_MS, env = process.env } = {}) {
-  if (await hasCommitAsync(repoDir, sha, { timeoutMs, env })) return { fetched: false };
-  await execGitAsync(repoDir, ["fetch", "--depth", "1", "--no-tags", "origin", sha], { timeoutMs, env });
-  if (!(await hasCommitAsync(repoDir, sha, { timeoutMs, env }))) throw new Error(`fetched but still missing: ${sha}`);
-  return { fetched: true };
-}
-
-/** Detached per-instance checkout of head, isolated via git worktree. */
-export async function materializeTaskAsync(repoDir, head, workDir, { timeoutMs = DEFAULT_GIT_TIMEOUT_MS, env = process.env } = {}) {
-  if (workDir) {
-    await rm(workDir, { recursive: true, force: true });
-    await execGitAsync(repoDir, ["worktree", "prune"], { timeoutMs, env, allowFailure: true });
-  }
-  await mkdir(path.dirname(workDir), { recursive: true });
-  await execGitAsync(repoDir, ["worktree", "add", "--detach", workDir, head], { timeoutMs, env });
-  return workDir;
-}
-
-export async function releaseTaskAsync(repoDir, workDir, { timeoutMs = DEFAULT_GIT_TIMEOUT_MS, env = process.env } = {}) {
-  if (!workDir) return;
-  const removed = await execGitAsync(repoDir, ["worktree", "remove", "--force", workDir], { timeoutMs, env, allowFailure: true });
-  if (!removed.ok) {
-    await rm(workDir, { recursive: true, force: true });
-    await execGitAsync(repoDir, ["worktree", "prune"], { timeoutMs, env, allowFailure: true });
-  }
-}
 
 /** True when `ancestor` is reachable from `descendant` in the local object store. */
 export async function hasAncestryAsync(repoDir, ancestor, descendant, options = {}) {

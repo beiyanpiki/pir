@@ -80,6 +80,19 @@ test("sampleRecords is reproducible from (dataset, seed, limit) and never repeat
   assert.equal(new Set(all.map((entry) => entry.index)).size, 50);
 });
 
+test("M0 Iteration 2: a no-limit sample is the whole head-anchorable corpus, not records.length", () => {
+  // The full-corpus round omits --limit; with LEFT rows present the dataset
+  // size (3) and the anchorable size (2) disagree, so sizing the full sample by
+  // records.length used to throw "limit 3 exceeds the head-anchorable dataset
+  // size 2" on the real 2,145/2,134 corpus.
+  const records = [record({ path: "src/a.ts" }), record({ side: "left", path: "src/old.ts" }), record({ path: "src/b.ts" })];
+  const all = sampleRecords(records, { seed: 5 });
+  assert.equal(all.length, 2);
+  assert.deepEqual(all.map((entry) => entry.index).sort((a, b) => a - b), [0, 2]);
+  assert.deepEqual(all.map((entry) => entry.id), sampleRecords(records, { limit: 2, seed: 5 }).map((entry) => entry.id));
+  assert.throws(() => sampleRecords([record({ side: "left" })], { seed: 5 }), /no head-anchorable records/);
+});
+
 test("sampleRecords rejects nonsense limits", () => {
   const records = [record(), record({ path: "b.ts" })];
   assert.throws(() => sampleRecords(records, { limit: 0 }), /positive integer/);

@@ -16,14 +16,15 @@
  * Opt-in eval surface: without PIR_EVAL=1 this exits 0 with a skip notice and
  * touches nothing; importing the module has no side effects.
  */
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { snapshotConfig } from "../run-eval.js";
-import { DEFAULT_CACHE, directoryBytes, ensureFetched, ensureRepoCache, git, gitEnv, readMaterialized } from "./materialize.js";
+import { DEFAULT_CACHE, directoryBytes, ensureRepoCache, git, gitEnv, readMaterialized } from "./materialize.js";
 import { loadMeta, DEFAULT_META } from "./fetch-dataset.js";
 
 const HERE = fileURLToPath(new URL("./", import.meta.url));
@@ -58,11 +59,6 @@ export function buildDigest(distRoot) {
   return hash.digest("hex");
 }
 
-// M1's concurrent driver imports its non-blocking git plumbing from the M0
-// machinery; the implementations live in m1/git-async.js (the M0 driver's own
-// serial loop keeps using the synchronous helpers above unchanged).
-export { ensureFetchedAsync, materializeTaskAsync, releaseTaskAsync } from "./m1/git-async.js";
-
 /** Per-task worktree: detached head checkout, reclaimed after its run. */
 export function materializeTask(repoDir, head, workDir) {
   if (existsSync(workDir)) {
@@ -80,6 +76,60 @@ export function releaseTask(repoDir, workDir) {
   } catch {
     rmSync(workDir, { recursive: true, force: true });
     try { git(repoDir, ["worktree", "prune"]); } catch { /* best effort */ }
+  }
+}
+
+/**
+ * Async twins of the per-task git helpers, for the driver only.
+ *
+ * `git()` in materialize.js is execFileSync: correct for the materializer's
+ * sequential loop, but inside the driver it blocks the whole event loop, so
+ * every worker's checkout serializes against every other worker's — at
+ * full-corpus scale (2,134 comments) that alone is hours of dead time. These
+ * keep the same commands and error contract while letting the workers'
+ * checkouts overlap. The sync originals stay exported for the fixture tests.
+ */
+const execFileAsync = promisify(execFile);
+
+async function gitAsync(cwd, args, { env = process.env, timeoutMs = 600_000 } = {}) {
+  return execFileAsync("git", ["-C", cwd, ...args], {
+    encoding: "utf8", env: gitEnv(env), maxBuffer: 64 * 1024 * 1024, timeout: timeoutMs,
+  });
+}
+
+async function hasCommitAsync(repoDir, sha) {
+  try {
+    await gitAsync(repoDir, ["cat-file", "-e", `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Depth-1 fetch of exactly one commit, without blocking the event loop. */
+export async function ensureFetchedAsync(repoDir, sha, { timeoutMs } = {}) {
+  if (await hasCommitAsync(repoDir, sha)) return { fetched: false };
+  await gitAsync(repoDir, ["fetch", "--depth", "1", "--no-tags", "origin", sha], { timeoutMs });
+  if (!(await hasCommitAsync(repoDir, sha))) throw new Error(`fetched but still missing: ${sha}`);
+  return { fetched: true };
+}
+
+export async function materializeTaskAsync(repoDir, head, workDir) {
+  if (existsSync(workDir)) {
+    rmSync(workDir, { recursive: true, force: true });
+    await gitAsync(repoDir, ["worktree", "prune"]);
+  }
+  mkdirSync(path.dirname(workDir), { recursive: true });
+  await gitAsync(repoDir, ["worktree", "add", "--detach", workDir, head]);
+  return workDir;
+}
+
+export async function releaseTaskAsync(repoDir, workDir) {
+  try {
+    await gitAsync(repoDir, ["worktree", "remove", "--force", workDir]);
+  } catch {
+    rmSync(workDir, { recursive: true, force: true });
+    try { await gitAsync(repoDir, ["worktree", "prune"]); } catch { /* best effort */ }
   }
 }
 
@@ -335,8 +385,8 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       let checkout = null;
       try {
         repoDir = ensureRepoCache(options.cache, task.comment.nwo);
-        ensureFetched(repoDir, task.material.head, { timeoutMs: 600000 });
-        checkout = materializeTask(repoDir, task.material.head, path.join(workRoot, task.id));
+        await ensureFetchedAsync(repoDir, task.material.head, { timeoutMs: 600000 });
+        checkout = await materializeTaskAsync(repoDir, task.material.head, path.join(workRoot, task.id));
       } catch (error) {
         const message = `materialize: ${error?.message ?? error}`;
         console.error(`ERROR ${task.id} ${message}`);
@@ -380,7 +430,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
           console.error(`OK ${arm} ${task.id} decision=${row.decision}${row.verdict ? ` verdict=${row.verdict}` : ""}${row.confidence === null ? "" : ` confidence=${row.confidence}`} ${row.wallTimeMs}ms tokens=${row.usage?.totalTokens ?? "?"}`);
         }
       }
-      releaseTask(repoDir, checkout);
+      await releaseTaskAsync(repoDir, checkout);
       summary.tasks.push(taskRow);
       flush();
     };
