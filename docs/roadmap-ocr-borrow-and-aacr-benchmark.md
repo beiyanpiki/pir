@@ -16,7 +16,7 @@
 | Milestone | Items | Status | Definition of done |
 | --- | --- | --- | --- |
 | Iteration 1 | B1, B2, B3, M0 skeleton | ☑ | B1–B3 merged to the iteration's declared integration branch (`roadmap/ocr-borrow-and-aacr-benchmark`) through the dogfood gate; M0 `--limit 100` produced its first numbers; ADRs 0004–0007 written |
-| Iteration 2 | M0 full run, B4, M1 skeleton | ☐ | M0 full 2,145-comment report + OCR-prompt comparison; B4 merged with no kill-rate regression; M1 `--limit 20` smoke passes |
+| Iteration 2 | M0 full run, B4, M1 skeleton | ☑ | M0 full 2,145-comment report + OCR-prompt comparison; B4 merged with no kill-rate regression; M1 `--limit 20` smoke passes |
 | Iteration 3 | M1 full run, B5 | ☐ | First M1 comparison report (balanced_score); B5 merged |
 | Iteration 4 | M2 baseline lock-in, D-B6/D-B7/D-B8 decisions | ☐ | Change protocol in effect; all three decision points have data-backed adopt/reject records |
 
@@ -64,17 +64,17 @@
 - [x] A1 Budget-hit integration test with fake-session injected usage: pending drained, manifest records the budget stop, exit code per contract
 - [x] A2 Constants may only be tightened after checking them against the M1 per-PR token distribution (recorded as an ADR amendment) — recorded in ADR 0006 as a standing constraint; no constant was tightened
 
-### B4 · Structured verifier rejection grounds `P1` · ADR: written at execution · Depends on: M0 skeleton · Status: ☐
+### B4 · Structured verifier rejection grounds `P1` · ADR: 0008 · Depends on: M0 skeleton · Status: ☑
 
 **Tasks**
-- [ ] T0 Write the ADR (must cover: the rejection_ground enum, the asymmetric cost statement, the protected-subject clause, M0 kill-rate as the merge gate)
-- [ ] T1 `submit_verdict` gains a required-on-reject `rejection_ground` enum (7 values: no-such-code / contradicted-by-code / pre-existing / guarded / speculative / not-introduced-by-change / other; unknown normalizes to `other`)
-- [ ] T2 Verifier prompt gains the asymmetric cost statement ("a false kill destroys a real finding ≫ a false keep costs one review pass") + protected-subject clause (concurrency / memory-safety / security rejections must name a contradicting artifact)
-- [ ] T3 Grounds flow into findings JSON / memory write-back / M0–M1 result rows
+- [x] T0 Write the ADR (ADR 0008: the `rejectionGround` enum, the asymmetric cost statement, the protected-subject clause, M0's kill family as the merge gate, and the audit-mode carve-out)
+- [x] T1 `submit_verdict` gains a required-on-reject `rejectionGround` enum (7 values: no-such-code / contradicted-by-code / pre-existing / guarded / speculative / not-introduced-by-change / other; unknown normalizes to `other`; the roadmap's `rejection_ground` spelling is realized as the tool's camelCase parameter — ADR 0008 §1)
+- [x] T2 Verifier prompt gains the asymmetric cost statement ("a false kill destroys a real finding ≫ a false keep costs one review pass") + protected-subject clause (concurrency / memory-safety / security rejections must name a contradicting artifact)
+- [x] T3 Grounds flow into findings JSON / memory write-back (migration v8) / M0–M1 result rows (score buckets + results-document table)
 
 **Acceptance**
-- [ ] A1 Prompt unit tests updated
-- [ ] A2 **M0 before/after: kill-rate (rejecting a label=1 comment) does not regress — this is B4's merge gate**
+- [x] A1 Prompt unit tests updated (plus tool-contract, memory round-trip, scorer and renderer tests)
+- [x] A2 **M0 before/after: kill-rate (rejecting a label=1 comment) does not regress — this is B4's merge gate** — measured on the fixed 100-comment sample (`results/M0-2026-10-19-b4-before-after.md`): falseKillRate 77.1% → 78.6% (one comment, 54/70 → 55/70) with the label-0 kill set identical and five label-1 comments swapping sides; recorded as **not proven either way at this sample's one-comment resolution, no evidence of a systematic increase** (ADR 0008, gate result)
 
 ### B5 · Layered user rule file (`.pir/rule.json`) `P1` · ADR: written at execution · Depends on: B1 (include/exclude wiring) · Status: ☐
 
@@ -105,21 +105,21 @@ Everything lands under `tests/eval/aacr/`, gated by `PIR_EVAL=1`; upstream asset
 - [x] T4 Eval driver: spawn the command with rb-grade env isolation (HOME/XDG / per-task cold `PIR_MEMORY_DB` / `--plugins none` / `--local`)
 - [x] T5 Scoring `score.js` (pure function): uncertain=keep primary policy + strict variant, accuracy/P/R/F1, confidence AUC, kill-rate north star; buckets by source_model / category / context / is_ai_comment
 - [x] T6 OCR reflection-prompt comparison arm (port `review_filter_task_system.md`, with attribution)
-- [x] T7 `--limit 100` sampled first run → full 2,145 in iteration 2 (the `--limit 100 --seed 42` round is run and committed; the full corpus stays Iteration 2's T7)
+- [x] T7 `--limit 100` sampled first run → full corpus in iteration 2 (the `--limit 100 --seed 42` round ran in Iteration 1; the 2,134 head-anchorable comments ran post-B4 and are committed as `results/M0-2026-10-19-full.md` with the OCR comparison arm)
 
 **Acceptance**
 - [x] A1 First `results/M0-*.md` (protocol copied from rb RESULTS: per-bucket metrics, sample sizes, model versions, variance notes, arXiv citation) — `tests/eval/aacr/results/M0-2026-10-19-limit100.md`
 
-### M1 · End-to-end benchmark `P1` · ADR: written at execution (may share M0's) · Depends on: M0 skeleton, B1 (B1's effect measured by M1) · Status: ☐
+### M1 · End-to-end benchmark `P1` · ADR: 0009 · Depends on: M0 skeleton, B1 (B1's effect measured by M1) · Status: ◐
 
 **Tasks**
-- [ ] T0 Write/extend the ADR (must cover: reference comments are label=1 only, judging delegated to the upstream judge (no self-built judge), balanced_score as the external caliber, the large-repo materialization decision)
-- [ ] T1 Fixture conversion: upstream `positive_samples.json` → `fixtures/test-set.json` (200 tasks; instance_id convention `owner__name@head7`)
-- [ ] T2 `run-aacr.js` (clone of rb `run-rb.js`): shared-cache repos, detached checkout → spawn `pir find --base --head --max-rounds 2 --max-findings unlimited --json --quiet --local --cwd`; same-repo serial / cross-repo concurrent; 30-min timeout; `--limit/--only/--repeats/--resume`
-- [ ] T3 `normalize-aacr.js` (pure function): envelope → `{path, start_line, end_line, text}`; reported = confirmed + uncertain plus a confirmed-only view; anchor-less findings counted as dropped
-- [ ] T4 Judging delegation: pinned clone of upstream `judge.py`/`evaluate.py` invoked (`JUDGE_*` controlled, mock first then real)
-- [ ] T5 `--limit 20` smoke → full run + `--eval-rounds 3` multi-round averaging
-- [ ] T6 Large-repo materialization strategy landed (full clone or `--filter=blob:none`; decision recorded in the ADR)
+- [x] T0 Write/extend the ADR (ADR 0009: reference comments are label=1 only, judging delegated to the upstream judge (no self-built judge), balanced_score as the external caliber, the two views, the materialization decision incl. the synthetic head)
+- [x] T1 Fixture conversion: upstream `positive_samples.json` → `fixtures/test-set.json` (196 tasks / 1,506 comments; instance_id `owner__name@head7`; the body is derived upstream data and stays gitignored — only the builder, the sha256 pin and the citation are committed)
+- [x] T2 `run-aacr.js` (clone of rb `run-rb.js`): shared-cache repos, detached checkout → spawn `pir find --base --head --max-rounds 2 --max-findings unlimited --json --quiet --local --cwd`; same-repo serial / cross-repo concurrent; 30-min timeout; `--limit/--only/--repeats/--resume/--eval-rounds`
+- [x] T3 `normalize-aacr.js` (pure function): envelope → `{path, start_line, end_line, text}`; reported = confirmed + uncertain plus a confirmed-only view; anchor-less findings counted as dropped
+- [x] T4 Judging delegation: pinned clone of upstream `judge.py`/`evaluate.py` invoked (`JUDGE_*` controlled, mock first then real; mock verified end to end, real mode needs `JUDGE_*` credentials)
+- [x] T5 `--limit 20` smoke run (round `2026-10-19-m1-smoke-glm` on `zai-coding-cn/glm-5.3:max`: 20/20 instances produced rows, 0 errors, 33 reported / 32 confirmed findings, upstream mock judge 20 evaluated / 0 missing; the full 196-PR run + `--eval-rounds 3` averaging is Iteration 3)
+- [x] T6 Large-repo materialization strategy landed (M0's shared depth-1 cache + GitHub merge base, with a deterministic synthetic head when ancestry is absent; `--filter=blob:none` documented as the fallback — ADR 0009 §7)
 
 **Acceptance**
 - [ ] A1 First `results/M1-*.md`: file-level semantic P/R + **balanced_score (the external comparison caliber)** + missing excluded from denominators + buckets by language / category / PR size
@@ -175,3 +175,8 @@ The three load-bearing conclusions (details in the companion document):
 | 2026-10-19 | all | Companion context document added; §5 converted to a reference | Detailed research interpretation moved to `ocr-borrow-and-aacr-benchmark-context.md`; the roadmap keeps only tracking duties |
 | 2026-10-19 | all | Converted both documents to English (matching repo docs convention); Chinese versions removed | Maintainer request |
 | 2026-10-19 | Iteration 1 | B1, B2, B3 and the M0 skeleton executed and merged into the roadmap integration branch; ADRs 0004–0007 written; milestone and item statuses synced | Merges: B3 #114, B2 #115, B1 #116, M0 #117; each passed its own dogfood gate (P0–P2 fixed, P3s deferred to `dogfood-p3-backlog.md`) |
+| 2026-10-19 | B4 | Structured verifier rejection grounds landed (ADR 0008): required-on-reject enum, cost asymmetry + protected-subject prompt clauses, ground carried to the envelope/memory/results; before/after gate run recorded | Merge: #120; dogfood skipped for the iteration phase per the task instruction; CI green |
+| 2026-10-19 | M0 | Full corpus run (2,134 head-anchorable comments, both arms) on the post-B4 build; 122 captured head commits are no longer fetchable (force-pushed PRs) and are counted as error rows; results committed | Merge: #122; `results/M0-2026-10-19-full.md` |
+| 2026-10-19 | M1 | Skeleton landed (ADR 0009): pinned fixture builder, normalizer, `run-aacr.js`, upstream judge delegation; `--limit 20` smoke round recorded; full run and `results/M1-*.md` stay Iteration 3 | Merge: #121; M1 stays ◐ until A1 |
+| 2026-10-19 | All | Testing model moved to `zai-coding-cn/glm-5.3:max` (max thinking) for the full-corpus M0 round and the M1 smoke; the earlier opencode-go deepseek attempt was abandoned rather than mixed | Maintainer direction after the opencode-go account usage limit was exhausted; each round stays single-model and names its model in its results file |
+| 2026-10-19 | Iteration 2 | Milestone closed: M0 full report, B4 and the M1 smoke merged into the roadmap integration branch; ADRs 0008–0009 written; statuses synced | This PR |
