@@ -2,11 +2,11 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
+**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of the OCR-borrow series, Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
 
 ## Context
 
-D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The roadmap deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The research document also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson) — see the companion context §3 (context-slicing row, deliberate non-borrowings).
+D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The roadmap deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The research document also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson).
 
 The trigger is a conjunction of two measurements on material that M1's population can actually contain. Both were checked against the data available at Iteration 4.
 
@@ -51,8 +51,6 @@ The decision is a *reject*, not a permanent foreclosure. If reopened, the roadma
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
-- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (context-slicing row, deliberate non-borrowings).
 - Measurement sources: [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md); M1 fixture pin in [`tests/eval/aacr/meta.json`](../../tests/eval/aacr/meta.json); parked round per-PR data in RESULTS Appendix A; local run manifests under `~/.local/state/pir` (machine-local, not committed).
 - Related ADRs: [0003](0003-findings-quality-roadmap.md) (C1 coverage ledger), [0006](0006-default-token-budget-with-grace.md) (B3 default budget), [0009](0009-m1-end-to-end-benchmark.md) (M1 and its §11 M2 amendment).
 
