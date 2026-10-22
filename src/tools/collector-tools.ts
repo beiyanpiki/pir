@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { buildIdentity } from "../findings/identity.js";
 import { FINDING_CATEGORIES, REJECTION_GROUNDS, type AnchorLineCorrection, type CandidateFinding, type DecisionAssessment, type RejectionGround, type VerifierResult } from "../findings/types.js";
 import { locateSnippetExcerpt } from "../findings/snippet-locate.js";
+import { duplicateMatch, type DuplicateMatch } from "../findings/dedup.js";
 import type { ReviewTool } from "../agents/types.js";
 import { matchIssueHistory } from "../memory/retrieval.js";
 import { readReviewFile, safeResolve, type ToolContext } from "./context.js";
@@ -38,11 +39,59 @@ const MAX_ANCHOR_EXCERPT = 4000;
 export interface CandidateCollector {
   candidates: CandidateFinding[];
   /**
+   * Prior-round knowledge the duplicate hint compares against (ADR-0014).
+   * Read-only by contract: the tool never mutates it, never adds this round's
+   * output to it, and never runs dedup against it. Absent means "no earlier
+   * rounds", which is also the case for every angle session of round 1.
+   */
+  known?: readonly CandidateFinding[];
+  /**
    * Optional tap for the `line-corrected` observability event (roadmap B2).
    * Fired once per anchor whose excerpt located locally, and only after the
    * whole candidate validated — a rejected submission never reports one.
    */
   onLineCorrected?: (correction: AnchorLineCorrection) => void;
+}
+
+interface DuplicateOverlap {
+  of: CandidateFinding;
+  match: DuplicateMatch;
+}
+
+/**
+ * Read-only overlap lookup for the `record_candidate` duplicate hint
+ * (ADR-0014). The baseline is prior-round knowledge plus this session's own
+ * earlier candidates, in that order — the same order dedup scans. A parallel
+ * angle session's same-round candidates are deliberately invisible here: the
+ * supervisor's cross-angle pass stays the only place those collapse.
+ *
+ * The predicate is the exact rule dedup applies against prior-round knowledge,
+ * so the hint can never promise a different outcome than dedup produces.
+ */
+function findOverlap(candidate: CandidateFinding, collector: CandidateCollector): DuplicateOverlap | undefined {
+  for (const existing of collector.known ?? []) {
+    const match = duplicateMatch(candidate, existing);
+    if (match) return { of: existing, match };
+  }
+  for (const existing of collector.candidates) {
+    const match = duplicateMatch(candidate, existing);
+    if (match) return { of: existing, match };
+  }
+  return undefined;
+}
+
+/**
+ * Visibility-only wording (ADR-0014): the candidate was already accepted and
+ * stored, and the sentence says exactly that. It never claims the finding will
+ * not count, never asks for fewer findings, and never blocks the submission —
+ * a materially different defect is still welcome as long as the difference is
+ * stated. Severity stays the model's own call; a more severe occurrence still
+ * survives dedup as before.
+ */
+function duplicateNotice(overlap: DuplicateOverlap): string {
+  const id = overlap.of.displayId ?? "an earlier candidate";
+  const criterion = overlap.match === "fingerprint" ? "fingerprint" : "claim similarity";
+  return `Accepted and recorded for deduplication. It overlaps an existing finding (${id}) by ${criterion}. If it is materially different, state the difference in the claim/trigger. Do not resubmit the same finding.`;
 }
 
 /** Anchor location resolution: the pinned path plus the range to use. */
@@ -183,10 +232,19 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           displayId, title, claim, trigger, category, severity, featureKey, entityKey, anchors, evidence, round,
           identity: buildIdentity({ featureKey, entityKey, category, claim, trigger }),
         };
+        // ADR-0014: looked up before the push so the candidate never matches
+        // itself, and only after full validation so a rejected submission
+        // reports no hint and leaves the collector untouched.
+        const overlap = findOverlap(candidate, collector);
         collector.candidates.push(candidate);
         for (const correction of corrections) collector.onLineCorrected?.(correction);
         seq += 1;
-        return { text: `Recorded candidate ${displayId}: ${title}` };
+        const recorded = `Recorded candidate ${displayId}: ${title}`;
+        if (!overlap) return { text: recorded };
+        return {
+          text: `${recorded}\n${duplicateNotice(overlap)}`,
+          ...(overlap.of.displayId === undefined ? {} : { duplicateOf: overlap.of.displayId }),
+        };
       } catch (error) { return errorOutput(error); }
     },
   };

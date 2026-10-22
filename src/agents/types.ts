@@ -9,6 +9,13 @@ export interface AgentToolOutput {
   text: string;
   /** When true the agent run ends after this tool call. */
   terminate?: boolean;
+  /**
+   * Set by `record_candidate` when the recorded candidate overlaps a known
+   * finding (ADR-0014): the overlapped candidate's runtime id. Visibility only —
+   * the candidate is stored exactly as before, and the session factory never
+   * forwards this field to the model.
+   */
+  duplicateOf?: string;
 }
 
 export interface ReviewTool {
