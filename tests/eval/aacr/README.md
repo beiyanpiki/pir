@@ -17,7 +17,7 @@ tests/eval/aacr/
   materialize.js          T2: shared clone cache (depth 1) -> per-comment diff + head file -> intermediate JSONL
   run-m0.js               T4: spawn `pir _verify-comment` per comment per arm with rb-grade isolation
   score.js                T5: pure scoring (policies, accuracy/P/R/F1, AUC, kill-rate, buckets, rejection grounds)
-  report.js               A1: results document renderer (protocol, per-bucket tables, citation, optional before/after baseline)
+  report.js               A1: results document renderer (protocol, per-bucket tables, session usage, citation, optional before/after baseline)
   fixtures/
     build-fixture.js      M1 T1: pin-verified positive_samples.json -> fixtures/test-set.json
     test-set.json         gitignored: derived fixture body (one row per PR)
@@ -164,7 +164,7 @@ Model-free: it reads the round's `summary.json` and the upstream `eval_res` of e
 
 ## Scoring in one paragraph
 
-Label 1 = the comment is correct (should survive), label 0 = incorrect (should be intercepted). Primary policy **uncertain = keep**: `confirmed` and `uncertain` count as keeps, only `rejected` kills; the strict policy **uncertain = miss** is reported beside it and credits an uncertain verdict in neither direction. **killRate** (label-0 comments intercepted) is the north-star metric, **falseKillRate** (label-1 comments destroyed) is its cost side and B4's merge gate, **interceptPrecision** says how much of what was killed was actually noise. Accuracy/precision/recall/F1 are over keeps; AUC ranks the verifier's confidence. Buckets: `source_model`, `category`, `context`, `is_ai_comment`. Error rows and unresolved verdicts count as misses — never as silent exclusions.
+Label 1 = the comment is correct (should survive), label 0 = incorrect (should be intercepted). Primary policy **uncertain = keep**: `confirmed` and `uncertain` count as keeps, only `rejected` kills; the strict policy **uncertain = miss** is reported beside it and credits an uncertain verdict in neither direction. **killRate** (label-0 comments intercepted) is the north-star metric, **falseKillRate** (label-1 comments destroyed) is its cost side and B4's merge gate, **interceptPrecision** says how much of what was killed was actually noise. Accuracy/precision/recall/F1 are over keeps; AUC ranks the verifier's confidence. Buckets: `source_model`, `category`, `context`, `is_ai_comment`. Error rows and unresolved verdicts count as misses — never as silent exclusions. Token usage is summed per arm from the CLI result's `usage` (rows without usage are counted, never assumed zero-cost), so a comparison that pre-registers output tokens — the S1 field-order experiment, ADR 0015 — reads them from the same document as the verdict metrics.
 
 ## Data materialization, honestly stated
 

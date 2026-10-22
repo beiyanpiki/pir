@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 
-import { bucketize, classify, confidenceAuc, isNoVerdict, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY } from "../eval/aacr/score.js";
+import { bucketize, classify, confidenceAuc, isNoVerdict, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY, usageSummary } from "../eval/aacr/score.js";
 import { assertComparableRuns, deltaText, parseOptions as reportOptions, renderResultsMd } from "../eval/aacr/report.js";
 
 const verifierRow = (over = {}) => ({
@@ -330,4 +330,53 @@ test("B4: an identical build on both sides is called out, not read as evidence",
   const distinct = renderResultsMd({ run: { ...run, cli: { ...run.cli, buildSha256: "c".repeat(64) } }, scores, baseline: { run, scores } });
   assert.ok(!distinct.includes("same build digest"));
   assert.match(distinct, /− `bbbbbbbb`|\| − bbbbbbbb \|/);
+});
+test("M0 S1: usage is summed per arm and a missing usage is counted, never assumed zero-cost", () => {
+  const rows = [
+    verifierRow({ id: "a", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } }),
+    verifierRow({ id: "b", usage: { inputTokens: 50, outputTokens: 11, totalTokens: 500 } }),
+    verifierRow({ id: "c" }),
+    ocrRow({ id: "d", usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } }),
+  ];
+  const scores = scoreRun(rows);
+  assert.deepEqual(scores.arms.verifier.usage, {
+    rowsWithUsage: 2, inputTokens: 150, outputTokens: 31, totalTokens: 1500,
+    outputTokensPerRow: 16, totalTokensPerRow: 750,
+  });
+  assert.equal(scores.arms.ocr.usage.rowsWithUsage, 1);
+  // No usage anywhere: the means stay null rather than becoming a zero row.
+  assert.deepEqual(usageSummary([]), {
+    rowsWithUsage: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0,
+    outputTokensPerRow: null, totalTokensPerRow: null,
+  });
+});
+
+const usageRun = {
+  round: "2026-10-22-m0", model: "zai-coding-cn/glm-5.3:max",
+  dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
+  sample: { limit: 100, seed: 42, digest: "d".repeat(64), eligible: 100 },
+  cli: { sha256: "a".repeat(64), buildSha256: "a".repeat(64) },
+  limits: { arms: ["verifier"], concurrency: 8, timeoutMs: 600000, cache: "/tmp/cache" },
+  config: { model: "m", thinking: "max" }, startedAt: "2026-10-22T00:00:00.000Z", finishedAt: "2026-10-22T01:00:00.000Z", cacheBytes: 1024,
+};
+
+test("M0 S1: the results document records session usage and omits the section when no row reports it", () => {
+  const withUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]) });
+  assert.match(withUsage, /## Session usage/);
+  assert.match(withUsage, /\| verifier \| 1 \| 100 \| 20 \| 1,000 \| 20 \| 1,000 \|/);
+  const withoutUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({})]) });
+  assert.ok(!withoutUsage.includes("## Session usage"));
+});
+
+test("M0 S1: the before/after section compares output tokens per side when both report usage", () => {
+  const beforeRun = { ...usageRun, round: "before", cli: { sha256: "b".repeat(64), buildSha256: "b".repeat(64) } };
+  const scores = scoreRun([verifierRow({ usage: { inputTokens: 200, outputTokens: 40, totalTokens: 2000 } })]);
+  const baselineScores = scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]);
+  const markdown = renderResultsMd({ run: usageRun, scores, baseline: { run: beforeRun, scores: baselineScores } });
+  assert.match(markdown, /\*\*Session usage \(both sides\)\.\*\*/);
+  assert.match(markdown, /\| − `bbbbbbbb` \| verifier \| 1 \| 100 \| 20 \| 1,000 \| 20 \|/);
+  assert.match(markdown, /\| \+ `aaaaaaaa` \| verifier \| 1 \| 200 \| 40 \| 2,000 \| 40 \|/);
+  // One side without usage: no comparison table at all, rather than a half row.
+  const oneSided = renderResultsMd({ run: usageRun, scores, baseline: { run: beforeRun, scores: scoreRun([verifierRow({})]) } });
+  assert.ok(!oneSided.includes("Session usage (both sides)"));
 });
