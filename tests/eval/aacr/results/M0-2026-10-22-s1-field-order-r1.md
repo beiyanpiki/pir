@@ -163,7 +163,7 @@ A ground is the reason a rejected verdict named (ADR-0008). The distribution is 
 
 ## Notes and limits
 
-- Intervention: the + build declares rationale before verdict in submit_verdict, the − build is the shipped order (verdict first). The only source difference is one line in src/tools/collector-tools.ts, quoted in [ADR 0015](../../../docs/adr/0015-tool-schema-field-order-diagnostic.md); the two dist digests differ by exactly that line.
+- Intervention: the + build declares rationale before verdict in submit_verdict, the − build is the shipped order (verdict first). The only source difference is one line in src/tools/collector-tools.ts, quoted in [ADR 0015](../../../../docs/adr/0015-tool-schema-field-order-diagnostic.md); the two dist digests differ by exactly that line.
 - Repeat 1 of 2 per side on the fixed sample; the other pair is [M0-2026-10-22-s1-field-order-r2.md](M0-2026-10-22-s1-field-order-r2.md). This document is one point comparison, not a variance floor: both repeats are read together in ADR 0015, where the adoption decision is recorded.
 - Caliber (roadmap R2): the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for M0.
 - Diff base: every scored row used the GitHub merge base (ADR-0007 §7); no degraded base-tip rows.
