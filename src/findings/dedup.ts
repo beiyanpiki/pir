@@ -11,6 +11,32 @@ export interface DedupResult {
 
 const NEAR_DUP_THRESHOLD = 0.82;
 
+/** Which rule matched: the identity fingerprint, or a near-identical claim. */
+export type DuplicateMatch = "fingerprint" | "claim";
+
+/**
+ * The overlap rule itself, read-only and pure, shared by the dedup pass and the
+ * `record_candidate` duplicate hint (ADR-0014) so the two can never drift:
+ * an exact fingerprint wins first; otherwise the candidates must share the same
+ * entityKey, pass the category gate, and have claims at or above
+ * `NEAR_DUP_THRESHOLD` similarity.
+ *
+ * `dropCategoryGate` is the cross-angle relaxation F1 applies to candidates of
+ * the same batch (parallel specialized sessions label one defect with their own
+ * category). Prior-round knowledge is never relaxed, and the hint never uses it.
+ */
+export function duplicateMatch(
+  candidate: CandidateFinding,
+  existing: CandidateFinding,
+  opts?: { dropCategoryGate?: boolean },
+): DuplicateMatch | undefined {
+  if (existing.identity.fingerprint === candidate.identity.fingerprint) return "fingerprint";
+  if (!existing.entityKey && !candidate.entityKey) return undefined;
+  if ((existing.entityKey ?? "") !== (candidate.entityKey ?? "")) return undefined;
+  if (!opts?.dropCategoryGate && existing.category !== candidate.category) return undefined;
+  return claimSimilarity(existing.identity.normalizedClaim, candidate.identity.normalizedClaim) >= NEAR_DUP_THRESHOLD ? "claim" : undefined;
+}
+
 /**
  * Deduplicate candidates within a round and against everything accumulated in
  * previous rounds. Exact fingerprint match first; then near-duplicate check on
@@ -50,20 +76,11 @@ export function deduplicateCandidates(
     let dup: CandidateFinding | undefined;
     let dupBatchPeer = false;
     for (const s of seen) {
-      if (s.identity.fingerprint === candidate.identity.fingerprint) {
-        dup = s;
-        dupBatchPeer = crossAngle && !known.includes(s);
-        break;
-      }
-      if (!(!!s.entityKey || !!candidate.entityKey)) continue;
-      if ((s.entityKey ?? "") !== (candidate.entityKey ?? "")) continue;
       const batchPeer = crossAngle && !known.includes(s);
-      if (!batchPeer && s.category !== candidate.category) continue;
-      if (claimSimilarity(s.identity.normalizedClaim, candidate.identity.normalizedClaim) >= NEAR_DUP_THRESHOLD) {
-        dup = s;
-        dupBatchPeer = batchPeer;
-        break;
-      }
+      if (!duplicateMatch(candidate, s, { dropCategoryGate: batchPeer })) continue;
+      dup = s;
+      dupBatchPeer = batchPeer;
+      break;
     }
     if (!dup) {
       groupOf.set(candidate, fresh.length);
