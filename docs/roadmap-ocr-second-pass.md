@@ -151,7 +151,7 @@ Do not claim "will not count". Do not block submission.
 
 ---
 
-### S1 · Tool-schema order: diagnostic, then a small experiment · P2 · evidence: `hypothesis` · ADR: written at execution · Status: ☐
+### S1 · Tool-schema order: diagnostic, then a small experiment · P2 · evidence: `hypothesis` · ADR: [0015](adr/0015-tool-schema-field-order-diagnostic.md) · Status: ◐
 
 **Why.** [`submit_verdict`](../src/tools/collector-tools.ts#L288-L299) declares `verdict` first and
 `rationale` second. OCR's filter tools deliberately put `analysis` before `comment_ids` and record that session
@@ -171,8 +171,8 @@ Do not change field names or semantics.
 
 **Tasks**
 
-- [ ] **T0 Write the ADR.** Record the hypothesis, the expected direction, the provider caveat and the stop rule.
-- [ ] **T1 Diagnostic.** Add a model-free test that asserts the property order of `submit_verdict.parameters`;
+- [x] **T0 Write the ADR.** Record the hypothesis, the expected direction, the provider caveat and the stop rule.
+- [x] **T1 Diagnostic.** Add a model-free test that asserts the property order of `submit_verdict.parameters`;
       if the SDK exposes a payload/session tap, capture the actual provider tool schema; otherwise use a local
       mock endpoint once. Document the result.
 - [ ] **T2 M0 experiment.** Fixed 100-comment sample, **at least two repeats per side**, same model and build
@@ -406,6 +406,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | all | Priority revised after review: S5 first, S1 as diagnostic + experiment; background and per-file attention separated; audit resume reduced to discovery; SARIF/rules check moved to Track B | Corrected over-claims: schema order is a hypothesis, the ≥500 bucket is 4 PRs, audit resume demand is unproven, and M0 percentages do not prove cost or online behavior |
 | 2026-10-22 | all | Iteration labels renamed (Iteration 1–4) to avoid collision with the M1 benchmark; ADR numbering fixed at 0014; deletion checklist added | Drafting hygiene; keeps the tracker unambiguous while it exists |
 | 2026-10-22 | S5 | Shipped: optional visibility-only duplicate hint in `record_candidate` (ADR 0014), shared `duplicateMatch` predicate, strict prior-round baseline; no dedup/reporting change | Iteration 1 contract clarity |
+| 2026-10-22 | S1 | [ADR 0015](adr/0015-tool-schema-field-order-diagnostic.md) accepted (diagnostic only); T0/T1 done — declared and captured wire order both assert `verdict, rationale, …`, and the repeat protocol is pre-registered | Diagnostic first: the reorder stays undecided until the Iteration 2 M0 comparison |
 
 ---
 
