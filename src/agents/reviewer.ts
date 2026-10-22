@@ -109,6 +109,12 @@ export interface ReviewerDeps {
   languageGuidance?: string;
   /** Rendered PROJECT RULES section (B5/ADR-0010); absent when no rule applies. */
   projectRules?: string;
+  /**
+   * ADR-0014: prior-round candidates this session's duplicate hint compares
+   * against. A snapshot is taken here, so knowledge accumulated later in the
+   * run (including this round's own output) can never leak into the hint.
+   */
+  known?: readonly CandidateFinding[];
   /** Audit mode: current-state review of one work unit (no diff attribution). */
   audit?: ReviewerAuditScope;
   /** Live observation tap for this round's session (web UI). */
@@ -123,6 +129,9 @@ export interface ReviewerDeps {
 export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoundResult> {
   const collector: CandidateCollector = {
     candidates: [],
+    // ADR-0014: the hint baseline is prior-round knowledge as of round start,
+    // read-only; the collector's own candidates are added by the tool itself.
+    ...(deps.known && deps.known.length > 0 ? { known: [...deps.known] } : {}),
     // B2: surface excerpt-driven anchor overrides on the live event channel.
     ...(deps.onSessionEvent ? { onLineCorrected: (correction) => deps.onSessionEvent!.lineCorrected(correction) } : {}),
   };
