@@ -116,7 +116,7 @@ de-emphasises that category (Q1 blacklist / F1 angles), so no single interventio
 
 ## 3. Items
 
-### S5 · Visible duplicate feedback in `record_candidate` · P1 · evidence: `code fact` · ADR: written at execution · Status: ☐
+### S5 · Visible duplicate feedback in `record_candidate` · P1 · evidence: `code fact` · ADR: [0014](adr/0014-duplicate-feedback-in-record-candidate.md) · Status: ☑
 
 **Why.** [`record_candidate`](../src/tools/collector-tools.ts#L182-L189) validates and pushes every candidate,
 then returns `Recorded candidate F-X`. Duplicates are resolved later by
@@ -130,22 +130,22 @@ Do not claim "will not count". Do not block submission.
 
 **Tasks**
 
-- [ ] **T0 Write the ADR.** Define the comparison boundary: prior-round `state.known` plus the same reviewer
+- [x] **T0 Write the ADR.** Define the comparison boundary: prior-round `state.known` plus the same reviewer
       session's collector; cross-angle and same-round other-session duplicates stay supervisor-only. State that
       the hint is visibility-only and severity upgrades are preserved.
-- [ ] **T1 Wording.** Use a sentence that keeps the candidate actionable, e.g.:
+- [x] **T1 Wording.** Use a sentence that keeps the candidate actionable, e.g.:
       `Accepted and recorded for deduplication. It overlaps an existing finding (F-12) by fingerprint/claim.
       If it is materially different, state the difference in the claim/trigger. Do not resubmit the same finding.`
-- [ ] **T2 Implementation.** Optional `duplicateOf` hint on the tool result, computed from a read-only known set;
+- [x] **T2 Implementation.** Optional `duplicateOf` hint on the tool result, computed from a read-only known set;
       no new required tool parameter, no dedup call inside the tool, no cross-angle state.
-- [ ] **T3 Tests.** Exact fingerprint, near-duplicate (entity + claim similarity), severity upgrade, no known set,
+- [x] **T3 Tests.** Exact fingerprint, near-duplicate (entity + claim similarity), severity upgrade, no known set,
       cross-angle not visible, and "hint does not suppress the candidate".
 
 **Acceptance**
 
-- [ ] A1 Unit tests cover the boundary and the wording invariants.
-- [ ] A2 Dedup, displayId and reporting counts are byte-identical to the current behaviour when no hint fires.
-- [ ] A3 Dogfood shows no padding and no premature stop on a case with a genuine severity upgrade.
+- [x] A1 Unit tests cover the boundary and the wording invariants.
+- [x] A2 Dedup, displayId and reporting counts are byte-identical to the current behaviour when no hint fires.
+- [x] A3 Dogfood shows no padding and no premature stop on a case with a genuine severity upgrade.
 
 **Decision rule.** Merge on A1–A3; no model A/B required.
 
@@ -405,6 +405,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | all | Roadmap created as a temporary tracker; will be deleted once items close and ADRs absorb the content | Second OCR deep dive; first series B1–B5 retired |
 | 2026-10-22 | all | Priority revised after review: S5 first, S1 as diagnostic + experiment; background and per-file attention separated; audit resume reduced to discovery; SARIF/rules check moved to Track B | Corrected over-claims: schema order is a hypothesis, the ≥500 bucket is 4 PRs, audit resume demand is unproven, and M0 percentages do not prove cost or online behavior |
 | 2026-10-22 | all | Iteration labels renamed (Iteration 1–4) to avoid collision with the M1 benchmark; ADR numbering fixed at 0014; deletion checklist added | Drafting hygiene; keeps the tracker unambiguous while it exists |
+| 2026-10-22 | S5 | Shipped: optional visibility-only duplicate hint in `record_candidate` (ADR 0014), shared `duplicateMatch` predicate, strict prior-round baseline; no dedup/reporting change | Iteration 1 contract clarity |
 
 ---
 
