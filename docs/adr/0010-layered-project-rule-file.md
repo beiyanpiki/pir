@@ -2,9 +2,8 @@
 
 ## Status
 
-**Accepted (2026-10-20).** Roadmap item B5 of
-`docs/roadmap-ocr-borrowings.md` (borrow track, P1) in
-Iteration 3. A repository (or a user, or a single invocation) can declare
+**Accepted (2026-10-20).** Item B5 of the 2026-10 OCR-borrow series (P1)
+in Iteration 3. A repository (or a user, or a single invocation) can declare
 path-scoped review guidance in a small JSON rule file; find injects the
 guidance that actually applies to the reviewed paths into the reviewer
 prompt, records a canonical hash of it in the run manifest, and lets
@@ -27,8 +26,7 @@ user-authored path guidance:
 - **Feedback decisions** (`pir feedback`) are per-finding verdicts, not
   general guidance.
 
-OCR's rules system fills exactly that gap
-(`docs/ocr-borrowings-context.md` §1.3): four layers
+OCR's rules system fills exactly that gap: four layers
 (`--rule` > repo `.opencodereview/rule.json` > global `~/.opencodereview/rule.json`
 > built-in), `rules:[{path, rule, merge_system_rule}]` plus include/exclude,
 declaration order as match priority, guidance file references read as
@@ -64,7 +62,7 @@ ordering would make prompt diffs and the manifest hash unstable.
    the rules in declaration order: the first rule whose `path` glob matches
    wins. A lower layer can still cover files the higher layers do not match,
    and two layers never merge into one rule for one file.
-2. **Schema (camelCase, per the repository's JSON convention; the roadmap's
+2. **Schema (camelCase, per the repository's JSON convention; the series'
    `merge_builtin` spelling is realized as `mergeBuiltin`, the same mapping
    B4 recorded for `rejection_ground`).**
 
@@ -198,8 +196,6 @@ ordering would make prompt diffs and the manifest hash unstable.
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md), §1 B5.
-- Companion research: [`ocr-borrowings-context.md`](../ocr-borrowings-context.md) §1.3 (the rules system) and §3 (the user-rules gap).
 - OCR sources: `internal/config/rules/system_rules.go` (layers, schema, canonical hash), `internal/session/resume_identity.go` (`rule_config_sha256`), `internal/prompt` rule injection. Upstream `alibaba/open-code-review` @ `8eb8334` (Apache-2.0).
 - B1's shared filter and glob matcher: [ADR-0004](0004-change-mode-file-filter.md), `src/changes/filter.ts`.
 - B4's spelling precedent: [ADR-0008](0008-structured-verifier-rejection-grounds.md) §1.

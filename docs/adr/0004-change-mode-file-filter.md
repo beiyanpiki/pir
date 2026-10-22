@@ -2,11 +2,10 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Written for roadmap item B1 (Iteration 1) of the
-OCR-borrow plan, `docs/roadmap-ocr-borrowings.md`;
-B5 (layered user rule file) builds on the include/exclude seam recorded here.
-The roadmap tracking file is a temporary artifact and is deleted once the
-series completes — this ADR absorbs the decisions it needs.
+**Accepted (2026-10-19).** Written for item B1 (Iteration 1) of the 2026-10
+OCR-borrow series; B5 (layered user rule file) builds on the include/exclude
+seam recorded here. The series' tracking file has been retired — this ADR is
+its surviving record.
 
 ## Context
 
@@ -125,8 +124,8 @@ hence B1 combines a filter with an exclusion record and a preview.
   lockfiles, generated output and vendored trees; secret paths cannot reach a
   model prompt through any pinned channel; audit and change mode share one
   policy table; the coverage denominator stays reachable; and the selection
-  becomes auditable *before* a run is paid for. M1 measures the effect on
-  real PRs (roadmap: "B1's effect measured by M1").
+  becomes auditable *before* a run is paid for. M1 is the surface meant to
+  measure the effect on real PRs.
 - **Negative:** a genuinely interesting lockfile or generated-file change is
   no longer diff-reviewed by default — a real recall trade, deliberate, but
   worth reading together with OCR's own recall stance. B5's rule file is the

@@ -2,8 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Roadmap item B3 of
-`docs/roadmap-ocr-borrowings.md` (borrow track, P0):
+**Accepted (2026-10-19).** Item B3 of the 2026-10 OCR-borrow series (P0):
 `pir find` gets default per-role token ceilings and a controlled
 truncation path, without changing the incompleteness or exit-code
 contract. This ADR supersedes the "no default token budget" policy that

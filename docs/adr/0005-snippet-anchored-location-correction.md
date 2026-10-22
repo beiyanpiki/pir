@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Implemented as item B2 of the OCR-borrow roadmap (iteration 1, PR `feat/b2-snippet-anchored-location`); accepted at merge, and amended only with measurement evidence (anchor metrics).
+**Accepted (2026-10-19).** Implemented as item B2 of the 2026-10 OCR-borrow series (iteration 1, PR `feat/b2-snippet-anchored-location`); accepted at merge, and amended only with measurement evidence (anchor metrics).
 
 ## Context
 
