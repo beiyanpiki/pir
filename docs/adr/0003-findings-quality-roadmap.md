@@ -76,8 +76,8 @@ production review agents are judged on.
    supervisor-side deterministic orchestration (worker pools, angle fan-out),
    preserving budget accountability, reproducibility, and the existing trust
    boundary.
-2. **Adopt the eight-item roadmap** (details and PR slicing in the plan
-   document):
+2. **Adopt the eight-item roadmap** (the tracking plan that carried the PR
+   slicing was a development record, retired once the series closed):
    - prompt hardening: explicit do-not-report blacklist (mode-specific:
      change mode keeps the introduced-by-diff gate, audit must not have it)
      and P0 severity calibration;
