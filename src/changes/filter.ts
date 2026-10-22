@@ -74,7 +74,7 @@ export const MAX_AUDIT_FILE_BYTES = 1_000_000;
  * Secret paths: never model-visible, and not rescuable by any include/skip
  * option — the one gate whose failure (a credential in a prompt, a transcript
  * and a model provider's logs) cannot be undone. Mirrors OCR's gate 2
- * (`docs/ocr-borrowings-context.md` §1.3).
+ * (ADR-0004, change-mode file filter).
  */
 export const SECRET_PATH_PATTERNS: PathRule[] = [
   { glob: "**/.ssh/**", reason: "SSH directory" },
