@@ -158,7 +158,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   if (usageArms.length > 0) {
     lines.push("## Session usage");
     lines.push("");
-    lines.push("Tokens as reported by each run's CLI result, summed over the rows that reported usage. " + code("output / row") + " is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the " + code("rows with usage") + " column.");
+    lines.push("Tokens as reported by each run's CLI result, summed over the rows that reported usage. " + code("total tokens") + " includes cache reads and the CLI result does not itemise them, so the three columns do not compose: read " + code("output tokens") + " as the generated-token cost and " + code("total tokens") + " as session volume, never as input + output. " + code("output / row") + " is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the " + code("rows with usage") + " column.");
     lines.push("");
     lines.push("| arm | rows with usage | input tokens | output tokens | total tokens | output / row | total / row |");
     lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
@@ -211,7 +211,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
     const comparedUsageArms = Object.keys(scores.arms).sort().filter((arm) =>
       (scores.arms[arm].usage?.rowsWithUsage ?? 0) > 0 && (baseline.scores.arms[arm]?.usage?.rowsWithUsage ?? 0) > 0);
     if (comparedUsageArms.length > 0) {
-      lines.push("**Session usage (both sides).** Tokens as reported by each run's CLI result; " + code("output / row") + " is the cost side of the comparison, read beside the other metrics and never instead of them.");
+      lines.push("**Session usage (both sides).** Tokens as reported by each run's CLI result; " + code("output / row") + " is the cost side of the comparison, read beside the other metrics and never instead of them. " + code("total tokens") + " includes cache reads the CLI result does not itemise, so it does not equal input + output.");
       lines.push("");
       lines.push("| side | arm | rows with usage | input tokens | output tokens | total tokens | output / row |");
       lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");

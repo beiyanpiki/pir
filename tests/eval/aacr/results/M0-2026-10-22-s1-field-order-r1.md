@@ -48,7 +48,7 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 
 ## Session usage
 
-Tokens as reported by each run's CLI result, summed over the rows that reported usage. `output / row` is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the `rows with usage` column.
+Tokens as reported by each run's CLI result, summed over the rows that reported usage. `total tokens` includes cache reads and the CLI result does not itemise them, so the three columns do not compose: read `output tokens` as the generated-token cost and `total tokens` as session volume, never as input + output. `output / row` is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the `rows with usage` column.
 
 | arm | rows with usage | input tokens | output tokens | total tokens | output / row | total / row |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -65,7 +65,7 @@ Same dataset, sample, model and arms; only the CLI build differs (− = the pre-
 
 - **verifier — B4 gate**: falseKillRate 67.1% → 70.0% (+2.9 pp) ⇒ **REGRESSION**; killRate 72.0% → 76.0% (+4.0 pp); interceptPrecision 27.7% → 27.9% (+0.2 pp). The three are read together (roadmap R9): a falseKillRate that fell by rejecting fewer comments overall is not automatically an improvement.
 
-**Session usage (both sides).** Tokens as reported by each run's CLI result; `output / row` is the cost side of the comparison, read beside the other metrics and never instead of them.
+**Session usage (both sides).** Tokens as reported by each run's CLI result; `output / row` is the cost side of the comparison, read beside the other metrics and never instead of them. `total tokens` includes cache reads the CLI result does not itemise, so it does not equal input + output.
 
 | side | arm | rows with usage | input tokens | output tokens | total tokens | output / row |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |

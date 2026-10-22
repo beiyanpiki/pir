@@ -51,10 +51,10 @@ The observed wire order is therefore **verdict, rationale, confidence, priorDeci
 
 | repeat | side | round | CLI sha256 | build sha256 (dist) | n | label1 / label0 |
 | --- | --- | --- | --- | --- | ---: | --- |
-| repeat 1 — − | `2026-10-22-s1-order-before-r1` | `8d7de831b184d055…` | `47e77911f41dcdef…` | 95 | 70 / 25 |
-| repeat 1 — + | `2026-10-22-s1-order-after-r1` | `8d7de831b184d055…` | `09fb3ae9c6b688a0…` | 95 | 70 / 25 |
-| repeat 2 — − | `2026-10-22-s1-order-before-r2` | `8d7de831b184d055…` | `47e77911f41dcdef…` | 95 | 70 / 25 |
-| repeat 2 — + | `2026-10-22-s1-order-after-r2` | `8d7de831b184d055…` | `09fb3ae9c6b688a0…` | 95 | 70 / 25 |
+| 1 | − | `2026-10-22-s1-order-before-r1` | `8d7de831b184d055…` | `47e77911f41dcdef…` | 95 | 70 / 25 |
+| 1 | + | `2026-10-22-s1-order-after-r1` | `8d7de831b184d055…` | `09fb3ae9c6b688a0…` | 95 | 70 / 25 |
+| 2 | − | `2026-10-22-s1-order-before-r2` | `8d7de831b184d055…` | `47e77911f41dcdef…` | 95 | 70 / 25 |
+| 2 | + | `2026-10-22-s1-order-after-r2` | `8d7de831b184d055…` | `09fb3ae9c6b688a0…` | 95 | 70 / 25 |
 
 The entry file `dist/cli/cli.js` is byte-identical on both sides, as ADR 0008 predicted; the build identity that sees the reorder is the `dist/` digest, and the two digests differ by the one changed module.
 
@@ -62,10 +62,10 @@ The entry file `dist/cli/cli.js` is byte-identical on both sides, as ADR 0008 pr
 
 | repeat | side | killRate | falseKillRate | interceptPrecision | accuracy | output tokens | output / row |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| repeat 1 — − | 72.0% | 67.1% | 27.7% | 43.2% | 722,711 | 7,607 |
-| repeat 1 — + | 76.0% | 70.0% | 27.9% | 42.1% | 735,142 | 7,738 |
-| repeat 2 — − | 68.0% | 68.6% | 26.2% | 41.1% | 689,473 | 7,258 |
-| repeat 2 — + | 68.0% | 65.7% | 27.0% | 43.2% | 698,073 | 7,348 |
+| 1 | − | 72.0% | 67.1% | 27.7% | 43.2% | 722,711 | 7,607 |
+| 1 | + | 76.0% | 70.0% | 27.9% | 42.1% | 735,142 | 7,738 |
+| 2 | − | 68.0% | 68.6% | 26.2% | 41.1% | 689,473 | 7,258 |
+| 2 | + | 68.0% | 65.7% | 27.0% | 43.2% | 698,073 | 7,348 |
 
 ### Per-comment decision changes
 
@@ -78,7 +78,7 @@ The entry file `dist/cli/cli.js` is byte-identical on both sides, as ADR 0008 pr
 
 **Reading it.** One comment moves `falseKillRate` by 1.4 pp (1/70) and `killRate` by 4.0 pp (1/25), so this sample's resolution is one comment and the same-build repeat pair is the noise reference: it measures how far one identical build moves between two runs, which any build effect has to beat.
 
-**Decision: not adopted.** The expected direction did not replicate. Repeat 1 moved `falseKillRate` the wrong way (67.1% → 70.0%, two more label-1 comments killed) while `killRate` rose (72.0% → 76.0%, one more label-0 comment intercepted); repeat 2 moved `falseKillRate` the expected way (68.6% → 65.7%, two fewer label-1 comments killed) with `killRate` unchanged (68.0% → 68.0%). The sign of the effect therefore depends on the repeat, and every cross-build delta is inside what a single build does on its own: the unchanged `−` build moved 10 of 95 decisions between its own two runs for a net +1 false kill, and the unchanged `+` build moved 9 for a net −3 false kills. Output tokens tell the same story — the `+` side used 1.7% and 1.2% more than its paired `−` side, both smaller than the same-build spread of 4.6%–5.1% per row — so there is no cost signal either. Per [Decision](#decision) §3, an effect that is small and inconsistent is a stop, not a reason to run a bigger sample: the field order stays as shipped, `submit_verdict` keeps `verdict` before `rationale`, and item S1 closes as **✗**.
+**Decision: not adopted.** The expected direction did not replicate. Repeat 1 moved `falseKillRate` the wrong way (67.1% → 70.0%, two more label-1 comments killed) while `killRate` rose (72.0% → 76.0%, one more label-0 comment intercepted); repeat 2 moved `falseKillRate` the expected way (68.6% → 65.7%, two fewer label-1 comments killed) with `killRate` unchanged (68.0% → 68.0%). The sign of the effect therefore depends on the repeat, and every cross-build delta is inside what a single build does on its own: the unchanged `−` build moved 10 of 95 decisions between its own two runs for a net +1 false kill, and the unchanged `+` build moved 9 for a net −3 false kills. Output tokens tell the same story — the `+` side used 1.7% and 1.2% more than its paired `−` side, both smaller than the same-build spread of 4.6%–5.0% per row — so there is no cost signal either. (`totalTokens` is not used for the decision: it adds cache reads that the CLI result does not itemise, so it is not comparable across runs the way output tokens are.) Per [Decision](#decision) §3, an effect that is small and inconsistent is a stop, not a reason to run a bigger sample: the field order stays as shipped, `submit_verdict` keeps `verdict` before `rationale`, and item S1 closes as **✗**.
 
 ## Consequences
 

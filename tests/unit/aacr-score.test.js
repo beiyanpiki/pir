@@ -364,6 +364,10 @@ test("M0 S1: the results document records session usage and omits the section wh
   const withUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]) });
   assert.match(withUsage, /## Session usage/);
   assert.match(withUsage, /\| verifier \| 1 \| 100 \| 20 \| 1,000 \| 20 \| 1,000 \|/);
+  // totalTokens carries cache reads the CLI result does not itemise, so the
+  // document must not let a reader add the columns up.
+  assert.match(withUsage, /\`total tokens\` includes cache reads/);
+  assert.match(withUsage, /never as input \+ output/);
   const withoutUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({})]) });
   assert.ok(!withoutUsage.includes("## Session usage"));
 });
@@ -376,6 +380,7 @@ test("M0 S1: the before/after section compares output tokens per side when both 
   assert.match(markdown, /\*\*Session usage \(both sides\)\.\*\*/);
   assert.match(markdown, /\| − `bbbbbbbb` \| verifier \| 1 \| 100 \| 20 \| 1,000 \| 20 \|/);
   assert.match(markdown, /\| \+ `aaaaaaaa` \| verifier \| 1 \| 200 \| 40 \| 2,000 \| 40 \|/);
+  assert.match(markdown, /it does not equal input \+ output/);
   // One side without usage: no comparison table at all, rather than a half row.
   const oneSided = renderResultsMd({ run: usageRun, scores, baseline: { run: beforeRun, scores: scoreRun([verifierRow({})]) } });
   assert.ok(!oneSided.includes("Session usage (both sides)"));
