@@ -2,8 +2,8 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Roadmap item M0 (Verifier offline benchmark —
-reflection test set) of `docs/roadmap-ocr-borrowings.md`,
+**Accepted (2026-10-19).** Item M0 (Verifier offline benchmark —
+reflection test set) of the 2026-10 OCR-borrow series,
 Iteration 1. M0 stands alone as a measurement surface; B4 (structured
 verifier rejection grounds) consumes its kill-rate/false-kill numbers as a
 merge gate under the protocol fixed here.
@@ -87,7 +87,7 @@ developer machine, never in CI, never against a leaderboard.
    only lower it). `falseKillRate` = rejected(label=1) / label=1: the share
    of real findings destroyed (lower is better). `interceptPrecision` =
    rejected(label=0) / all rejected: how much of what it killed was actually
-   noise (all three must be read together). The roadmap's B4 acceptance text
+   noise (all three must be read together). The series' B4 acceptance text
    uses "kill-rate" for what this protocol calls `falseKillRate`; B4's gate
    is therefore `falseKillRate` must not regress while `killRate` and
    `interceptPrecision` are read jointly. Results files carry all three per
