@@ -6,7 +6,7 @@
 
 ## Context
 
-D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs and ships a viewer with replay, marks and comparison; pir writes opt-in session snapshots (`PIR_TRANSCRIPTS=1`) plus a `run.json` manifest and renders findings in a read-only web explorer. The roadmap made the gap a **data-triggered** decision: act only on "accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence", and the action named was `localStorage` mark-and-hide after the OCR viewer. The trigger is therefore about *demonstrated need*, not about parity with OCR.
+D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs and ships a viewer with replay, marks and comparison; pir writes opt-in session snapshots (`PIR_TRANSCRIPTS=1`) plus a `run.json` manifest and renders findings in a read-only web explorer. The series made the gap a **data-triggered** decision: act only on "accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence", and the action named was `localStorage` mark-and-hide after the OCR viewer. The trigger is therefore about *demonstrated need*, not about parity with OCR.
 
 ## Evidence
 

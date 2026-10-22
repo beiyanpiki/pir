@@ -42,8 +42,8 @@ was dropped." B4 borrows the enumeration and the cost statement, not OCR's
 diff-only evidence base: pir's verifier may read the whole pinned revision,
 so its grounds are naturally richer than A/B.
 
-The risk register constrains the design: kill-family numbers must be read
-jointly (R3), so the gate must report `killRate`, `falseKillRate` and
+The design requires the kill-family numbers to be read jointly, so the
+gate must report `killRate`, `falseKillRate` and
 `interceptPrecision` together.
 
 ## Decision
@@ -100,8 +100,7 @@ jointly (R3), so the gate must report `killRate`, `falseKillRate` and
    post-B4 builds run the same materialized 100-comment sample (seed 42,
    digest `74f43e2f…c07d`, the Iteration 1 sample), the same model id and the
    same scoring code; only the CLI build differs. `falseKillRate` must not
-   regress, and `killRate` / `interceptPrecision` are read with it (R3,
-   ADR-0007 §5). The series' wording "kill-rate (rejecting a label=1
+   regress, and `killRate` / `interceptPrecision` are read with it (ADR-0007 §5). The series' wording "kill-rate (rejecting a label=1
    comment)" is ADR-0007's `falseKillRate`; the results file names all three
    so neither wording can be misread. The gate runs on the verifier arm only:
    B4 touches no OCR prompt or ocr-arm code, so an OCR row would be an

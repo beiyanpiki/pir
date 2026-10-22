@@ -6,13 +6,13 @@
 
 ## Context
 
-D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The roadmap deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The research document also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson).
+D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The series deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The series' research also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson).
 
 The trigger is a conjunction of two measurements on material that M1's population can actually contain. Both were checked against the data available at Iteration 4.
 
 ## Evidence
 
-**1. The benchmark population has no large PRs at all.** The M1 fixture is the upstream `positive_samples` split (196 PRs; sha256 `02c8561f…`, pinned in [meta.json](../../tests/eval/aacr/meta.json)). Its `change_line_count` distribution is p50 154, p75 324, p90 689, **max 971**; PRs ≥1,000 lines: **0**; ≥2,000 lines: **0**. The roadmap's own threshold cannot be reached on AACR-Bench's positive split, so M1 cannot produce the first conjunct of the trigger — not because large PRs looked fine, but because the population does not contain one. This is now a documented limitation of the benchmark for size-related claims.
+**1. The benchmark population has no large PRs at all.** The M1 fixture is the upstream `positive_samples` split (196 PRs; sha256 `02c8561f…`, pinned in [meta.json](../../tests/eval/aacr/meta.json)). Its `change_line_count` distribution is p50 154, p75 324, p90 689, **max 971**; PRs ≥1,000 lines: **0**; ≥2,000 lines: **0**. The series' own threshold cannot be reached on AACR-Bench's positive split, so M1 cannot produce the first conjunct of the trigger — not because large PRs looked fine, but because the population does not contain one. This is now a documented limitation of the benchmark for size-related claims.
 
 **2. The sampled size/cost relationship shows no "materially worse" regime.** The 57 completed instances of the parked M1 round (reviewer side, judge-independent data; per-PR table in [RESULTS Appendix A](../../tests/eval/aacr/results/RESULTS.md)) were bucketed into size quartiles:
 

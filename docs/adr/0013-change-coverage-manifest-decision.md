@@ -6,7 +6,7 @@
 
 ## Context
 
-D-B8 asked for a change-mode coverage manifest with per-file terminal states (reviewed / skipped / excluded) and for `incomplete` to be tied to coverage, taking OCR's frozen-denominator RunManifest as the model. The roadmap made it data-triggered: act "after B1, [when] the envelope already carries exclusion reasons and automation consumers ask for coverage auditing". B1 landed (ADR 0004), so the remaining question is whether any consumer actually asks for the extra vocabulary — and whether gating completion on coverage is the right direction.
+D-B8 asked for a change-mode coverage manifest with per-file terminal states (reviewed / skipped / excluded) and for `incomplete` to be tied to coverage, taking OCR's frozen-denominator RunManifest as the model. The series made it data-triggered: act "after B1, [when] the envelope already carries exclusion reasons and automation consumers ask for coverage auditing". B1 landed (ADR 0004), so the remaining question is whether any consumer actually asks for the extra vocabulary — and whether gating completion on coverage is the right direction.
 
 ## Evidence
 
