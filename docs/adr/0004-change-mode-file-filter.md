@@ -21,14 +21,15 @@ files nobody may review: `.env`, `.ssh` material, registry credentials. The
 reachable set also sizes the run: diff lines are paged 120 at a time
 (`get_change`), so one generated file can eat a session's entire budget.
 
-The research context (`docs/ocr-borrowings-context.md` §1.3,
-comparison table §3) documents the mechanism OCR uses against exactly this:
-a **six-gate pure filter** (`internal/agent/selection.go`, `whyExcluded`
+OCR uses exactly this mechanism against the same problem: a **six-gate pure
+filter** (`internal/agent/selection.go`, `whyExcluded`
 :70) with a fixed order — binary → secret paths → user exclude → user
 include → extension allowlist → built-in ~100 default excludes — plus two
 post-gates (deleted files kept as context, single-file diff over 80% of
 MAX_TOKENS → `too_large`). Entry `Agent.Run` is `internal/agent/agent.go`
-:284. Three properties of that design are load-bearing here:
+:284. OCR citations in this ADR are against `alibaba/open-code-review` @
+`8eb8334` (Apache-2.0), the revision this series surveyed. Three properties
+of that design are load-bearing here:
 
 1. **The secret gate is not rescuable by any user rule.** Everything else is
    negotiable; a credential in a prompt cannot be recalled.

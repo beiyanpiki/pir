@@ -17,10 +17,7 @@ single `Budget` (`src/core/budget.ts`). Until now that budget carried
 exactly one optional token ceiling — `--max-tokens` — and no default:
 commit 82505f9 removed the last default cap on purpose ("different
 problems need different amounts, so the review runs until
-rounds/findings/wall-clock stop it"). The research baseline records the
-same state (companion context §2, "Loop control today": the budget
-accumulates measured usage per session but there is **no default token
-ceiling**).
+rounds/findings/wall-clock stop it").
 
 Two things changed that trade-off. First, the failure mode is asymmetric:
 an unbounded run over a large change set spends real money silently, and
@@ -29,8 +26,7 @@ Second, the borrow target is not a kill switch but a *controlled
 truncation*. OCR's run-level budget ends a review by skipping
 over-budget work while letting in-flight work finish — overshoot bounded
 by concurrency — and derives its terminal state from coverage, never from
-warnings (companion context §1.3, "The three-tier token budget and
-controlled truncation"), with a grace round as the explicit model: after
+warnings, with a grace round as the explicit model: after
 rounds or budget are exhausted, one final round still collects comments
 (`internal/llmloop/loop.go`: `RunMainTask` :380, grace round :564).
 Their per-prompt 80% gate and three-zone in-session compression
@@ -38,8 +34,8 @@ Their per-prompt 80% gate and three-zone in-session compression
 :132-163, anchored to `MAX_TOKENS=200000` input) solve a different
 problem and are deliberately not borrowed: each pir round is a fresh
 isolated session, so the long-conversation bloat that compression exists
-to manage structurally does not exist here (context §3, "Deliberate
-non-borrowings").
+to manage structurally does not exist here. OCR citations in this ADR are
+against `alibaba/open-code-review` @ `8eb8334` (Apache-2.0).
 
 A budget checked between sessions can only refuse new work or finish work
 already started, and the pre-B3 drain did neither cleanly: it refused

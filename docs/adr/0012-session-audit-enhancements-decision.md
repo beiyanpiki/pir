@@ -16,7 +16,7 @@ D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs
 
 **3. Prompt tuning used labels and findings, not replay.** B4's asymmetric rejection clause and B5's `PROJECT RULES` injection were evaluated on M0's 2,134 labelled comments and on dogfood findings; the evidence that decided them was score movement and finding provenance, not session replay. The documented fidelity limit reinforces this: pir's transcripts are retained SDK session snapshots (compaction may replace earlier context), **not provider request captures** — they are investigation aids, and an "on by default" replay surface would invite over-reading them as exact wire evidence.
 
-**4. The missing UI feature has no recorded demand.** Transcripts are opt-in for CLI runs and enabled by default only for web-enabled server runs (`src/server/server.ts`), the explorer is read-only, and page alerts already have mark-read. No roadmap item, dogfood finding, issue or ADR asks for mark-and-hide; the OCR viewer is the only source of the idea, and the roadmap's own non-borrow list treats parity here as optional.
+**4. The missing UI feature has no recorded demand.** Transcripts are opt-in for CLI runs and enabled by default only for web-enabled server runs (`src/server/server.ts`), the explorer is read-only, and page alerts already have mark-read. No roadmap item, dogfood finding, issue or ADR asks for mark-and-hide; the OCR viewer is the only source of the idea, and the series pursues measured gaps, not parity.
 
 ## Decision
 
