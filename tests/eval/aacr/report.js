@@ -23,6 +23,9 @@ export const pct = (value) => (value === null || value === undefined ? "—" : (
 
 const aucText = (auc) => (auc === null || auc === undefined ? "—" : auc.toFixed(3));
 
+/** Token counts with thousands separators; "—" when the round reported none. */
+const tokens = (value) => (value === null || value === undefined ? "—" : Number(value).toLocaleString("en-US"));
+
 /**
  * Provenance a before/after pair must share (ADR-0008 §6). Only the CLI build
  * may differ between the two rounds; a different dataset, sample, model or arm
@@ -151,6 +154,20 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
     lines.push([ "", arm, "errors / invalid / strict-unresolved", primary.errors + " / " + primary.invalid + " / " + (primary.unresolvedPositive + primary.unresolvedNegative), "", "" ].join(" | "));
   }
   lines.push("");
+  const usageArms = Object.entries(scores.arms).filter(([, armScore]) => (armScore.usage?.rowsWithUsage ?? 0) > 0);
+  if (usageArms.length > 0) {
+    lines.push("## Session usage");
+    lines.push("");
+    lines.push("Tokens as reported by each run's CLI result, summed over the rows that reported usage. " + code("total tokens") + " includes cache reads and the CLI result does not itemise them, so the three columns do not compose: read " + code("output tokens") + " as the generated-token cost and " + code("total tokens") + " as session volume, never as input + output. " + code("output / row") + " is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the " + code("rows with usage") + " column.");
+    lines.push("");
+    lines.push("| arm | rows with usage | input tokens | output tokens | total tokens | output / row | total / row |");
+    lines.push("| --- | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (const [arm, armScore] of usageArms) {
+      const usage = armScore.usage;
+      lines.push(["", arm, String(usage.rowsWithUsage), tokens(usage.inputTokens), tokens(usage.outputTokens), tokens(usage.totalTokens), tokens(usage.outputTokensPerRow), tokens(usage.totalTokensPerRow), ""].join(" | "));
+    }
+    lines.push("");
+  }
   if (baseline) {
     assertComparableRuns(baseline.run, run);
     lines.push("## Before/after (controlled build comparison)");
@@ -191,6 +208,22 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
         " The three are read together (roadmap R9): a falseKillRate that fell by rejecting fewer comments overall is not automatically an improvement.");
     }
     lines.push("");
+    const comparedUsageArms = Object.keys(scores.arms).sort().filter((arm) =>
+      (scores.arms[arm].usage?.rowsWithUsage ?? 0) > 0 && (baseline.scores.arms[arm]?.usage?.rowsWithUsage ?? 0) > 0);
+    if (comparedUsageArms.length > 0) {
+      lines.push("**Session usage (both sides).** Tokens as reported by each run's CLI result; " + code("output / row") + " is the cost side of the comparison, read beside the other metrics and never instead of them. " + code("total tokens") + " includes cache reads the CLI result does not itemise, so it does not equal input + output.");
+      lines.push("");
+      lines.push("| side | arm | rows with usage | input tokens | output tokens | total tokens | output / row |");
+      lines.push("| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+      for (const [mark, sideRun, sideScores] of [["−", baseline.run, baseline.scores], ["+", run, scores]]) {
+        const buildId = sideRun.cli?.buildSha256 ?? sideRun.cli?.sha256 ?? "?";
+        for (const arm of comparedUsageArms) {
+          const usage = sideScores.arms[arm].usage;
+          lines.push(["", mark + " " + code(String(buildId).slice(0, 8)), arm, String(usage.rowsWithUsage), tokens(usage.inputTokens), tokens(usage.outputTokens), tokens(usage.totalTokens), tokens(usage.outputTokensPerRow), ""].join(" | "));
+        }
+      }
+      lines.push("");
+    }
   }
   for (const [arm, armScore] of Object.entries(scores.arms)) {
     lines.push("## " + arm + " — per-bucket metrics");

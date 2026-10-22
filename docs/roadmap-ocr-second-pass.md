@@ -151,7 +151,7 @@ Do not claim "will not count". Do not block submission.
 
 ---
 
-### S1 · Tool-schema order: diagnostic, then a small experiment · P2 · evidence: `hypothesis` · ADR: [0015](adr/0015-tool-schema-field-order-diagnostic.md) · Status: ◐
+### S1 · Tool-schema order: diagnostic, then a small experiment · P2 · evidence: `hypothesis` · ADR: [0015](adr/0015-tool-schema-field-order-diagnostic.md) · Status: ✗
 
 **Why.** [`submit_verdict`](../src/tools/collector-tools.ts#L288-L299) declares `verdict` first and
 `rationale` second. OCR's filter tools deliberately put `analysis` before `comment_ids` and record that session
@@ -175,19 +175,23 @@ Do not change field names or semantics.
 - [x] **T1 Diagnostic.** Add a model-free test that asserts the property order of `submit_verdict.parameters`;
       if the SDK exposes a payload/session tap, capture the actual provider tool schema; otherwise use a local
       mock endpoint once. Document the result.
-- [ ] **T2 M0 experiment.** Fixed 100-comment sample, **at least two repeats per side**, same model and build
+- [x] **T2 M0 experiment.** Fixed 100-comment sample, **at least two repeats per side**, same model and build
       provenance. Read `killRate`, `falseKillRate`, accuracy and output tokens. Label the result a point
       comparison, not a variance floor.
-- [ ] **T3 Decision.** Adopt only if the pre-registered direction holds (falseKill falls without a comparable
+- [x] **T3 Decision.** Adopt only if the pre-registered direction holds (falseKill falls without a comparable
       kill collapse) and replicates across repeats; otherwise close as ✗ and record why in the ADR.
 
 **Acceptance**
 
-- [ ] A1 Diagnostic result recorded (schema order and, if captured, wire order).
-- [ ] A2 M0 comparison recorded with both sides' CLI sha256, model, sample digest and repeats.
-- [ ] A3 Decision recorded in the ADR; a "no effect" result is a legitimate outcome.
+- [x] A1 Diagnostic result recorded (schema order and, if captured, wire order).
+- [x] A2 M0 comparison recorded with both sides' CLI sha256, model, sample digest and repeats
+      ([repeat 1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md),
+      [repeat 2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)).
+- [x] A3 Decision recorded in the ADR; a "no effect" result is a legitimate outcome.
 
 **Decision rule.** No merge of a production reorder before A2/A3. If the effect is small or inconsistent, stop.
+
+**Outcome (2026-10-22).** The two repeats disagreed on the sign of the `falseKillRate` change and every cross-build delta sat inside the same-build repeat noise, so the reorder was **not adopted** and the item closes as ✗ ([ADR 0015 §Iteration 2](adr/0015-tool-schema-field-order-diagnostic.md#iteration-2--the-m0-comparison-and-the-decision-2026-10-22)). No production field moved; the eval tooling gained per-arm token accounting so the pre-registered cost metric is readable from the results document.
 
 ---
 
@@ -407,6 +411,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | all | Iteration labels renamed (Iteration 1–4) to avoid collision with the M1 benchmark; ADR numbering fixed at 0014; deletion checklist added | Drafting hygiene; keeps the tracker unambiguous while it exists |
 | 2026-10-22 | S5 | Shipped: optional visibility-only duplicate hint in `record_candidate` (ADR 0014), shared `duplicateMatch` predicate, strict prior-round baseline; no dedup/reporting change | Iteration 1 contract clarity |
 | 2026-10-22 | S1 | [ADR 0015](adr/0015-tool-schema-field-order-diagnostic.md) accepted (diagnostic only); T0/T1 done — declared and captured wire order both assert `verdict, rationale, …`, and the repeat protocol is pre-registered | Diagnostic first: the reorder stays undecided until the Iteration 2 M0 comparison |
+| 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
 
 ---
 

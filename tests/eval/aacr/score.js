@@ -189,6 +189,37 @@ export function rejectionGroundCounts(rows) {
   return [...groups.values()].sort((a, b) => (b.killed - a.killed) || a.ground.localeCompare(b.ground));
 }
 
+/**
+ * Token usage per arm, summed from the rows the CLI result reported. The M0
+ * S1 experiment (ADR 0015) pre-registers output tokens as the cost side of a
+ * field-order comparison, so the number has to be part of the scorecard and of
+ * the rendered results document, not a side note typed by hand. Rows that
+ * reported no usage (error rows, older builds) are counted, never assumed to
+ * be zero-cost.
+ */
+export function usageSummary(rows) {
+  let rowsWithUsage = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let totalTokens = 0;
+  for (const row of rows ?? []) {
+    const usage = row?.usage;
+    if (!usage || typeof usage !== "object") continue;
+    rowsWithUsage += 1;
+    if (Number.isFinite(usage.inputTokens)) inputTokens += usage.inputTokens;
+    if (Number.isFinite(usage.outputTokens)) outputTokens += usage.outputTokens;
+    if (Number.isFinite(usage.totalTokens)) totalTokens += usage.totalTokens;
+  }
+  return {
+    rowsWithUsage,
+    inputTokens,
+    outputTokens,
+    totalTokens,
+    outputTokensPerRow: rowsWithUsage === 0 ? null : Math.round(outputTokens / rowsWithUsage),
+    totalTokensPerRow: rowsWithUsage === 0 ? null : Math.round(totalTokens / rowsWithUsage),
+  };
+}
+
 /** Full scorecard: both policies overall plus every requested bucket. */
 export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
   const byArm = new Map();
@@ -219,7 +250,7 @@ export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
     }
     // B4 grounds describe kills, which both policies agree on (a kill is a
     // rejected verdict either way), so the distribution is policy-independent.
-    arms[arm] = { rows: armRows.length, diffBaseKinds, rejectionGrounds: rejectionGroundCounts(armRows.filter((row) => classify(row, PRIMARY_POLICY) === "kill")), policies };
+    arms[arm] = { rows: armRows.length, diffBaseKinds, usage: usageSummary(armRows), rejectionGrounds: rejectionGroundCounts(armRows.filter((row) => classify(row, PRIMARY_POLICY) === "kill")), policies };
   }
   return { primaryPolicy: PRIMARY_POLICY, strictPolicy: STRICT_POLICY, arms };
 }
