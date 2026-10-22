@@ -33,7 +33,7 @@ Cost per PR and findings per PR rise with size (roughly 4× and 5× from q1 to q
 
 **Reject D-B6 for now; do not implement slicing.** The trigger is a conjunction whose first conjunct cannot be measured on the current benchmark and whose second conjunct is contradicted by the production manifests. Implementing a large structural feature on absent evidence is exactly what the "data-triggered" designation exists to prevent.
 
-The decision is a *reject*, not a permanent foreclosure. If reopened, the roadmap's constraints stand unchanged: slice by hunk adjacency, one round per slice, fingerprint dedup across slices, failure falls back to the single-pass review, and slicing never becomes a correctness gate.
+The decision is a *reject*, not a permanent foreclosure. If reopened, the series' constraints stand unchanged: slice by hunk adjacency, one round per slice, fingerprint dedup across slices, failure falls back to the single-pass review, and slicing never becomes a correctness gate.
 
 ## Revisit conditions (must be measured before opening the ADR again)
 
