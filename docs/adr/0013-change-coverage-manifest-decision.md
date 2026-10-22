@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the trigger did not fire, and the substance already exists.** Decision point D-B8 of [the OCR-borrow × AACR-Bench roadmap](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3, Iteration 4. The decision is a *reject of a new contract*, not a reject of coverage reporting: C1's ledger and B1's exclusion record already carry the audit information, and this ADR fixes the derivation rule so no second schema is invented.
+**Accepted (2026-10-20), outcome: rejected — the trigger did not fire, and the substance already exists.** Decision point D-B8 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. The decision is a *reject of a new contract*, not a reject of coverage reporting: C1's ledger and B1's exclusion record already carry the audit information, and this ADR fixes the derivation rule so no second schema is invented.
 
 ## Context
 
@@ -37,8 +37,8 @@ D-B8 asked for a change-mode coverage manifest with per-file terminal states (re
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3 D-B8.
-- Companion context: [`docs/ocr-borrow-and-aacr-benchmark-context.md`](../ocr-borrow-and-aacr-benchmark-context.md) §3 (coverage-accounting row).
+- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
+- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (coverage-accounting row).
 - B1: [ADR 0004](0004-change-mode-file-filter.md) §4 (excluded ≠ invisible; excluded hunks stay out of the coverage denominator).
 - C1: [ADR 0003](0003-findings-quality-roadmap.md) decision 2 (coverage ledger, observational then one forced round).
 - Contract: [`docs/for-llm.md`](../for-llm.md) (change-mode coverage), [`docs/review-loop.md`](../review-loop.md) (completion and coverage), `docs/adr/0001-shared-review-executor.md`.

@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted (2026-10-19).** Roadmap item M1 (End-to-end benchmark) of
-`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`, Iteration 2. This ADR
+`docs/roadmap-ocr-borrowings.md`, Iteration 2. This ADR
 records the skeleton — fixture, driver, normalization, judge delegation and
 the materialization decision — and the `--limit 20` smoke that exercised it
 end to end; the full 196-PR run, the `--eval-rounds 3` averaging and the
@@ -24,7 +24,7 @@ compare with the published systems?** The only external caliber available for
 that question is the upstream AACR-Bench evaluation framework: its
 file-level semantic precision/recall and `balanced_score` are the numbers the
 published OCR / Claude Code / Codex rows report. A home-grown judge would add
-drift, cost and an unaccountable layer (roadmap risk R4) and would not be
+drift, cost and an unaccountable layer and would not be
 comparable to anything.
 
 ### The reference population
@@ -214,9 +214,8 @@ of that measurement.
    written incrementally, so an interrupted round keeps its completed work
    and `summary.json` never claims a finished round that did not finish.
 
-10. **Scope boundaries.** M1 does not modify upstream, does not add a
-    `reviewers/pir.py` (roadmap A2 is an optional later contribution), does
-    not re-run the full 196 PRs in this skeleton, and does not change `src/`.
+10. **Scope boundaries.** M1 does not modify upstream, does not re-run the
+    full 196 PRs in this skeleton, and does not change `src/`.
     The judge mock mode is a pipeline check, not a publishable score; only a
     real-judge run with the exact judge model recorded qualifies for
     comparison. The M1 numbers are not comparable to M0's kill-rate and must
@@ -257,7 +256,7 @@ of that measurement.
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`](../roadmap-ocr-borrow-and-aacr-benchmark.md), §2 M1; companion context §4.2–4.3.
+- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
 - M0 protocol and conventions: [ADR-0007](0007-aacr-verifier-offline-benchmark.md).
 - Upstream: [alibaba/aacr-bench](https://github.com/alibaba/aacr-bench) @ `ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df` (Apache-2.0), `evaluation/pipeline.py`, `evaluation/evaluate.py`, `evaluation/judge.py`, `evaluation/config.py`.
 - Citation: arXiv 2601.19494, `AACR-Bench: Evaluating Automatic Code Review with Holistic Repository-Level Context`.

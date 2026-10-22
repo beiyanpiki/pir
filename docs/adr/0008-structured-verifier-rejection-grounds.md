@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted (2026-10-19).** Roadmap item B4 of
-`docs/roadmap-ocr-borrow-and-aacr-benchmark.md` (borrow track, P1) in
+`docs/roadmap-ocr-borrowings.md` (borrow track, P1) in
 Iteration 2. A rejected verification names *why* it rejected, in a fixed
 vocabulary, so the reason survives the session and can be audited, bucketed
 and compared. M0's kill-family numbers are the merge gate.
@@ -43,12 +43,9 @@ was dropped." B4 borrows the enumeration and the cost statement, not OCR's
 diff-only evidence base: pir's verifier may read the whole pinned revision,
 so its grounds are naturally richer than A/B (roadmap context §1.3).
 
-The risk register constrains the design. R9 requires kill-family numbers to
-be read jointly, so the gate must report `killRate`, `falseKillRate` and
-`interceptPrecision` together. R2 warns that a prompt change measured on the
-OCRed diff-only arm is not the same caliber; B4 changes only pir's verifier
-arm, which is the surface M0 already isolates. R3 (3/4 AI-authored ground
-truth) applies to any per-bucket reading of the result.
+The risk register constrains the design: kill-family numbers must be read
+jointly (R3), so the gate must report `killRate`, `falseKillRate` and
+`interceptPrecision` together.
 
 ## Decision
 
@@ -104,7 +101,7 @@ truth) applies to any per-bucket reading of the result.
    post-B4 builds run the same materialized 100-comment sample (seed 42,
    digest `74f43e2f…c07d`, the Iteration 1 sample), the same model id and the
    same scoring code; only the CLI build differs. `falseKillRate` must not
-   regress, and `killRate` / `interceptPrecision` are read with it (R9,
+   regress, and `killRate` / `interceptPrecision` are read with it (R3,
    ADR-0007 §5). The roadmap's wording "kill-rate (rejecting a label=1
    comment)" is ADR-0007's `falseKillRate`; the results file names all three
    so neither wording can be misread. The gate runs on the verifier arm only:

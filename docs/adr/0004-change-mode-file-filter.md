@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted (2026-10-19).** Written for roadmap item B1 (Iteration 1) of the
-OCR-borrow × AACR-Bench plan, `docs/roadmap-ocr-borrow-and-aacr-benchmark.md`;
+OCR-borrow plan, `docs/roadmap-ocr-borrowings.md`;
 B5 (layered user rule file) builds on the include/exclude seam recorded here.
 The roadmap tracking file is a temporary artifact and is deleted once the
 series completes — this ADR absorbs the decisions it needs.
@@ -21,7 +21,7 @@ files nobody may review: `.env`, `.ssh` material, registry credentials. The
 reachable set also sizes the run: diff lines are paged 120 at a time
 (`get_change`), so one generated file can eat a session's entire budget.
 
-The research context (`docs/ocr-borrow-and-aacr-benchmark-context.md` §1.3,
+The research context (`docs/ocr-borrowings-context.md` §1.3,
 comparison table §3) documents the mechanism OCR uses against exactly this:
 a **six-gate pure filter** (`internal/agent/selection.go`, `whyExcluded`
 :70) with a fixed order — binary → secret paths → user exclude → user

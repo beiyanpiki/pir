@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of [the OCR-borrow × AACR-Bench roadmap](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3, Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
+**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
 
 ## Context
 
@@ -51,8 +51,8 @@ The decision is a *reject*, not a permanent foreclosure. If reopened, the roadma
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3 D-B6, §4 dependency graph.
-- Companion context: [`docs/ocr-borrow-and-aacr-benchmark-context.md`](../ocr-borrow-and-aacr-benchmark-context.md) §3 (context-slicing row, deliberate non-borrowings).
+- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
+- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (context-slicing row, deliberate non-borrowings).
 - Measurement sources: [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md); M1 fixture pin in [`tests/eval/aacr/meta.json`](../../tests/eval/aacr/meta.json); parked round per-PR data in RESULTS Appendix A; local run manifests under `~/.local/state/pir` (machine-local, not committed).
 - Related ADRs: [0003](0003-findings-quality-roadmap.md) (C1 coverage ledger), [0006](0006-default-token-budget-with-grace.md) (B3 default budget), [0009](0009-m1-end-to-end-benchmark.md) (M1 and its §11 M2 amendment).
 

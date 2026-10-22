@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B7 of [the OCR-borrow × AACR-Bench roadmap](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3, Iteration 4. No transcript-default or web-marking work is added; the conditions under which the decision reopens are recorded below.
+**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B7 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. No transcript-default or web-marking work is added; the conditions under which the decision reopens are recorded below.
 
 ## Context
 
@@ -37,8 +37,8 @@ D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrow-and-aacr-benchmark.md`](../roadmap-ocr-borrow-and-aacr-benchmark.md) §3 D-B7.
-- Companion context: [`docs/ocr-borrow-and-aacr-benchmark-context.md`](../ocr-borrow-and-aacr-benchmark-context.md) §3 (session-auditing row) and §5 (risk table).
+- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
+- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (session-auditing row) and §4 (risk table).
 - Contract: [`docs/review-loop.md`](../review-loop.md) "Session metrics and transcripts"; [`docs/for-llm.md`](../for-llm.md) environment table (`PIR_TRANSCRIPTS`).
 - Implementation: `src/agents/transcripts.ts` (opt-in), `src/server/server.ts` (web default), `src/observability/run-events.ts` (manifest), `src/server/web-store.ts` (run summaries/coverage).
 - Cost source: [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md).

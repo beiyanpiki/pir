@@ -1,7 +1,7 @@
-# OCR borrowings × AACR-Bench: research context (roadmap companion)
+# OCR borrowings: research context (roadmap companion)
 
 > This document is the companion context for
-> [roadmap-ocr-borrow-and-aacr-benchmark.md](roadmap-ocr-borrow-and-aacr-benchmark.md).
+> [roadmap-ocr-borrowings.md](roadmap-ocr-borrowings.md).
 > It records the full research interpretation, the pir baseline, the
 > comparison conclusions, and the risk register.
 > **Role: source material for each roadmap item's ADR Context.** When an
@@ -10,7 +10,7 @@
 > **Lifecycle: tied to the roadmap** — when the roadmap is deleted under its
 > top-of-file preconditions, confirm that still-referenced content has been
 > absorbed into the ADRs, then delete this document along with it.
-> Research date: 2026-10-19. Sources and local copies: §6.
+> Research date: 2026-10-19. Sources and local copies: §5.
 
 ---
 
@@ -36,11 +36,10 @@ language-driven architecture lacks hard constraints on the review
 process.** The division of labor: whatever must not go wrong is handled by
 engineering code; only dynamic decisions go to the LLM.
 
-Their benchmark (AACR-Bench) shows: with the same underlying model, ~1/9
+Their published evaluation shows: with the same underlying model, ~1/9
 the tokens of a general-purpose agent, materially higher Precision and F1,
 and **deliberately lower Recall** — trading recall for low noise is an
-explicit product decision (stated in the README). **Any comparison against
-pir must use balanced_score as the caliber.**
+explicit product decision (stated in the README).
 
 ### 1.2 The full pipeline
 
@@ -390,8 +389,7 @@ local-only stance): 25-PR fixtures + frozen mirrors + `run-rb.js`
 `PIR_MEMORY_DB` per task, PIR_TRANSCRIPTS=0) + `normalize.js` (envelope
 → judge format) + `prefilter.js` (deterministic advisory matching) +
 `judge.js` (delegating to the upstream official judge) + the RESULTS.md
-protocol (variance rules: judge drift voids comparisons). **AACR
-integration reuses this skeleton directly.**
+protocol (variance rules: judge drift voids comparisons).
 
 ---
 
@@ -409,7 +407,6 @@ integration reuses this skeleton directly.**
 | Output contract | text/JSON/SARIF + exit codes | JSON envelope + exit codes (externally consumable) | Equivalent (SARIF deferred) |
 | Session auditing | Full JSONL + viewer replay/marks/compare | PIR_TRANSCRIPTS (off by default) + run manifest + web findings | Partially equivalent → D-B7 |
 | Coverage accounting | RunManifest's five sets, frozen denominator, coverage-derived terminal state | Audit has the ledger; find is weaker | → D-B8 |
-| Evaluation | AACR-Bench public dataset + framework | Synthetic scenarios + ReviewBench (local) | **Integrate** → M0/M1/M2 |
 
 **Deliberate non-borrowings** (with reasons — do not re-litigate in
 ADRs):
@@ -419,115 +416,25 @@ ADRs):
 - **In-session three-zone compression**: pir opens a fresh session per
   round; long-conversation bloat structurally does not exist.
 - **The LLM grouping call**: change review targets single PRs and the
-  frontier already steers attention; decide with M1's large-PR buckets
-  first (D-B6). Any slicing scheme must fail back gracefully and never
-  act as a correctness gate (OCR's lesson).
+  frontier already steers attention. Any slicing scheme must fail back
+  gracefully and never act as a correctness gate (OCR's lesson).
 - **Automated fixing**: both projects decline it; pir's verify-fix
   verifies an already-made fix rather than authoring one — same
   boundary.
 
 ---
 
-## 4. The AACR-Bench assets in detail
-
-### 4.1 The HF dataset `Alibaba-Aone/aacr-bench` (reflection test set)
-
-- A single `dataset.json` (2.1MB) with **2,145 comment-level records =
-  1,505 correct (label=1) + 640 incorrect (label=0)**; the official
-  positioning: "evaluate the extent to which a model can intercept
-  low-quality review comments" — i.e., verifier binary-classification
-  material.
-- Fields: `pr_url`, `pr_source_commit`/`pr_target_commit` (diffs
-  reconstructible), `path`, `side`, `from_line`/`to_line`, `note` (the
-  comment body), `category`, `context` (Diff/File/Repo Level),
-  `is_ai_comment`, `source_model`, `label`.
-- Measured statistics (verified on the 2026-10-19 download): 200 unique
-  PRs / 50 repos; languages C++ 508, TS 422, Java 272, Go 245, C 206,
-  Python 151, JS 141, Rust 92, PHP 56, C# 52; categories Code Defect
-  1022, Maintainability 905, Performance 144, Security 74; **1,597 AI
-  comments + 548 human** (AI from GPT-5.2, Gemini-3-Pro,
-  Claude-4.5-Sonnet, Deepseek-V3.2, GLM-4.7, Qwen-Coder-480B, …).
-- Repo coverage includes heavyweights: ClickHouse, bitcoin,
-  elasticsearch, aspnetcore, PowerShell, uv, cline, ComfyUI,
-  browser-use, dbeaver, … (materialization cost: risk R1).
-- **Distribution caveat**: 3/4 of the ground truth is AI comments
-  verified by experts — close to pir's own input distribution (an
-  advantage for M0), but must be flagged when extrapolating to
-  human-review taste.
-
-### 4.2 The evaluation framework `github.com/alibaba/aacr-bench`
-
-- Data: `dataset/positive_samples.json` (196 PRs) +
-  `negative_samples.json` (155 PRs) with nested comments; the converter
-  emits standard JSONL `ReviewInstance{instance_id, repo, base_commit,
-  head_commit, reference_comments[{path, start_line, end_line, side,
-  text}]}`.
-- Three-stage pipeline: converter (auto-download + sha256 verification;
-  reproducible sampling via `--limit/--seed`) → reviewer (clone cache +
-  checkout head; same-repo serial / cross-repo concurrent;
-  `git reset --hard && git clean -fdx` before and after; three built-in
-  implementations — OCR, Claude Code, Codex; Claude/Codex use an MCP
-  report tool for incremental findings plus a stdout/JSONL fallback
-  dual channel, the richer channel wins) → judge.
-- **The metric system (file-level semantic coverage, current)**: group
-  by file; one judge call per generated comment against *all*
-  same-file references, **one-to-many coverage allowed**; precision
-  counts only `hit_new_gt` (hitting a previously uncovered GT; greedy
-  dedup — repeat hits don't count); recall is deduplicated GT coverage;
-  balanced_score is the harmonic mean; **missing result files go to
-  `missing_instances` and stay out of the denominators** (never scored
-  as zero recall); `--eval-rounds N` averages away single-run variance;
-  every generated comment carries `matched_gt_indices` + `judge_reason`
-  audit fields; without a judge key it falls back to a mock similarity
-  (pipeline validation only).
-- **The deprecated-metrics lesson** (`docs/metric-migration.md`): the
-  legacy per-comment four-stage matcher (path→side→line(k)→semantic,
-  one-to-one with global consumption) was replaced — line-hard matching
-  under-credits legitimately repositioned findings. M1 adopts the
-  current system **and does not build its own judge**: it delegates to
-  the upstream `judge.py`/`evaluate.py` so pir's numbers share a caliber
-  with OCR / Claude Code / Codex published rows.
-- Engineering: uv venv isolation; run directories
-  `results/<benchmark>/<reviewer>/<run_id>/` never overwrite each other;
-  progress bars; `--preview` (checkout only, no LLM).
-
-### 4.3 License and citation obligations
-
-Dataset and framework are both Apache-2.0 with no additional terms;
-**using the data requires citing**:
-
-```bibtex
-@misc{zhang2026aacrbenchevaluatingautomaticcode,
-  title={AACR-Bench: Evaluating Automatic Code Review with Holistic Repository-Level Context},
-  author={Lei Zhang and Yongda Yu and Minghui Yu and others},
-  year={2026}, eprint={2601.19494}, archivePrefix={arXiv}, primaryClass={cs.SE}
-}
-```
-
-Any external publication (blog/paper/README) of AACR-Bench numbers
-carries this citation and source attribution; eval output file headers
-carry it too.
-
----
-
-## 5. Risks and open questions (check each during execution)
+## 4. Risks and open questions (check each during execution)
 
 | # | Risk | Impact | Mitigation (land it during execution) |
 | --- | --- | --- | --- |
-| R1 | Large-repo materialization cost: ClickHouse/bitcoin/elasticsearch/aspnetcore full clones run to tens of GB, slow first fetch | M0 materialization, M1 runs | Shared clone caches, fetch-only reuse; M0 can `git fetch --depth 1 origin <sha>` (no merge-base needed); M1 needs merge-base — full-cache or `--filter=blob:none` on-demand objects; decision recorded in M1's ADR |
-| R2 | M0 material-caliber fairness: a live pir verifier can pull context via pinned reads; M0 feeds diff+file only, an caliber gap vs the OCR reflection model on identical material | M0 conclusions | State the caliber in RESULTS; optional ablation (diff-only / +file / +repo) |
-| R3 | Ground truth is 3/4 AI-comment-derived | Extrapolating to human taste | Report is_ai_comment buckets; flag in interpretation |
-| R4 | Judge cost and drift: full M1 + multi-round judging costs money; a judge-model swap makes numbers incomparable | M1/M2 | Pin the judge model per results file; `--eval-rounds 3`; mock first; copy the rb variance rules |
-| R5 | `_verify-comment` product boundary: an internal command leaking into the stable CLI contract | Long-term maintenance | Underscore prefix + no mention in skills/docs; decide promotion separately after M0 |
-| R6 | The HF dataset carries no diff bodies; materialization depends on GitHub reachability and commit survival | Materialization | Per-item error rows without aborting; resumable |
-| R7 | B2's gradual adoption mixes metrics (excerpt vs non-excerpt) | Acceptance reading | Report every correction metric in two calibers: excerpt-bearing subset and overall |
-| R8 | A too-low B3 default silently degrades large-PR quality | User perception | Tighten constants only after checking the M1 per-PR token distribution; keep the explicit `--max-tokens unlimited` exit |
-| R9 | B4's protected-subject clause over-protects → false keeps rise | M0 metrics | Track kill-rate *and* intercept-rate together; the merge gate is explicit in the roadmap |
-| R10 | Comparing against OCR's published numbers: their recall is deliberately low | External-communication mistakes | balanced_score only, externally; RESULTS fixes this caliber |
+| R1 | B2's gradual adoption mixes metrics (excerpt vs non-excerpt) | Acceptance reading | Report every correction metric in two calibers: excerpt-bearing subset and overall |
+| R2 | A too-low B3 default silently degrades large-PR quality | User perception | Tighten constants only after checking a measured per-PR token distribution; keep the explicit `--max-tokens unlimited` exit |
+| R3 | B4's protected-subject clause over-protects → false keeps rise | Merge-gate metrics | Track kill-rate *and* intercept-rate together; the merge gate is explicit in the roadmap |
 
 ---
 
-## 6. Research method and materials
+## 5. Research method and materials
 
 - **OCR source**: `git clone --depth 50
   https://github.com/alibaba/open-code-review`, head commit `8eb8334`
@@ -535,14 +442,7 @@ carry it too.
   internals / rules & ecosystem / output & sessions) plus manual
   verification of key files (README, ASSURANCE_CASE, architecture.md,
   main_task_system.md, ROADMAP).
-- **aacr-bench framework**: `git clone
-  https://github.com/alibaba/aacr-bench`; read evaluation/README.md,
-  docs/metrics.md, metric-migration.md, reviewers/ocr.py, and the two
-  dataset sample files.
-- **HF dataset**: downloaded `dataset.json` directly and verified the
-  full statistics (§4.1 figures are measured, not transcribed).
-- Local copies (temporary, rebuildable): `/tmp/open-code-review`,
-  `/tmp/aacr-bench`, `/tmp/aacr-dataset.json`.
+- Local copies (temporary, rebuildable): `/tmp/open-code-review`.
 - The pir baseline (§2) comes from a full survey of this repository's
   dev branch (as of a35e4b4): module-by-module reading of
   supervisor/agents/memory/findings/changes/tools/cli/tests plus the

@@ -3,7 +3,7 @@
 ## Status
 
 **Accepted (2026-10-19).** Roadmap item B3 of
-`docs/roadmap-ocr-borrow-and-aacr-benchmark.md` (borrow track, P0):
+`docs/roadmap-ocr-borrowings.md` (borrow track, P0):
 `pir find` gets default per-role token ceilings and a controlled
 truncation path, without changing the incompleteness or exit-code
 contract. This ADR supersedes the "no default token budget" policy that
@@ -95,7 +95,7 @@ behavior (`tests/integration/parallel-drain.test.js`,
 **`--max-tokens unlimited` is the explicit opt-out**, mirroring
 `--max-findings unlimited` (#57): it parses to `null` and disables every
 token ceiling, restoring the 82505f9 policy for a run that needs it (risk
-R8's escape hatch). It also names a silent-cap trap: with defaults in
+R2's escape hatch). It also names a silent-cap trap: with defaults in
 force, omitting the flag no longer means "unbounded", so the ReviewBench
 runner's "unlimited" mode now passes it explicitly
 (`tests/eval/reviewbench/run-rb.js`) — as must any external caller.
