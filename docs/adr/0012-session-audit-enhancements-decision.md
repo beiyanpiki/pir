@@ -2,11 +2,11 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B7 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. No transcript-default or web-marking work is added; the conditions under which the decision reopens are recorded below.
+**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B7 of the OCR-borrow series, Iteration 4. No transcript-default or web-marking work is added; the conditions under which the decision reopens are recorded below.
 
 ## Context
 
-D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs and ships a viewer with replay, marks and comparison; pir writes opt-in session snapshots (`PIR_TRANSCRIPTS=1`) plus a `run.json` manifest and renders findings in a read-only web explorer. The roadmap made the gap a **data-triggered** decision: act only on "accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence", and the action named was `localStorage` mark-and-hide after the OCR viewer. The trigger is therefore about *demonstrated need*, not about parity with OCR.
+D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs and ships a viewer with replay, marks and comparison; pir writes opt-in session snapshots (`PIR_TRANSCRIPTS=1`) plus a `run.json` manifest and renders findings in a read-only web explorer. The series made the gap a **data-triggered** decision: act only on "accumulated debugging / cost-attribution demand, or prompt tuning needing replay evidence", and the action named was `localStorage` mark-and-hide after the OCR viewer. The trigger is therefore about *demonstrated need*, not about parity with OCR.
 
 ## Evidence
 
@@ -16,7 +16,7 @@ D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs
 
 **3. Prompt tuning used labels and findings, not replay.** B4's asymmetric rejection clause and B5's `PROJECT RULES` injection were evaluated on M0's 2,134 labelled comments and on dogfood findings; the evidence that decided them was score movement and finding provenance, not session replay. The documented fidelity limit reinforces this: pir's transcripts are retained SDK session snapshots (compaction may replace earlier context), **not provider request captures** — they are investigation aids, and an "on by default" replay surface would invite over-reading them as exact wire evidence.
 
-**4. The missing UI feature has no recorded demand.** Transcripts are opt-in for CLI runs and enabled by default only for web-enabled server runs (`src/server/server.ts`), the explorer is read-only, and page alerts already have mark-read. No roadmap item, dogfood finding, issue or ADR asks for mark-and-hide; the OCR viewer is the only source of the idea, and the roadmap's own non-borrow list treats parity here as optional.
+**4. The missing UI feature has no recorded demand.** Transcripts are opt-in for CLI runs and enabled by default only for web-enabled server runs (`src/server/server.ts`), the explorer is read-only, and page alerts already have mark-read. No roadmap item, dogfood finding, issue or ADR asks for mark-and-hide; the OCR viewer is the only source of the idea, and the series pursues measured gaps, not parity.
 
 ## Decision
 
@@ -37,8 +37,6 @@ D-B7 compared pir's audit surface with OCR's: OCR writes full JSONL session logs
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
-- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (session-auditing row) and §4 (risk table).
 - Contract: [`docs/review-loop.md`](../review-loop.md) "Session metrics and transcripts"; [`docs/for-llm.md`](../for-llm.md) environment table (`PIR_TRANSCRIPTS`).
 - Implementation: `src/agents/transcripts.ts` (opt-in), `src/server/server.ts` (web default), `src/observability/run-events.ts` (manifest), `src/server/web-store.ts` (run summaries/coverage).
 - Cost source: [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md).

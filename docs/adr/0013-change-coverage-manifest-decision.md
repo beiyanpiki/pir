@@ -2,17 +2,17 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the trigger did not fire, and the substance already exists.** Decision point D-B8 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. The decision is a *reject of a new contract*, not a reject of coverage reporting: C1's ledger and B1's exclusion record already carry the audit information, and this ADR fixes the derivation rule so no second schema is invented.
+**Accepted (2026-10-20), outcome: rejected — the trigger did not fire, and the substance already exists.** Decision point D-B8 of the OCR-borrow series, Iteration 4. The decision is a *reject of a new contract*, not a reject of coverage reporting: C1's ledger and B1's exclusion record already carry the audit information, and this ADR fixes the derivation rule so no second schema is invented.
 
 ## Context
 
-D-B8 asked for a change-mode coverage manifest with per-file terminal states (reviewed / skipped / excluded) and for `incomplete` to be tied to coverage, taking OCR's frozen-denominator RunManifest as the model. The roadmap made it data-triggered: act "after B1, [when] the envelope already carries exclusion reasons and automation consumers ask for coverage auditing". B1 landed (ADR 0004), so the remaining question is whether any consumer actually asks for the extra vocabulary — and whether gating completion on coverage is the right direction.
+D-B8 asked for a change-mode coverage manifest with per-file terminal states (reviewed / skipped / excluded) and for `incomplete` to be tied to coverage, taking OCR's frozen-denominator RunManifest as the model. The series made it data-triggered: act "after B1, [when] the envelope already carries exclusion reasons and automation consumers ask for coverage auditing". B1 landed (ADR 0004), so the remaining question is whether any consumer actually asks for the extra vocabulary — and whether gating completion on coverage is the right direction.
 
 ## Evidence
 
 **1. What already ships.** Change mode records a coverage ledger on the run manifest and on each round record: `hunksTotal` / `hunksCovered` / `filesTotal` / `filesCovered` plus a per-file `files[]` of `{ path, covered, total }` capped at 200 entries (`src/core/change-coverage.ts`; `RunManifest.changeCoverage` in `src/observability/run-events.ts`). A hunk counts as covered only through a deliberate read — paged `get_change` lines or a head-revision `read_code` window intersecting the hunk — never through overview listings or collector evidence. B1 adds `files[].excluded` + `excludedReason` to both the envelope's and the manifest's file list, with the diff body emptied at the source (`src/changes/change-set.ts`). Audit mode already has the per-file ledger with `reviewed` / `partial` / `unreviewed` / `blocked` / `failed` states (`audit_file_coverage`) and units. All of it is exposed: the web API returns a mode-specific `/api/runs/:projectId/:runId/coverage` payload (`src/server/web-store.ts`), `pir runs status` prints coverage and stop reason (`src/cli/runs.ts`), and [`docs/for-llm.md`](../for-llm.md) documents the change-mode contract.
 
-**2. The consumers that exist are already served, and no one asks for the new vocabulary.** The web run detail, `pir runs status` and `pir audit coverage` read the current fields. The M1 evaluation driver does not persist coverage at all — a deliberate eval-side scope decision (a row records findings and cost, and the judge never needs hunk coverage), not a consumer asking the manifest for a different schema. No issue, roadmap item, dogfood finding or ADR requests per-file terminal states or a coverage-gated completion; the only source of that idea is OCR's manifest, and the roadmap's non-borrow list treats parity as optional.
+**2. The consumers that exist are already served, and no one asks for the new vocabulary.** The web run detail, `pir runs status` and `pir audit coverage` read the current fields. The M1 evaluation driver does not persist coverage at all — a deliberate eval-side scope decision (a row records findings and cost, and the judge never needs hunk coverage), not a consumer asking the manifest for a different schema. No issue, roadmap item, dogfood finding or ADR requests per-file terminal states or a coverage-gated completion; the only source of that idea is OCR's manifest, and the series pursues measured gaps, not parity.
 
 **3. Terminal states are derivable from the existing two fields, cheaply and without ambiguity.** For a file in `changeCoverage.files`: `covered === total` → reviewed; `0 < covered < total` → partial; `covered === 0` → unreviewed. Excluded files are already terminal in `files[]` and are deliberately absent from the coverage denominator (ADR 0004 §4: no unreachable denominator, so full coverage stays achievable) — a second state machine would duplicate that information and create two sources of truth that can drift. The one genuinely missing value, "skipped/not selected", is an audit-mode concept (scope selection); change mode's denominator is the reviewed diff, so there is nothing to call skipped.
 
@@ -37,8 +37,6 @@ D-B8 asked for a change-mode coverage manifest with per-file terminal states (re
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
-- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (coverage-accounting row).
 - B1: [ADR 0004](0004-change-mode-file-filter.md) §4 (excluded ≠ invisible; excluded hunks stay out of the coverage denominator).
 - C1: [ADR 0003](0003-findings-quality-roadmap.md) decision 2 (coverage ledger, observational then one forced round).
 - Contract: [`docs/for-llm.md`](../for-llm.md) (change-mode coverage), [`docs/review-loop.md`](../review-loop.md) (completion and coverage), `docs/adr/0001-shared-review-executor.md`.

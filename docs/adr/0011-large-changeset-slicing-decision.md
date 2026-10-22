@@ -2,17 +2,17 @@
 
 ## Status
 
-**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of [the OCR-borrow roadmap](../roadmap-ocr-borrowings.md), Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
+**Accepted (2026-10-20), outcome: rejected — the data trigger did not fire.** Decision point D-B6 of the OCR-borrow series, Iteration 4. No implementation is added by this decision; the measurement that would reopen it is recorded below.
 
 ## Context
 
-D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The roadmap deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The research document also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson) — see the companion context §3 (context-slicing row, deliberate non-borrowings).
+D-B6 asked whether `pir find` should slice a large diff deterministically (hunk adjacency, one reviewer round per slice, fingerprint dedup across slices) and compared that with OCR's LLM semantic grouping. The series deliberately made it **data-triggered**: "M1 shows large PRs (>2000 lines) materially worse on findings density/cost, and B3's default budget hit frequently". The series' research also stated the fallback constraint up front: slicing must fail back to a single pass and must never act as a correctness gate (OCR's lesson).
 
 The trigger is a conjunction of two measurements on material that M1's population can actually contain. Both were checked against the data available at Iteration 4.
 
 ## Evidence
 
-**1. The benchmark population has no large PRs at all.** The M1 fixture is the upstream `positive_samples` split (196 PRs; sha256 `02c8561f…`, pinned in [meta.json](../../tests/eval/aacr/meta.json)). Its `change_line_count` distribution is p50 154, p75 324, p90 689, **max 971**; PRs ≥1,000 lines: **0**; ≥2,000 lines: **0**. The roadmap's own threshold cannot be reached on AACR-Bench's positive split, so M1 cannot produce the first conjunct of the trigger — not because large PRs looked fine, but because the population does not contain one. This is now a documented limitation of the benchmark for size-related claims.
+**1. The benchmark population has no large PRs at all.** The M1 fixture is the upstream `positive_samples` split (196 PRs; sha256 `02c8561f…`, pinned in [meta.json](../../tests/eval/aacr/meta.json)). Its `change_line_count` distribution is p50 154, p75 324, p90 689, **max 971**; PRs ≥1,000 lines: **0**; ≥2,000 lines: **0**. The series' own threshold cannot be reached on AACR-Bench's positive split, so M1 cannot produce the first conjunct of the trigger — not because large PRs looked fine, but because the population does not contain one. This is now a documented limitation of the benchmark for size-related claims.
 
 **2. The sampled size/cost relationship shows no "materially worse" regime.** The 57 completed instances of the parked M1 round (reviewer side, judge-independent data; per-PR table in [RESULTS Appendix A](../../tests/eval/aacr/results/RESULTS.md)) were bucketed into size quartiles:
 
@@ -33,7 +33,7 @@ Cost per PR and findings per PR rise with size (roughly 4× and 5× from q1 to q
 
 **Reject D-B6 for now; do not implement slicing.** The trigger is a conjunction whose first conjunct cannot be measured on the current benchmark and whose second conjunct is contradicted by the production manifests. Implementing a large structural feature on absent evidence is exactly what the "data-triggered" designation exists to prevent.
 
-The decision is a *reject*, not a permanent foreclosure. If reopened, the roadmap's constraints stand unchanged: slice by hunk adjacency, one round per slice, fingerprint dedup across slices, failure falls back to the single-pass review, and slicing never becomes a correctness gate.
+The decision is a *reject*, not a permanent foreclosure. If reopened, the series' constraints stand unchanged: slice by hunk adjacency, one round per slice, fingerprint dedup across slices, failure falls back to the single-pass review, and slicing never becomes a correctness gate.
 
 ## Revisit conditions (must be measured before opening the ADR again)
 
@@ -51,8 +51,6 @@ The decision is a *reject*, not a permanent foreclosure. If reopened, the roadma
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
-- Companion context: [`docs/ocr-borrowings-context.md`](../ocr-borrowings-context.md) §3 (context-slicing row, deliberate non-borrowings).
 - Measurement sources: [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md); M1 fixture pin in [`tests/eval/aacr/meta.json`](../../tests/eval/aacr/meta.json); parked round per-PR data in RESULTS Appendix A; local run manifests under `~/.local/state/pir` (machine-local, not committed).
 - Related ADRs: [0003](0003-findings-quality-roadmap.md) (C1 coverage ledger), [0006](0006-default-token-budget-with-grace.md) (B3 default budget), [0009](0009-m1-end-to-end-benchmark.md) (M1 and its §11 M2 amendment).
 

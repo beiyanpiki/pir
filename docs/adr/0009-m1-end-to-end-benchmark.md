@@ -2,8 +2,8 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Roadmap item M1 (End-to-end benchmark) of
-`docs/roadmap-ocr-borrowings.md`, Iteration 2. This ADR
+**Accepted (2026-10-19).** Item M1 (End-to-end benchmark) of the 2026-10
+OCR-borrow series, Iteration 2. This ADR
 records the skeleton — fixture, driver, normalization, judge delegation and
 the materialization decision — and the `--limit 20` smoke that exercised it
 end to end; the full 196-PR run, the `--eval-rounds 3` averaging and the
@@ -12,8 +12,8 @@ in progress. M1 is consistent with, and reuses, [ADR-0007](0007-aacr-verifier-of
 (M0): same opt-in surface, same isolation conventions, same provenance
 guards, same unredistributed-data stance. **Amended 2026-10-20 (M2,
 Iteration 4):** decision 11 records the locked baseline population and the
-change protocol; the full 196-PR run remains parked by maintainer direction
-(see the roadmap's M1 pause note), so M1 still has no published score.
+change protocol; the full 196-PR run remains parked by maintainer direction,
+so M1 still has no published score.
 
 ## Context
 
@@ -190,7 +190,7 @@ of that measurement.
    materialization.
 
 8. **Cost and variance stance.** The `--limit 20` smoke is a documented
-   manual command (README and this ADR), never a CI gate (roadmap M2 T3,
+   manual command (README and this ADR), never a CI gate (M2 T3,
    ADR-0003 §4). `--repeats` exists for repeated runs; the full comparison
    uses upstream's `--eval-rounds 3` averaging, and the smoke reports a single
    judge round. One judge-pipeline invocation must finish all three rounds: the
@@ -256,7 +256,6 @@ of that measurement.
 
 ## References
 
-- Roadmap: [`docs/roadmap-ocr-borrowings.md`](../roadmap-ocr-borrowings.md).
 - M0 protocol and conventions: [ADR-0007](0007-aacr-verifier-offline-benchmark.md).
 - Upstream: [alibaba/aacr-bench](https://github.com/alibaba/aacr-bench) @ `ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df` (Apache-2.0), `evaluation/pipeline.py`, `evaluation/evaluate.py`, `evaluation/judge.py`, `evaluation/config.py`.
 - Citation: arXiv 2601.19494, `AACR-Bench: Evaluating Automatic Code Review with Holistic Repository-Level Context`.

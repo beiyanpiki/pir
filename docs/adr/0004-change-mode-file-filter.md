@@ -2,11 +2,10 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Written for roadmap item B1 (Iteration 1) of the
-OCR-borrow plan, `docs/roadmap-ocr-borrowings.md`;
-B5 (layered user rule file) builds on the include/exclude seam recorded here.
-The roadmap tracking file is a temporary artifact and is deleted once the
-series completes — this ADR absorbs the decisions it needs.
+**Accepted (2026-10-19).** Written for item B1 (Iteration 1) of the 2026-10
+OCR-borrow series; B5 (layered user rule file) builds on the include/exclude
+seam recorded here. The series' tracking file has been retired — this ADR is
+its surviving record.
 
 ## Context
 
@@ -21,14 +20,15 @@ files nobody may review: `.env`, `.ssh` material, registry credentials. The
 reachable set also sizes the run: diff lines are paged 120 at a time
 (`get_change`), so one generated file can eat a session's entire budget.
 
-The research context (`docs/ocr-borrowings-context.md` §1.3,
-comparison table §3) documents the mechanism OCR uses against exactly this:
-a **six-gate pure filter** (`internal/agent/selection.go`, `whyExcluded`
+OCR uses exactly this mechanism against the same problem: a **six-gate pure
+filter** (`internal/agent/selection.go`, `whyExcluded`
 :70) with a fixed order — binary → secret paths → user exclude → user
 include → extension allowlist → built-in ~100 default excludes — plus two
 post-gates (deleted files kept as context, single-file diff over 80% of
 MAX_TOKENS → `too_large`). Entry `Agent.Run` is `internal/agent/agent.go`
-:284. Three properties of that design are load-bearing here:
+:284. OCR citations in this ADR are against `alibaba/open-code-review` @
+`8eb8334` (Apache-2.0), the revision this series surveyed. Three properties
+of that design are load-bearing here:
 
 1. **The secret gate is not rescuable by any user rule.** Everything else is
    negotiable; a credential in a prompt cannot be recalled.
@@ -124,8 +124,8 @@ hence B1 combines a filter with an exclusion record and a preview.
   lockfiles, generated output and vendored trees; secret paths cannot reach a
   model prompt through any pinned channel; audit and change mode share one
   policy table; the coverage denominator stays reachable; and the selection
-  becomes auditable *before* a run is paid for. M1 measures the effect on
-  real PRs (roadmap: "B1's effect measured by M1").
+  becomes auditable *before* a run is paid for. M1 is the surface meant to
+  measure the effect on real PRs.
 - **Negative:** a genuinely interesting lockfile or generated-file change is
   no longer diff-reviewed by default — a real recall trade, deliberate, but
   worth reading together with OCR's own recall stance. B5's rule file is the

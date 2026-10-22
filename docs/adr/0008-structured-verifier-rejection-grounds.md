@@ -2,9 +2,8 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Roadmap item B4 of
-`docs/roadmap-ocr-borrowings.md` (borrow track, P1) in
-Iteration 2. A rejected verification names *why* it rejected, in a fixed
+**Accepted (2026-10-19).** Item B4 of the 2026-10 OCR-borrow series (P1)
+in Iteration 2. A rejected verification names *why* it rejected, in a fixed
 vocabulary, so the reason survives the session and can be audited, bucketed
 and compared. M0's kill-family numbers are the merge gate.
 
@@ -41,10 +40,10 @@ parameter). Its cost model is explicit: "Removing a correct comment silently
 destroys a real finding. It never reaches anyone, and nobody learns that it
 was dropped." B4 borrows the enumeration and the cost statement, not OCR's
 diff-only evidence base: pir's verifier may read the whole pinned revision,
-so its grounds are naturally richer than A/B (roadmap context §1.3).
+so its grounds are naturally richer than A/B.
 
-The risk register constrains the design: kill-family numbers must be read
-jointly (R3), so the gate must report `killRate`, `falseKillRate` and
+The design requires the kill-family numbers to be read jointly, so the
+gate must report `killRate`, `falseKillRate` and
 `interceptPrecision` together.
 
 ## Decision
@@ -57,7 +56,7 @@ jointly (R3), so the gate must report `killRate`, `falseKillRate` and
    "true but not ours" (the two distinct ways a change-mode rejection can be
    correct about the code and irrelevant to the review); `guarded` covers
    unreachability; `speculative` covers a claim with no concrete failure;
-   `other` is the absorbing bucket. The roadmap writes the field as
+   `other` is the absorbing bucket. The series' plan wrote the field as
    `rejection_ground`; the tool parameter is `rejectionGround`, following the
    parameter naming every other collector tool uses (`uncertaintyReason`,
    `priorDecisionStillApplies`, `codeFeedback`).
@@ -101,8 +100,7 @@ jointly (R3), so the gate must report `killRate`, `falseKillRate` and
    post-B4 builds run the same materialized 100-comment sample (seed 42,
    digest `74f43e2f…c07d`, the Iteration 1 sample), the same model id and the
    same scoring code; only the CLI build differs. `falseKillRate` must not
-   regress, and `killRate` / `interceptPrecision` are read with it (R3,
-   ADR-0007 §5). The roadmap's wording "kill-rate (rejecting a label=1
+   regress, and `killRate` / `interceptPrecision` are read with it (ADR-0007 §5). The series' wording "kill-rate (rejecting a label=1
    comment)" is ADR-0007's `falseKillRate`; the results file names all three
    so neither wording can be misread. The gate runs on the verifier arm only:
    B4 touches no OCR prompt or ocr-arm code, so an OCR row would be an
