@@ -21,9 +21,14 @@ import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
 import {
   ProjectRuleError,
+  applyProjectRules,
+  checkProjectRules,
+  layerLabel,
   loadProjectRules,
   pirConfigDir,
+  type ProjectRuleCheck,
   type ProjectRuleSet,
+  type RuleLayerCheck,
 } from "../rules/project-rules.js";
 import { UserBackgroundError, resolveUserBackground, type UserBackground } from "../core/user-background.js";
 import { runAudit } from "../app/audit.js";
@@ -75,6 +80,7 @@ Usage:
       --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
              viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
+  pir rules check <path>                 which project rule wins for a repository path
   pir skill [path|install|print]         locate / install the LLM skill for pir
   pir plugins list                      list language packs and what this repo activates
   pir version`,
@@ -341,6 +347,18 @@ Usage:
   pir config show also prints the effective project-rule layers (repo
   .pir/rule.json + global ~/.pir/rule.json) and their canonical hash`,
 
+  rules: `Rules options (which project rule wins for a path — reads rule files only):
+  check <path>        print the winning rule for one repository path: layer,
+                      matched glob, mergeBuiltin and the rendered guidance
+                      text. <path> is repository-relative; an absolute path
+                      inside the repository is accepted and reported relative.
+                      A path that does not exist is matched by string and
+                      flagged. No review run, no model session, no project db.
+  --rule <path>       add the per-invocation layer find also accepts; a missing
+                      or invalid file is a usage error
+  --json              machine-readable envelope (rules.check), including the
+                      rendered PROJECT RULES section for that path`,
+
   footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
 Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime error`,
@@ -361,6 +379,7 @@ export const USAGE = [
   USAGE_SECTIONS.modes,
   USAGE_SECTIONS.remote,
   USAGE_SECTIONS.config,
+  USAGE_SECTIONS.rules,
   USAGE_SECTIONS.footer,
 ].join("\n\n");
 
@@ -376,6 +395,7 @@ const HELP_SECTIONS: Record<string, string> = {
   memory: USAGE_SECTIONS.memorySync,
   serve: USAGE_SECTIONS.serve,
   config: USAGE_SECTIONS.config,
+  rules: USAGE_SECTIONS.rules,
 };
 
 /**
@@ -625,6 +645,15 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
       throw new UsageError(`--cwd must stay under ${guard}`);
     }
     cwd = resolved;
+  }
+
+  // Project-rule introspection (Track B, S7): answers "which rule wins for
+  // this path?" from the same layer loader and matcher find uses. Client-side
+  // only — it reads the caller's rule files, opens no project database and
+  // starts no model session.
+  if (command === "rules") {
+    if (opts.cwdGuard) throw new UsageError("rules is a client-side command; run it on your machine");
+    return await cmdRules(positional.slice(1), flags, json, emit, out, cwd);
   }
 
   // Review the working tree (tracked + untracked) as a virtual commit,
@@ -2086,6 +2115,157 @@ function renderProjectRulesConfig(rules: ProjectRuleSet): string {
   }
   lines.push(`  hash: ${rules.hash}`);
   return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Rule-layer display labels: the same `layerLabel` the reviewer prompt uses,
+ * so the command cannot name a layer differently from the prompt it explains
+ * (and neither output carries a host path).
+ */
+const ruleLayerFile = (set: ProjectRuleSet, index: number): string => layerLabel(set.layers[index]!);
+
+/** Normalize the checked path to the repo-relative POSIX form globs match. */
+function ruleCheckPath(repoRoot: string, raw: string): string {
+  const given = raw.trim().replace(/\\/g, "/");
+  if (given === "") throw new UsageError("rules check requires a non-empty <path>");
+  if (path.posix.isAbsolute(given)) {
+    const relative = path.relative(repoRoot, path.resolve(given)).split(path.sep).join("/");
+    if (relative === "" || relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
+      throw new UsageError("rules check path must be a file inside the repository");
+    }
+    return relative;
+  }
+  const relative = path.posix.normalize(given).replace(/^\.\//, "");
+  if (relative === "" || relative === "." || relative === ".." || relative.startsWith("../") || relative.endsWith("/")) {
+    throw new UsageError(`rules check path must name a file inside the repository (got "${raw}")`);
+  }
+  return relative;
+}
+
+/** Why one layer did or did not select a rule, in the command's own words. */
+function describeRuleLayer(layer: RuleLayerCheck): string {
+  if (layer.includedBy === null) return "path not included by any include glob";
+  if (layer.excludedBy !== null) return `path excluded by exclude glob "${layer.excludedBy}"`;
+  if (layer.rulePath === null) return "path included, no rule matched";
+  return layer.won
+    ? `winning rule "${layer.rulePath}"`
+    : `matches rule "${layer.rulePath}" (a higher-priority layer wins)`;
+}
+
+function renderRuleCheck(check: ProjectRuleCheck, set: ProjectRuleSet, displayPath: string, exists: boolean): string {
+  const lines = [`path: ${displayPath}`];
+  if (!exists) lines.push("note: path does not exist in this checkout; matched by path only");
+  if (check.match) {
+    const { layer, rule, layerIndex } = check.match;
+    lines.push(`rule: "${rule.path}"`);
+    lines.push(`layer: ${layer.layer} (${ruleLayerFile(set, layerIndex)})`);
+    lines.push(`mergeBuiltin: ${rule.mergeBuiltin}`);
+    const source = rule.guidanceSource === "file" ? `file ${rule.guidanceFile}` : "inline";
+    lines.push(`guidance (${source}, ${rule.guidance.length} chars):`);
+    lines.push(rule.guidance);
+    lines.push("");
+  } else {
+    lines.push("rule: none");
+    lines.push("layers:");
+    if (check.layers.length === 0) {
+      lines.push("  none loaded (searched .pir/rule.json and ~/.pir/rule.json; --rule is per invocation)");
+    } else {
+      for (const [index, layer] of check.layers.entries()) {
+        const count = `${layer.rules} rule${layer.rules === 1 ? "" : "s"}`;
+        lines.push(`  ${layer.layer} (${ruleLayerFile(set, index)}): ${count}, ${describeRuleLayer(layer)}`);
+      }
+    }
+  }
+  lines.push(`rules hash: ${set.hash}`);
+  return `${lines.join("\n")}\n`;
+}
+
+function ruleCheckJson(
+  check: ProjectRuleCheck,
+  set: ProjectRuleSet,
+  displayPath: string,
+  exists: boolean,
+  renderedSection: string,
+): Record<string, unknown> {
+  const winner = check.match;
+  return {
+    path: displayPath,
+    exists,
+    rulesHash: set.hash,
+    matched: winner !== null,
+    winner:
+      winner === null
+        ? null
+        : {
+            layer: winner.layer.layer,
+            file: ruleLayerFile(set, winner.layerIndex),
+            rule: winner.rule.path,
+            mergeBuiltin: winner.rule.mergeBuiltin,
+            guidanceSource: winner.rule.guidanceSource,
+            guidanceFile: winner.rule.guidanceFile ?? null,
+            guidance: winner.rule.guidance,
+          },
+    // The exact reviewer-prompt section this path would receive ("" when no
+    // rule applies); the same `applyProjectRules` call find makes.
+    renderedSection,
+    layers: check.layers.map((layer, index) => ({
+      layer: layer.layer,
+      file: ruleLayerFile(set, index),
+      rules: layer.rules,
+      include: layer.include,
+      exclude: layer.exclude,
+      includedBy: layer.includedBy,
+      excludedBy: layer.excludedBy,
+      rule: layer.rulePath,
+      won: layer.won,
+    })),
+  };
+}
+
+/**
+ * `pir rules check <path>` (Track B, S7): the winning rule, its layer, the
+ * matched glob and the rendered guidance for one repository path. Pure read:
+ * no review run row, no project database, no model session, no repo writes.
+ */
+async function cmdRules(
+  args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  out: string[],
+  cwd: string,
+): Promise<{ code: number; output: string }> {
+  if (flags.has("--repo")) throw new UsageError("rules check reads this checkout; --repo is not supported");
+  if (flags.has("--base") || flags.has("--head") || flags.has("--branch") || flags.has("--uncommitted")) {
+    throw new UsageError("rules check matches one path, not a review range; --base/--head/--branch/--uncommitted do not apply");
+  }
+  const sub = args[0];
+  if (sub === undefined) throw new UsageError("rules requires a subcommand: check <path>");
+  if (sub !== "check") throw new UsageError(`unknown rules subcommand: ${sub} (expected check <path>)`);
+  const raw = args[1];
+  if (raw === undefined) throw new UsageError("rules check requires a <path>");
+  if (args.length > 2) throw new UsageError("rules check takes one <path>");
+  const repoRoot = path.resolve(cwd);
+  const displayPath = ruleCheckPath(repoRoot, raw);
+  const explicitPath = typeof flags.get("--rule") === "string" ? (flags.get("--rule") as string) : undefined;
+  let set: ProjectRuleSet;
+  try {
+    set = loadProjectRules({ repoRoot, ...(explicitPath === undefined ? {} : { explicitPath }) });
+  } catch (error) {
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
+  // Winner and layer explanation share the reviewer prompt's matcher, and the
+  // rendered section is the same `applyProjectRules` output find consumes.
+  const check = checkProjectRules(set, displayPath);
+  const renderedSection = applyProjectRules(set, [{ path: displayPath }]).section;
+  const exists = existsSync(path.join(repoRoot, displayPath));
+  emit(
+    json
+      ? `${envelope("rules.check", ruleCheckJson(check, set, displayPath, exists, renderedSection))}\n`
+      : renderRuleCheck(check, set, displayPath, exists),
+  );
+  return { code: 0, output: out.join("") };
 }
 
 async function cmdSkill(
