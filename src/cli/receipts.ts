@@ -174,6 +174,24 @@ export function writeLocalReceipt(receipt: Receipt): string | null {
   }
 }
 
+/**
+ * Settle a detached local run from the child's exit hook: record when it
+ * ended and with which code. A missing receipt is a no-op (the parent may
+ * have failed to write one, and a signal death runs no exit hook at all, so
+ * an unsettled receipt is the honest state of a killed detach).
+ */
+export function settleLocalReceipt(jobId: string, exitCode: number | null): void {
+  try {
+    for (const { file, receipt } of findReceipts(jobId)) {
+      if (receipt.mode !== "local") continue;
+      writeReceiptFile(file, { ...receipt, settledAt: new Date().toISOString(), exitCode });
+    }
+  } catch {
+    // The run's own result is already in the log and the project database;
+    // losing the settlement update is not fatal to the review.
+  }
+}
+
 export interface ReceiptFile {
   file: string;
   receipt: Receipt;
@@ -255,6 +273,18 @@ export function updateReceiptFromResult(jobId: string, resultOutput: string): vo
  */
 export function receiptRecoveryCommands(receipt: Receipt): string[] {
   const id8 = receipt.jobId.slice(0, 8);
+  // A detached local run has no server and no job registry: everything about
+  // it is local (ADR 0022). Two concurrent detaches are told apart by these
+  // receipts and logs, never by `audit coverage --latest`.
+  if (receipt.mode === "local") {
+    const local = [
+      ...(receipt.logPath ? [`tail -f ${shellQuote(receipt.logPath)}    # the detached run's log`] : []),
+      `pir receipts show ${id8}    # the child's exit code, once it settled`,
+      ...(receipt.kind === "audit" ? ["pir audit coverage --latest    # that run's status (a local detach records no run id)"] : []),
+      "pir findings list    # what the run has written so far",
+    ];
+    return local;
+  }
   const commands = [
     `pir jobs wait ${id8} --server ${receipt.origin}    # follow it again`,
     `pir jobs fetch ${id8} --server ${receipt.origin}   # relay a finished result`,

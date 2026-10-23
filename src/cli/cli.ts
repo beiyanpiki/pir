@@ -3,6 +3,7 @@ import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
+import { settleLocalReceipt } from "./receipts.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
@@ -19,6 +20,16 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // ADR 0022: a detached local run is this same CLI with PIR_LOCAL_JOB_ID set.
+  // Its exit hook is what makes the receipt durable: it records when the child
+  // ended and with which code. A signal death runs no exit hook, so a killed
+  // detach legitimately stays unsettled — that is how it is told apart from a
+  // running one. A missing receipt makes settlement a no-op.
+  const localJobId = process.env.PIR_LOCAL_JOB_ID;
+  if (localJobId) {
+    process.on("exit", (code) => settleLocalReceipt(localJobId, code));
+  }
+
   // --help is answered locally before anything else (#43): no config load,
   // no wizard, no transport resolution, no git, no network — so help works
   // offline, outside a repository, with a read-only .git and with a missing
