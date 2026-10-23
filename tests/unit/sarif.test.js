@@ -192,6 +192,34 @@ test("multiple anchors: the primary location plus relatedLocations with unique i
   }]);
 });
 
+test("only reported statuses become results: rejections and suppressions are not alerts", () => {
+  const log = sarifLog(input({
+    findings: [
+      view({ displayId: "F-1", status: "confirmed" }),
+      view({ displayId: "F-2", status: "uncertain", severity: "P3", category: "style" }),
+      view({ displayId: "F-3", status: "rejected", severity: "P1" }),
+      view({ displayId: "F-4", status: "expected", severity: "P0" }),
+      view({ displayId: "F-5", status: "false_positive" }),
+      view({ displayId: "F-6", status: "accepted_risk" }),
+      view({ displayId: "F-7", status: "wont_fix" }),
+    ],
+  }));
+  assert.deepEqual(log.runs[0].results.map((result) => result.properties.displayId), ["F-1", "F-2"]);
+  // Rules come from the reported set too: a category seen only on a dismissed
+  // row does not enter the driver's rule list.
+  assert.deepEqual(log.runs[0].tool.driver.rules.map((rule) => rule.id), ["correctness", "style"]);
+  assertValidSarif(log);
+});
+
+test("a run whose every finding was dismissed still yields a valid empty log", () => {
+  const log = sarifLog(input({
+    findings: [view({ status: "rejected" }), view({ displayId: "F-2", status: "wont_fix" })],
+  }));
+  assert.deepEqual(log.runs[0].results, []);
+  assert.equal("rules" in log.runs[0].tool.driver, false);
+  assertValidSarif(log);
+});
+
 test("a finding without usable anchors omits locations instead of inventing one", () => {
   const [result] = sarifLog(input({ findings: [view({ anchors: [] })] })).runs[0].results;
   assert.equal("locations" in result, false);

@@ -14,13 +14,14 @@ Three constraints decide the design. First, `--json` is a documented contract (t
 
 1. **`--format text|json|sarif` on `find` and `audit`.** `--json` is the same choice as `--format json`; passing both with different values is a usage error, never a precedence rule. An unknown value is a usage error that names the accepted set. The selection is validated before transport or bundle work (client-side) and again in the command, so a typo fails fast (exit 2) instead of after a review.
 2. **One SARIF run per invocation.** `tool.driver` is `{name: "pir", informationUri, version}`; `rules` is one entry per distinct finding category, sorted; `results` is one entry per reported finding, in reporting order.
-3. **The mapping is mechanical.** `category` → `ruleId` (lowercased, runs of characters outside `[a-z0-9._-]` collapse to `-`, an empty category becomes `other`); severity → `level` (P0/P1 → `error`, P2 → `warning`, P3 → `note`, anything else → `warning`); the finding's `claim` → `message.text`; anchors → physical locations (the first anchor is the primary `locations` entry, the rest become `relatedLocations` with unique ids); the canonical identity fingerprint → `partialFingerprints["pirFinding/v1"]`; `properties` carries `displayId`, `severity`, `status`, `category` and `confidence` when one is on record.
-4. **Locations are valid or absent.** `region.startLine` must be an integer ≥ 1 — an unusable anchor is dropped rather than clamped — and `endLine` is emitted only when it is ≥ `startLine`. URIs are percent-encoded per segment and repository-relative, never absolute or host-specific.
-5. **The invocation records completeness.** `executionSuccessful` mirrors `incomplete`; the run's `stoppedBecause` becomes a `warning` notification when the run is incomplete and a `note` when it completed with a stop reason; `properties` carries `command`, `runId` and, for audits, the coverage summary.
-6. **Empty is valid.** No reported findings yields `results: []` and omits `rules` (no empty rule array); the document still validates.
-7. **Exit codes do not move.** SARIF changes stdout only: `--fail-on`, `--max-findings` and `incomplete` keep their existing meanings and codes.
-8. **Lanes that cannot express findings refuse SARIF.** `find --preview`, `audit --dry-run` and `audit coverage` print selections or readouts, not findings, and reject `--format sarif` with a usage error instead of ignoring it.
-9. **Remote mode needs a same-version server.** `--format` travels in argv like any other flag; an older server ignores the unknown flag and answers in its default format, so the README states the same-version requirement the other new flags already carry.
+3. **Only reported findings become results.** The input is every verified row as persisted — the JSON envelope lists them all with their status — but `sarifLog` emits `confirmed` and `uncertain` rows only, using the same `isReported` predicate the text report and the exit-code gate use. A verifier rejection, or a row suppressed by a trusted prior decision (`expected`, `false_positive`, `accepted_risk`, `wont_fix`), is not an alert: emitting it would hand a code scanner a finding pir itself dismissed. Those rows stay visible in the envelope, which is not a scanner surface.
+4. **The mapping is mechanical.** `category` → `ruleId` (lowercased, runs of characters outside `[a-z0-9._-]` collapse to `-`, an empty category becomes `other`); severity → `level` (P0/P1 → `error`, P2 → `warning`, P3 → `note`, anything else → `warning`); the finding's `claim` → `message.text`; anchors → physical locations (the first anchor is the primary `locations` entry, the rest become `relatedLocations` with unique ids); the canonical identity fingerprint → `partialFingerprints["pirFinding/v1"]`; `properties` carries `displayId`, `severity`, `status`, `category` and `confidence` when one is on record.
+5. **Locations are valid or absent.** `region.startLine` must be an integer ≥ 1 — an unusable anchor is dropped rather than clamped — and `endLine` is emitted only when it is ≥ `startLine`. URIs are percent-encoded per segment and repository-relative, never absolute or host-specific.
+6. **The invocation records completeness.** `executionSuccessful` mirrors `incomplete`; the run's `stoppedBecause` becomes a `warning` notification when the run is incomplete and a `note` when it completed with a stop reason; `properties` carries `command`, `runId` and, for audits, the coverage summary.
+7. **Empty is valid.** No reported findings yields `results: []` and omits `rules` (no empty rule array); the document still validates.
+8. **Exit codes do not move.** SARIF changes stdout only: `--fail-on`, `--max-findings` and `incomplete` keep their existing meanings and codes.
+9. **Lanes that cannot express findings refuse SARIF.** `find --preview`, `audit --dry-run` and `audit coverage` print selections or readouts, not findings, and reject `--format sarif` with a usage error instead of ignoring it.
+10. **Remote mode needs a same-version server.** `--format` travels in argv like any other flag; an older server ignores the unknown flag and answers in its default format, so the README states the same-version requirement the other new flags already carry.
 
 ## Evidence
 
@@ -30,7 +31,9 @@ Three constraints decide the design. First, `--json` is a documented contract (t
 
 **3. The schema surface is small and checked.** `tests/unit/sarif.test.js` validates the subset this output uses — required top-level fields, the level and rule-id vocabularies, rule-id uniqueness, location regions (startLine ≥ 1, endLine ≥ startLine), related-location id uniqueness, fingerprint shape, invocation shape — against rich, empty, incomplete and audit documents. The output is asserted to be JSON-round-trippable and deterministic.
 
-**4. Nothing else changes.** The text and `--json` branches are the same code paths as before; the new branch is reached only when the resolved format is `sarif`. The existing envelope and text tests pass unchanged.
+**4. Dismissals are not alerts.** Reported status is the same boundary the text report and `findExitCode` use (`isReported`: confirmed + uncertain). A run normally contains verifier-rejected rows and rows suppressed by a trusted decision; emitting those as SARIF results would make a code scanner alert on findings pir rejected — the first dogfood round on this PR caught exactly that (F-15, P1) and the filter moved into `sarifLog`, where the unit tests cover mixed statuses.
+
+**5. Nothing else changes.** The text and `--json` branches are the same code paths as before; the new branch is reached only when the resolved format is `sarif`. The existing envelope and text tests pass unchanged.
 
 ## Acceptance mapping
 
@@ -51,6 +54,7 @@ Three constraints decide the design. First, `--json` is a documented contract (t
 - **A SARIF consumer needs a field this mapping omits** (for example `artifactLocation.uriBaseId`, rule metadata beyond a short description, or fix suggestions): extend `properties`/rule metadata deliberately and record it here.
 - **GitHub Code Scanning rejects the document** for a field this subset validator does not check: capture the exact rejection, add the check to the validator first, then fix the output.
 - **Findings appear without anchors.** They currently omit `locations`; if a consumer requires a location, decide between a placeholder URI and dropping the result — do not invent a file.
+- **A consumer wants dismissed findings represented.** Rejected and suppressed rows are absent by design. If a scanner needs them, express them as SARIF `suppressions` (or `kind: "informational"`) with the status mapping documented — never by re-admitting them as ordinary results.
 - **`--format` is wanted on another lane** (for example `findings list`): design it against that lane's payload instead of reusing the result mapping.
 
 ## References

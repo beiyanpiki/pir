@@ -1,5 +1,6 @@
 import { buildIdentity } from "../findings/identity.js";
 import type { FindingView } from "./find.js";
+import { isReported } from "./output.js";
 
 /**
  * SARIF 2.1.0 output for `find` and `audit` (roadmap S6, ADR 0020).
@@ -25,7 +26,13 @@ export interface SarifInput {
   command: "find" | "audit";
   /** pir's own version, for `tool.driver.version`. */
   version: string;
-  /** The reported findings, in reporting order (confirmed + uncertain). */
+  /**
+   * Verified rows as persisted, in reporting order. Only reported statuses
+   * (confirmed, uncertain) become results — the verifier-rejected and
+   * decision-suppressed rows the envelope still lists are not review output a
+   * scanner should alert on, and `isReported` is the same predicate the text
+   * report and the exit-code gate use.
+   */
   findings: FindingView[];
   /** True when the run did not complete cleanly; the exit-code contract is unchanged. */
   incomplete: boolean;
@@ -154,7 +161,12 @@ function invocationOf(input: SarifInput): Record<string, unknown> {
 
 /** Build the SARIF log document (no I/O; callers render or assert it). */
 export function sarifLog(input: SarifInput): Record<string, unknown> {
-  const rules = rulesFor(input.findings);
+  // Reported rows only (confirmed + uncertain). A verifier rejection or a
+  // trusted prior decision (expected / false_positive / accepted_risk /
+  // wont_fix) is not an alert: emitting it as a SARIF result would hand a
+  // code scanner a finding pir itself dismissed.
+  const reported = input.findings.filter(isReported);
+  const rules = rulesFor(reported);
   return {
     $schema: SARIF_SCHEMA,
     version: SARIF_VERSION,
@@ -169,7 +181,7 @@ export function sarifLog(input: SarifInput): Record<string, unknown> {
           },
         },
         invocations: [invocationOf(input)],
-        results: input.findings.map(resultOf),
+        results: reported.map(resultOf),
       },
     ],
   };
