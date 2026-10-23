@@ -25,13 +25,22 @@ export interface Receipt {
   projectId: string | null;
   base: string | null;
   head: string;
-  mode: "async";
+  /**
+   * "async" is a submission a server accepted (the historical value);
+   * "local" is a detached local run (ADR 0022). A file with no mode at all
+   * predates local detach and reads as a remote submission.
+   */
+  mode: "async" | "local";
   submittedAt: string;
   /** argv as sent (transport flags stripped, credential-looking tokens dropped). */
   argv: string[];
   /** Set from the job's result envelope once the run id is authoritative. */
   runId: string | null;
   settledAt?: string | null;
+  /** Local detach only: where the detached child writes its stdout/stderr. */
+  logPath?: string;
+  /** Local detach only: the child's final exit code, once it settled. */
+  exitCode?: number | null;
 }
 
 export function receiptsDir(): string {
@@ -64,6 +73,11 @@ function sanitizeReceiptArgv(argv: string[]): string[] {
   // input, not receipt metadata, so its value is redacted too (ADR-0016,
   // dogfood F-2).
   return redactUserBackgroundArgv(out);
+}
+
+/** POSIX-shell single-quoting for a path printed into a follow-up command. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Atomic, owner-only write: tmp file (0600) + rename. */
@@ -108,6 +122,51 @@ export function writeSubmissionReceipt(input: {
       runId: null,
     };
     const file = path.join(receiptsDir(), receiptFileName(input.jobId, now));
+    writeReceiptFile(file, receipt);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+export interface LocalReceiptInput {
+  /** "find" or "audit". */
+  kind: string;
+  jobId: string;
+  head: string;
+  /** argv as the detached child will run it (credential-free). */
+  argv: string[];
+  logPath: string;
+}
+
+/**
+ * A local detach's receipt (ADR 0022): no server, no project identity and no
+ * run id — origin is "local" and the durable facts are the log path and, once
+ * the child's exit hook runs, the final exit code. Built before the spawn so
+ * the record exists even if the child never starts.
+ */
+export function buildLocalReceipt(input: LocalReceiptInput): Receipt {
+  return {
+    schemaVersion: 1,
+    kind: input.kind,
+    origin: "local",
+    jobId: input.jobId,
+    projectId: null,
+    base: null,
+    head: input.head,
+    mode: "local",
+    submittedAt: new Date().toISOString(),
+    argv: sanitizeReceiptArgv(input.argv),
+    runId: null,
+    logPath: input.logPath,
+    exitCode: null,
+  };
+}
+
+/** Persist a local receipt; null (best effort) when the write fails. */
+export function writeLocalReceipt(receipt: Receipt): string | null {
+  try {
+    const file = path.join(receiptsDir(), receiptFileName(receipt.jobId, new Date(receipt.submittedAt)));
     writeReceiptFile(file, receipt);
     return file;
   } catch {

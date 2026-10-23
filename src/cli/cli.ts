@@ -150,6 +150,26 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
+  // ADR 0022: local --detach re-executes this CLI as a detached background
+  // process with a log and a receipt, then returns once the child is accepted.
+  // Handled AFTER the remote-forward branch so remote detach keeps its
+  // semantics, and the executor's server-lane rejections stay untouched. The
+  // child (PIR_LOCAL_JOB_ID) never re-detaches; anything that is not a
+  // find/audit run has nothing to detach and is a usage error.
+  if (argv.includes("--detach") && !process.env.PIR_LOCAL_JOB_ID) {
+    if (command !== "find" && command !== "audit") {
+      throw new UsageError("--detach applies to `pir find` / `pir audit`; this command has no run to detach");
+    }
+    const { localDetach } = await import("./detach.js");
+    return await localDetach({
+      argv,
+      cwd: process.cwd(),
+      env: process.env,
+      emit: (text) => process.stdout.write(text),
+      log: (message) => process.stderr.write(`${message}\n`),
+    });
+  }
+
   if (command === "serve") {
     const { runServe } = await import("../server/server.js");
     await runServe(argv.slice(1)); // resolves only on shutdown
