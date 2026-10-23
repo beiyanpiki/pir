@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
+import { machineOutputFromArgv } from "./machine-output.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
 import { settleLocalReceipt } from "./receipts.js";
@@ -46,6 +47,10 @@ async function main(argv: string[]): Promise<number> {
   // work — and therefore before a remote forward — so a typo or a
   // contradictory --json/--format pair fails fast with exit 2 (S6).
   if (command === "find" || command === "audit") resolveOutputFormat(parseArgs(argv).flags);
+  // Machine output (`--json` or `--format json|sarif`) decides two pre-executor
+  // behaviours: whether the first-run wizard may prompt, and which detach
+  // submission envelope remote.ts prints. Resolve it once here (dogfood F-17).
+  const machineOutput = machineOutputFromArgv(argv);
   let config: UserConfig | null = null;
   const webRoute = webFindingsRoute(argv);
   try {
@@ -71,7 +76,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  if (!config && shouldRunWizard(argv, command, webRoute)) {
+  if (!config && shouldRunWizard(argv, command, webRoute, machineOutput)) {
     config = await runWizard();
     if (command === undefined) {
       process.stdout.write(
@@ -249,15 +254,18 @@ function webFindingsRoute(argv: string[]): "list" | "export" | null {
  * must work on an unconfigured machine (#48/#49) — like `runs`/`receipts`
  * (LOCAL_ONLY), it never triggers first-run setup. The wizard otherwise runs
  * before the webRoute dispatch and contradicts that contract (dogfood F-55).
+ * Machine output (`--json` or `--format json|sarif`) skips it for the same
+ * reason: a prompt on stdout would corrupt the envelope (dogfood F-17).
  */
 function shouldRunWizard(
   argv: string[],
   command: string | undefined,
   webRoute: "list" | "export" | null,
+  machineOutput: boolean,
 ): boolean {
   return (
     isInteractive() &&
-    !argv.includes("--json") &&
+    !machineOutput &&
     !argv.includes("--no-wizard") &&
     process.env.PIR_NO_WIZARD !== "1" &&
     webRoute === null &&

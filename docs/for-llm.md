@@ -280,7 +280,10 @@ data: command-specific object
 
 `find` and `audit` also accept `--format text|json|sarif` (`--json` is the
 same choice as `--format json`; different values together are a usage error,
-exit 2). `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
+exit 2). Machine output means `--json` or `--format json|sarif`: it also
+skips the first-run wizard (an interactive prompt would corrupt stdout) and
+selects the JSON form of the remote `<command>.detach` submission envelope,
+so a machine consumer never receives human text. `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
 `runs[0].results[]` carries one entry per reported finding (`ruleId` from
 `category`, `level` from severity — P0/P1 error, P2 warning, P3 note — the claim
 as `message.text`, anchors as locations with `relatedLocations` for the extras,
@@ -397,7 +400,7 @@ submit-time wait), a stderr status line prints on state changes and about
 once a minute (#55) — it reports connection liveness and log growth, never
 review progress.
 
-In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
+In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. The envelope is JSON when machine output is selected (`--json` or `--format json|sarif`) and human text otherwise. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
 
 In local mode, the same flag detaches the run from the terminal instead (ADR 0022): the CLI re-executes itself as a background process, prints a `find.detach`/`audit.detach` envelope (`jobId`, `mode: "local"`, `logPath`, `receiptPath`, `followUp`), and exits `0` once the child is accepted. The log is `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`); the receipt settles with the child's final `exitCode`; `--fail-on` cannot gate the parent. `--detach` is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit (exit `2`).
 
