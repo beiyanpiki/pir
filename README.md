@@ -320,6 +320,24 @@ incomplete result can still return `0`; check `data.incomplete`. With a gate
 configured, an incomplete run returns `3` unless a qualifying finding already
 caused `1`.
 
+`find` and `audit` can also write SARIF 2.1.0 instead of the envelope or the
+text report: `--format sarif` (`--format text|json` selects the other two, and
+`--json` is the same choice as `--format json`; asking for both with different
+values is a usage error). One result is emitted per reported finding: `category`
+becomes the `ruleId`, P0/P1 map to `error`, P2 to `warning` and P3 to `note`,
+anchors become physical locations (the first is the primary entry, the rest
+`relatedLocations`), and the finding's canonical identity is
+`partialFingerprints["pirFinding/v1"]`. Each invocation records whether the run
+completed (`executionSuccessful`) and, when it stopped early, a `warning`
+notification carrying `stoppedBecause`; audit invocations also carry the coverage
+summary. No findings yields valid empty `results`. Exit codes are unchanged, and
+the lanes that cannot express findings — `find --preview`, `audit --dry-run`,
+`audit coverage` — refuse `sarif`. Remote mode needs a same-version server.
+
+```bash
+pir find --base origin/main --head HEAD --format sarif > pir.sarif
+```
+
 Audits also return a coverage ledger. Each selected file is accounted for as
 `reviewed`, `partial`, `unreviewed`, `blocked`, or `failed`; excluded and
 not-selected files are reported separately. `reviewed` records process

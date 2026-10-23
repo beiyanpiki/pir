@@ -278,6 +278,19 @@ project?: { id, cwd, head }
 data: command-specific object
 ```
 
+`find` and `audit` also accept `--format text|json|sarif` (`--json` is the
+same choice as `--format json`; different values together are a usage error,
+exit 2). `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
+`runs[0].results[]` carries one entry per reported finding (`ruleId` from
+`category`, `level` from severity — P0/P1 error, P2 warning, P3 note — the claim
+as `message.text`, anchors as locations with `relatedLocations` for the extras,
+and the canonical identity as `partialFingerprints["pirFinding/v1"]`), and
+`runs[0].invocations[0]` records `executionSuccessful` plus a `warning`
+notification carrying `stoppedBecause` when the run did not complete. An audit
+invocation also carries the coverage summary in `properties.coverage`. No
+findings yields `results: []` with no `rules`; exit codes are unchanged and the
+preview/readout lanes refuse sarif. Remote mode needs a same-version server.
+
 For review results, inspect these fields in order:
 
 1. `data.run.id`, head/base or `data.target`: confirm the reviewed target.

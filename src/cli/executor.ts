@@ -49,6 +49,7 @@ import {
   type MemorySyncResult,
 } from "../app/services.js";
 import { envelope, findExitCode, renderAuditResultText, renderFindResultText } from "../app/output.js";
+import { renderSarif } from "../app/sarif.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
@@ -114,6 +115,10 @@ Usage:
                       deleted or dropped from the findings list
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
+  --format <fmt>      stdout format: text (default), json (the same choice
+                      --json makes) or sarif — a SARIF 2.1.0 log for
+                      code-scanning consumers. --json and a non-json --format
+                      together are a usage error; exit codes are unchanged
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
@@ -196,6 +201,9 @@ Usage:
                       applies when the flag is absent). An unresolvable id is
                       a hard session error, never a silent fallback
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
+  --format <fmt>      stdout format: text (default), json or sarif (SARIF 2.1.0
+                      with the audit coverage on the invocation); --dry-run and
+                      coverage reject sarif, exit codes are unchanged
   --dry-run           preview the scope a real audit of the same tree and
                       options would take (#56): head/tree ids, selection and
                       classification counts, planned units — no run, no
@@ -281,6 +289,9 @@ Usage:
 
   global: `Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
+  --format <fmt>      find/audit stdout: text | json | sarif; --json is the
+                      same choice as --format json, and --format sarif emits
+                      SARIF 2.1.0 (see README "Output contract")
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
   --help              print help locally and exit 0 — answered before any
@@ -519,6 +530,27 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags, multi };
+}
+
+export type OutputFormat = "text" | "json" | "sarif";
+
+/**
+ * `find`/`audit` output selection (roadmap S6, ADR 0020). `--format` names the
+ * format and the legacy `--json` is the same choice spelled differently, so
+ * asking for two different formats at once is a usage error rather than a
+ * silent precedence rule. Resolved before any run row or session exists.
+ */
+export function resolveOutputFormat(flags: Map<string, string | boolean>): OutputFormat {
+  const raw = flags.get("--format");
+  const json = flags.get("--json") === true;
+  if (raw === undefined) return json ? "json" : "text";
+  if (raw !== "text" && raw !== "json" && raw !== "sarif") {
+    throw new UsageError(`invalid --format: ${String(raw)} (expected text, json or sarif)`);
+  }
+  if (json && raw !== "json") {
+    throw new UsageError(`--json selects json output and contradicts --format ${raw}`);
+  }
+  return raw;
 }
 
 /**
@@ -1161,6 +1193,7 @@ async function cmdFind(
   emit: Emit,
   log: Log,
 ): Promise<number> {
+  const format = resolveOutputFormat(flags);
   // --detach is a remote-submission flag (#53): local execution cannot honor
   // it, and a server receiving it unstripped (old client) must not ignore it.
   if (flags.has("--detach")) {
@@ -1176,10 +1209,13 @@ async function cmdFind(
         throw new UsageError(`find --preview previews the file selection only; ${shaping} shapes a real run`);
       }
     }
+    if (format === "sarif") {
+      throw new UsageError("find --preview prints the selection; --format sarif applies to a review run");
+    }
     return await renderFindPreview(ctx, {
       base: flags.get("--base") as string | undefined,
       head: flags.get("--head") as string | undefined,
-      json,
+      json: format === "json",
       emit,
     });
   }
@@ -1221,7 +1257,18 @@ async function cmdFind(
   const findings = result.findings.map((row) => toFindingView(ctx, row));
   const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
-  if (json) {
+  if (format === "sarif") {
+    emit(
+      renderSarif({
+        command: "find",
+        version: readVersion(),
+        findings,
+        incomplete: result.incomplete,
+        stoppedBecause: result.stoppedBecause,
+        runId: result.runId,
+      }),
+    );
+  } else if (format === "json") {
     emit(
       envelope(
         "find",
@@ -1323,6 +1370,7 @@ async function cmdAudit(
   emit: Emit,
   log: Log,
 ): Promise<number> {
+  const format = resolveOutputFormat(flags);
   // Audit has no comparison semantics: reject flags that would imply one.
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
@@ -1335,7 +1383,10 @@ async function cmdAudit(
   // Post-run coverage readout (#56) answers from the recorded ledger — no
   // snapshot, no model, no run.
   if (_args[0] === "coverage") {
-    return await cmdAuditCoverage(ctx, _args.slice(1), flags, json, emit, log);
+    if (format === "sarif") {
+      throw new UsageError("audit coverage prints a recorded ledger; --format sarif applies to an audit run");
+    }
+    return await cmdAuditCoverage(ctx, _args.slice(1), flags, format === "json", emit, log);
   }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
@@ -1356,12 +1407,15 @@ async function cmdAudit(
         throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
       }
     }
+    if (format === "sarif") {
+      throw new UsageError("audit --dry-run prints a scope preview; --format sarif applies to a real audit run");
+    }
     return await renderAuditDryRun(ctx, {
       head: flags.get("--head") as string | undefined,
       includePaths,
       skipGlobs,
       listFiles: flags.get("--list-files") === true,
-      json,
+      json: format === "json",
       emit,
     });
   }
@@ -1385,7 +1439,19 @@ async function cmdAudit(
   const findings = result.findings.map((row) => toFindingView(ctx, row));
   const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
-  if (json) {
+  if (format === "sarif") {
+    emit(
+      renderSarif({
+        command: "audit",
+        version: readVersion(),
+        findings,
+        incomplete: result.incomplete,
+        stoppedBecause: result.stoppedBecause,
+        runId: result.runId,
+        coverage: { ...result.coverage },
+      }),
+    );
+  } else if (format === "json") {
     emit(
       envelope(
         "audit",
