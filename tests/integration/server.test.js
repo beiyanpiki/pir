@@ -289,6 +289,48 @@ test("/v1/exec also refuses a client-side --rule path (dogfood F-4)", async (t) 
   }
 });
 
+test("/v1/review refuses a client-side --background-file path (dogfood F-1)", async (t) => {
+  const { base } = await withServer(t);
+  // The local CLI rejects --background-file before forwarding; a direct API
+  // caller can still send argv verbatim, and the server must not read an
+  // arbitrary path into a model prompt. Inline --background stays accepted.
+  for (const argv of [
+    ["find", "--background-file", "/etc/passwd"],
+    ["find", "--background-file=/etc/passwd"],
+    ["find", "--cwd", "/tmp", "--background-file", "/etc/passwd"],
+  ]) {
+    const response = await fetch(`${base}/v1/review`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({
+        remoteUrl: null,
+        rootCommit: "0".repeat(40),
+        base: null,
+        head: "0".repeat(40),
+        bundleBase64: "",
+        argv,
+      }),
+    });
+    assert.equal(response.status, 400, `expected rejection for: ${argv.join(" ")}`);
+    const body = await response.json();
+    assert.match(body.error, /--background-file names a client-side file/);
+  }
+});
+
+test("/v1/exec also refuses a client-side --background-file path (dogfood F-1)", async (t) => {
+  const { base } = await withServer(t);
+  for (const argv of [["find", "--background-file", "/etc/passwd"], ["find", "--background-file=/etc/passwd"]]) {
+    const response = await fetch(`${base}/v1/exec`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ argv }),
+    });
+    assert.equal(response.status, 400, `expected rejection for: ${argv.join(" ")}`);
+    const body = await response.json();
+    assert.match(body.error, /--background-file names a client-side file/);
+  }
+});
+
 test("/v1/review: client-pinned SHAs resolve in the bundle-materialized worktree", async (t) => {
   await withServer(t); // server handle only pins env cleanup (TLS off for tests)
   const repo = createTempGitRepo("pir-pin-");

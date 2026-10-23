@@ -320,6 +320,14 @@ export async function startServer(input: {
       if (cleanedArgv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
         throw new Error("--rule names a client-side file and is not accepted on /v1/review; commit .pir/rule.json in the repository or use the server's global rule.json");
       }
+      // S2 (ADR-0016, dogfood F-1): --background-file names a file on the
+      // CLIENT's machine for the same reason --rule does. The local CLI never
+      // forwards it, but a direct API caller can send argv verbatim; executing
+      // it here would read an arbitrary server path into a model prompt. The
+      // inline --background text stays accepted.
+      if (cleanedArgv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
+        throw new Error("--background-file names a client-side file and is not accepted on /v1/review; pass the text inline with --background, or run with --local");
+      }
       const meta = {
         remoteUrl: parsed.remoteUrl ?? null,
         rootCommit: parsed.rootCommit,
@@ -624,6 +632,12 @@ export async function startServer(input: {
       // rule layer and feed it into a model prompt.
       if (argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
         throw new Error("--rule names a client-side file and is not accepted on a server; commit .pir/rule.json in the repository or use the server's global rule.json");
+      }
+      // S2 (ADR-0016, dogfood F-1): /v1/exec forwards argv verbatim, so without
+      // this guard a direct API caller could read an arbitrary server path
+      // through find's background reader and feed it into a model prompt.
+      if (argv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
+        throw new Error("--background-file names a client-side file and is not accepted on a server; pass the text inline with --background, or run with --local");
       }
       // Requests without an explicit --cwd operate on the workspace root.
       const effectiveArgv = argv.includes("--cwd") ? argv : ["--cwd", input.workspace, ...argv];

@@ -149,7 +149,8 @@ Usage:
                       read the background from a file instead (UTF-8, at most
                       1 MiB raw, regular file). Wins over --background with a
                       warning; relative paths resolve against the invocation
-                      directory. Local path: rejected in remote mode
+                      directory. Local path: rejected in remote mode (client
+                      and server)
   --no-sync-index     skip codegraph index sync
   --preview           print the file selection a real find of the same range
                       would review (#B1): per-file status and churn, plus
