@@ -114,6 +114,9 @@ test("driver options: --seed parsing and --judge-only restrictions", () => {
   assert.equal(parseOptions([], {}).seed, undefined);
   assert.equal(parseOptions(["--seed", "42"], {}).seed, 42);
   assert.equal(parseOptions([], { PIR_AACR_SEED: "7" }).seed, 7);
+  // Dogfood F-2: "" (and whitespace-only) is an unset variable, not seed 0.
+  assert.equal(parseOptions([], { PIR_AACR_SEED: "" }).seed, undefined);
+  assert.equal(parseOptions([], { PIR_AACR_SEED: "   " }).seed, undefined);
   assert.equal(parseOptions(["--seed", "0"], {}).seed, 0, "seed 0 is a valid seed");
   assert.equal(parseOptions(["--limit", "50", "--seed", "42"], {}).limit, 50);
   assert.throws(() => parseOptions(["--seed", "-1"], {}), /seed must be a non-negative integer/);

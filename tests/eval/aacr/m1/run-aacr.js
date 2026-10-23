@@ -250,7 +250,9 @@ export function parseOptions(argv = [], env = process.env) {
     cli: env.PIR_AACR_CLI ?? path.join(ROOT, "dist/cli/cli.js"),
     model: env.PIR_AACR_MODEL ?? env.PIR_MODEL,
     limit: env.PIR_AACR_LIMIT === undefined ? undefined : Number(env.PIR_AACR_LIMIT),
-    seed: env.PIR_AACR_SEED === undefined ? undefined : Number(env.PIR_AACR_SEED),
+    // Dogfood F-2: an exported-but-empty PIR_AACR_SEED is "no seed", not seed 0
+    // (Number("") === 0). The --seed flag path still rejects an empty value.
+    seed: env.PIR_AACR_SEED === undefined || String(env.PIR_AACR_SEED).trim() === "" ? undefined : Number(env.PIR_AACR_SEED),
     repeats: Number(env.PIR_AACR_REPEATS ?? 1),
     round: env.PIR_AACR_ROUND,
     concurrency: Number(env.PIR_AACR_CONCURRENCY ?? 1),
