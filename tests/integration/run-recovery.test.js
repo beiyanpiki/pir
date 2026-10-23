@@ -199,13 +199,13 @@ test("runs: works with a corrupt config.json — the URL carries the server", as
   assert.equal(JSON.parse(stdout).data.run.runId, RUN_ID);
 });
 
-test("findings --run: skips the first-run wizard on an unconfigured interactive machine (dogfood F-55)", async (t) => {
-  const { base } = await withWebServer(t);
-  // The wizard's exact trigger conditions: no config, stdin+stdout on a
-  // TTY, and none of --json/--no-wizard/PIR_NO_WIZARD. The wrapper forces
-  // isTTY before importing the CLI so the child believes it is interactive
-  // while stdio stay pipes the test can read — without the webRoute
-  // exemption the wizard prompts and hangs on the closed stdin pipe.
+/**
+ * A CLI entry that believes stdin+stdout are a TTY while the actual stdio stay
+ * pipes the test can read. The first-run wizard's trigger is exactly
+ * isInteractive(), so this is the only way to prove a command skips the wizard
+ * instead of prompting and hanging on the closed stdin pipe.
+ */
+function ttyRunner(t) {
   const cwd = mkdtempSync(path.join(tmpdir(), "pir-tty-cwd-"));
   const configDir = mkdtempSync(path.join(tmpdir(), "pir-tty-config-"));
   const runner = path.join(cwd, "tty-runner.mjs");
@@ -222,6 +222,15 @@ test("findings --run: skips the first-run wizard on an unconfigured interactive 
   });
   const env = { ...process.env, PIR_CONFIG_DIR: configDir };
   delete env.PIR_NO_WIZARD;
+  return { cwd, configDir, runner, env };
+}
+
+test("findings --run: skips the first-run wizard on an unconfigured interactive machine (dogfood F-55)", async (t) => {
+  const { base } = await withWebServer(t);
+  // The wizard's exact trigger conditions: no config, stdin+stdout on a
+  // TTY, and none of --json/--no-wizard/PIR_NO_WIZARD — without the webRoute
+  // exemption it prompts and hangs on the closed stdin pipe.
+  const { cwd, configDir, runner, env } = ttyRunner(t);
 
   const { stdout, stderr } = await execFileAsync(
     process.execPath,
@@ -235,6 +244,28 @@ test("findings --run: skips the first-run wizard on an unconfigured interactive 
   assert.doesNotMatch(stderr, /first-run setup|locally or \[2\]/);
   assert.doesNotMatch(stderr, /no config at/);
   assert.equal(existsSync(path.join(configDir, "config.json")), false);
+});
+
+test("--format json skips the first-run wizard exactly like --json (dogfood F-17)", async (t) => {
+  // Unconfigured + interactive + no --no-wizard/PIR_NO_WIZARD: only machine
+  // output can suppress the wizard here. Pre-fix it prompts on stdout and
+  // blocks on the piped stdin until the timeout kills it.
+  const { cwd, configDir, runner, env } = ttyRunner(t);
+  const run = await execFileAsync(
+    process.execPath,
+    [runner, "find", "--format", "json", "--cwd", cwd],
+    { cwd, env, encoding: "utf8", timeout: 20_000, killSignal: "SIGKILL" },
+  ).then(
+    () => ({ code: 0, stdout: "", stderr: "" }),
+    (err) => err,
+  );
+  // The command itself ran: outside a git repository it fails after the wizard
+  // gate (exit 3), which is proof the wizard was not entered.
+  assert.equal(run.code, 3);
+  assert.match(run.stderr, /not a git repository/);
+  assert.doesNotMatch(String(run.stdout), /first-run setup/);
+  assert.doesNotMatch(String(run.stderr), /first-run setup/);
+  assert.equal(existsSync(path.join(configDir, "config.json")), false, "the wizard never wrote a config");
 });
 
 // ---------------------------------------------------------------------------
@@ -788,6 +819,36 @@ test("--detach (#53): submit, print the envelope, never poll", async (t) => {
   const text = await pir(["--server", base, "--token", EXEC_TOKEN, "find", "--detach", "--cwd", repo2], { cwd, env });
   assert.match(text.stdout, new RegExp(`submitted find as job ${jobId}`));
   assert.match(text.stdout, /pir jobs wait/);
+});
+
+test("--detach (#53): --format json prints the machine submission envelope (dogfood F-17)", async (t) => {
+  const { base, seen, jobId } = await withJobStub(t);
+  const repo = mkdtempSync(path.join(tmpdir(), "pir-detach-format-repo-"));
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  execFileSync("git", ["init", "--quiet"], { cwd: repo });
+  writeFileSync(path.join(repo, "a.txt"), "hello\n");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "one"], { cwd: repo });
+
+  const { cwd, env } = scratchEnv(t);
+  // --format json is documented as the same choice as --json for stdout, so the
+  // detach envelope must follow the rule too. It used to test the literal
+  // --json token and print the human text form here.
+  const { stdout } = await pir(
+    ["--server", base, "--token", EXEC_TOKEN, "audit", "--detach", "--format", "json", "--cwd", repo],
+    { cwd, env },
+  );
+  const envelope = JSON.parse(stdout);
+  assert.equal(envelope.schemaVersion, 1);
+  assert.equal(envelope.command, "audit.detach");
+  assert.equal(envelope.data.jobId, jobId);
+  assert.equal(envelope.data.origin, base);
+  assert.equal(envelope.data.mode, "async");
+  assert.equal(envelope.data.runId, null, "run id is unknown until pickup");
+  assert.ok(envelope.data.followUp.some((line) => line === `pir jobs wait ${jobId}`));
+  // Detach still detaches: one submission, no polling.
+  assert.equal(seen.filter((entry) => entry.path === "/v1/review" && entry.method === "POST").length, 1);
+  assert.equal(seen.filter((entry) => entry.path.startsWith("/v1/jobs")).length, 0);
 });
 
 test("--detach (#53): rejected for non-review commands", async (t) => {

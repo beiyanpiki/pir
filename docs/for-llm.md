@@ -234,7 +234,7 @@ reads rule files only: no review run row, no project database, no model
 session. `--rule` is accepted as the flag layer; layer labels are
 `.pir/rule.json`, `~/.pir/rule.json` and `--rule`, never host paths.
 
-`find` can also carry one explicit user background: `--background <text>` or `--background-file <path>` (ADR 0016). It is opt-in, `find`-only, and reviewer-only: verifier sessions never see it, and `audit` rejects both flags. The text is turned into one `<user_background>` section placed after every process rule and before the evidence block, labelled as user-supplied context that is neither instructions nor evidence. Guards: 1 MiB raw file cap; sanitisation (LF line endings, control and invisible characters stripped, blank runs collapsed, trailing whitespace removed); empty-after-sanitisation and any reserved `<user_background>` delimiter rejected; 8,000 characters hard cap (truncated with an explicit marker in the prompt and a warning on stderr); 2,000 characters soft cap (warning only). `--background-file` wins over `--background` with a warning. `run.json` records `background: {source, sha256, characters, suppliedCharacters, truncated}` — the canonical hash of the supplied sanitised text, never the text; the surfaces that echo argv (server error log, job registry, submission receipts) redact the value as `<background redacted>`. Session transcripts, when enabled, record the prompt like every other session input. `--background-file` is a local path and is rejected in remote mode on both sides (the CLI before forwarding, and the server's `/v1/review`/`/v1/exec` lanes, so a direct API caller cannot read a server file into a prompt); `--background` may be forwarded to a same-version server.
+`find` can also carry one explicit user background: `--background <text>` or `--background-file <path>` (ADR 0016). It is opt-in, `find`-only, and reviewer-only: verifier sessions never see it, and `audit` rejects both flags. The text is turned into one `<user_background>` section placed after every process rule and before the evidence block, labelled as user-supplied context that is neither instructions nor evidence. Guards: 1 MiB raw file cap; sanitisation (LF line endings, control and invisible characters stripped, blank runs collapsed, trailing whitespace removed); empty-after-sanitisation and any reserved `<user_background>` delimiter rejected; 8,000 characters hard cap (truncated with an explicit marker in the prompt and a warning on stderr); 2,000 characters soft cap (warning only). Those warnings are written to stderr unconditionally — `--json` and `--quiet` do not silence them, and stdout stays machine-clean — and `--background-file` wins over `--background` with a warning on the same channel. `run.json` records `background: {source, sha256, characters, suppliedCharacters, truncated}` — the canonical hash of the supplied sanitised text, never the text; the surfaces that echo argv (server error log, job registry, submission receipts) redact the value as `<background redacted>`. Session transcripts, when enabled, record the prompt like every other session input. `--background-file` is a local path and is rejected in remote mode on both sides (the CLI before forwarding, and the server's `/v1/review`/`/v1/exec` lanes, so a direct API caller cannot read a server file into a prompt); `--background` may be forwarded to a same-version server.
 
 Limits:
 
@@ -280,7 +280,10 @@ data: command-specific object
 
 `find` and `audit` also accept `--format text|json|sarif` (`--json` is the
 same choice as `--format json`; different values together are a usage error,
-exit 2). `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
+exit 2). Machine output means `--json` or `--format json|sarif`: it also
+skips the first-run wizard (an interactive prompt would corrupt stdout) and
+selects the JSON form of the remote `<command>.detach` submission envelope,
+so a machine consumer never receives human text. `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
 `runs[0].results[]` carries one entry per reported finding (`ruleId` from
 `category`, `level` from severity — P0/P1 error, P2 warning, P3 note — the claim
 as `message.text`, anchors as locations with `relatedLocations` for the extras,
@@ -397,7 +400,7 @@ submit-time wait), a stderr status line prints on state changes and about
 once a minute (#55) — it reports connection liveness and log growth, never
 review progress.
 
-In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
+In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. The envelope is JSON when machine output is selected (`--json` or `--format json|sarif`) and human text otherwise. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
 
 In local mode, the same flag detaches the run from the terminal instead (ADR 0022): the CLI re-executes itself as a background process, prints a `find.detach`/`audit.detach` envelope (`jobId`, `mode: "local"`, `logPath`, `receiptPath`, `followUp`), and exits `0` once the child is accepted. The log is `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`); the receipt settles with the child's final `exitCode`; `--fail-on` cannot gate the parent. `--detach` is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit (exit `2`).
 

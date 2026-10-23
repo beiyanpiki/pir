@@ -1,6 +1,7 @@
 import path from "node:path";
 import process from "node:process";
 import { UsageError, parseArgs, pinRefsToShas } from "./executor.js";
+import { machineOutputFromArgv } from "./machine-output.js";
 import { remoteDispatcher, remoteTimeoutMs, reportUnreachable } from "./remote-fetch.js";
 import type { JobView } from "./jobs.js";
 
@@ -342,7 +343,9 @@ async function reviewViaBundle(url: URL, argv: string[], options: RemoteOptions)
           `pir receipts show ${payload.jobId.slice(0, 8)}`,
         ];
         const receipt = receiptFile !== null ? path.basename(receiptFile) : null;
-        if (argv.includes("--json")) {
+        // Machine output, not the literal --json token: `--format json|sarif`
+        // selects the same envelope as `--json` does (dogfood F-17).
+        if (machineOutputFromArgv(argv)) {
           process.stdout.write(
             `${JSON.stringify({
               schemaVersion: 1,

@@ -138,6 +138,29 @@ test("a background file supplies the text at the CLI boundary (file wins over in
   } finally { repo.cleanup(); }
 });
 
+test("the hard-truncation warning reaches stderr under --json and --quiet (dogfood F-2)", async () => {
+  const repo = createTempGitRepo("pir-s2-warn-");
+  try {
+    // A spawned model-free CLI run cannot complete a review (sessions need
+    // credentials), so this stops on the next deterministic guard after the
+    // background resolves: --angles validation. The warning is emitted before
+    // that guard, which is exactly the point — it used to travel through the
+    // progress channel, which the CLI silences for --json/--quiet.
+    const supplied = "Goal: " + "x".repeat(8100);
+    writeFileSync(path.join(repo.dir, "big.md"), supplied);
+    for (const machineMode of ["--json", "--quiet"]) {
+      const run = await pirExpectFail(
+        ["find", machineMode, "--background-file", "big.md", "--angles", "bogus", "--cwd", repo.dir],
+        { cwd: repo.dir },
+      );
+      assert.equal(run.code, 2, `the deliberate --angles guard stops the run (${machineMode})`);
+      assert.match(run.stderr, new RegExp(`user background truncated at 8000 characters \\(${supplied.length} supplied\\)`));
+      assert.match(run.stderr, /soft limit 2000/);
+      assert.equal(run.stdout, "", `the warning never leaks onto stdout (${machineMode})`);
+    }
+  } finally { repo.cleanup(); }
+});
+
 test("CLI guards: every background error is a usage error (exit 2), never a run", async () => {
   const repo = createTempGitRepo("pir-s2-guards-");
   try {
