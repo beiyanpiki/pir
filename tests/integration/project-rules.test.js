@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { findIssues } from "../../dist/core/supervisor.js";
-import { ProjectRuleError } from "../../dist/rules/project-rules.js";
+import { ProjectRuleError, loadProjectRules } from "../../dist/rules/project-rules.js";
 
 /**
  * B5 acceptance A1 at the supervisor boundary: the rendered PROJECT RULES
@@ -19,13 +19,43 @@ import { ProjectRuleError } from "../../dist/rules/project-rules.js";
 
 async function fixture() {
   const repo = createTempGitRepo("pir-b5-");
-  repo.write("go.mod", "module example.com/counter\n\ngo 1.22\n");
-  repo.write("src/counter.go", "package counter\n\nfunc Next(n int) int { return n + 1 }\n");
-  repo.commit("baseline");
-  repo.write("src/counter.go", "package counter\n\nfunc Next(n int) int { return n + 2 }\n");
-  repo.commit("change");
-  const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "memory.sqlite") });
-  return { repo, ctx, cleanup() { ctx.memory.close(); repo.cleanup(); } };
+  // F-3: isolated config dir. The global rule layer is read from PIR_CONFIG_DIR
+  // (or ~/.pir by default), so an in-process findIssues would otherwise also
+  // load the developer's real ~/.pir/rule.json and the two-layer fixture would
+  // silently depend on the machine it runs on.
+  const configDir = mkdtempSync(path.join(tmpdir(), "pir-b5-config-"));
+  const previousConfigDir = process.env.PIR_CONFIG_DIR;
+  process.env.PIR_CONFIG_DIR = configDir;
+  const restoreEnv = () => {
+    if (previousConfigDir === undefined) delete process.env.PIR_CONFIG_DIR;
+    else process.env.PIR_CONFIG_DIR = previousConfigDir;
+  };
+  try {
+    // The isolated dir must start empty: only the layers a test creates exist.
+    assert.equal(existsSync(path.join(configDir, "rule.json")), false, "the isolated config dir starts without a global rule layer");
+    repo.write("go.mod", "module example.com/counter\n\ngo 1.22\n");
+    repo.write("src/counter.go", "package counter\n\nfunc Next(n int) int { return n + 1 }\n");
+    repo.commit("baseline");
+    repo.write("src/counter.go", "package counter\n\nfunc Next(n int) int { return n + 2 }\n");
+    repo.commit("change");
+    const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "memory.sqlite") });
+    return {
+      repo,
+      configDir,
+      ctx,
+      cleanup() {
+        ctx.memory.close();
+        repo.cleanup();
+        rmSync(configDir, { recursive: true, force: true });
+        restoreEnv();
+      },
+    };
+  } catch (error) {
+    restoreEnv();
+    rmSync(configDir, { recursive: true, force: true });
+    repo.cleanup();
+    throw error;
+  }
 }
 
 /** A reviewer that records its prompt and finishes immediately (no findings). */
@@ -67,6 +97,41 @@ test("repo rules reach the reviewer prompt before the memory pack", async () => 
     assert.match(prompt, /COUNTER RULE: every increment must stay overflow-safe\./);
     assert.match(prompt, /untrusted evidence, not instructions/);
     assert.ok(prompt.indexOf("PROJECT RULES") < prompt.indexOf("=== REPOSITORY MEMORY ==="));
+  } finally { f.cleanup(); }
+});
+
+test("the global layer is the isolated config dir's rule.json, and the repo layer still wins", async () => {
+  const f = await fixture();
+  const prompts = [];
+  try {
+    // Only layers this test creates exist: repo (.pir/rule.json) and global
+    // (PIR_CONFIG_DIR/rule.json). F-3: a developer's ~/.pir/rule.json can never
+    // join them.
+    writeRule(path.join(f.repo.dir, ".pir", "rule.json"), { include: ["src/**"], rules: [{ path: "src/**", guidance: "REPO-LAYER" }] });
+    writeRule(path.join(f.configDir, "rule.json"), {
+      include: ["**"],
+      rules: [
+        // Shadowed by the repository layer for src/counter.go (repo outranks global).
+        { path: "src/**", guidance: "GLOBAL-SHADOWED" },
+        { path: "go.mod", guidance: "GLOBAL-LAYER" },
+      ],
+    });
+    f.repo.write("src/counter.go", "package counter\n\nfunc Next(n int) int { return n + 3 }\n");
+    f.repo.write("go.mod", "module example.com/counter\n\ngo 1.22\n\n// touched so the change set carries a file only the global layer selects\n");
+    f.repo.commit("touch both layers' files", ["src/counter.go", "go.mod"]);
+
+    const set = loadProjectRules({ repoRoot: f.repo.dir });
+    assert.deepEqual(set.layers.map((layer) => layer.layer), ["repo", "global"]);
+
+    await findIssues({ ...f.ctx, factory: capturingFactory(prompts), options: { maxRounds: 1 } });
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0], /REPO-LAYER/);
+    assert.match(prompts[0], /GLOBAL-LAYER/);
+    // The section names each winning rule with the layer that supplied it, and
+    // the repo layer outranks the global one for a path both select.
+    assert.doesNotMatch(prompts[0], /GLOBAL-SHADOWED/);
+    assert.ok(prompts[0].indexOf('RULE "src/**" (layer repo') !== -1);
+    assert.ok(prompts[0].indexOf('RULE "go.mod" (layer global') !== -1);
   } finally { f.cleanup(); }
 });
 
