@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -214,6 +214,39 @@ test("materialized JSONL round-trips header plus rows", () => {
     assert.equal(read.header.__meta__, "aacr-bench/m0-materialized/v1");
     assert.deepEqual(read.rows.map((row) => row.id), ["c0001-aaaaaaaa", "c0002-bbbbbbbb"]);
     assert.deepEqual(readMaterialized(path.join(dir, "absent.jsonl")), { header: null, rows: [] });
+  });
+});
+
+test("M0 dogfood F-190: a torn trailing line is dropped and the parseable prefix resumes", () => {
+  temporary((dir) => {
+    const file = path.join(dir, "materialized.jsonl");
+    const header = { __meta__: "aacr-bench/m0-materialized/v1", dataset: { sha256: "d".repeat(64) } };
+    const rows = [{ id: "c0001-aaaaaaaa", index: 1 }, { id: "c0002-bbbbbbbb", index: 2 }];
+    writeMaterialized(file, header, rows);
+    // A pre-atomic crash: the next row's JSON stops mid-write, with no newline.
+    appendFileSync(file, '{"id":"c0003-cccccccc","index":3');
+    const torn = readMaterialized(file);
+    assert.equal(torn.header.__meta__, "aacr-bench/m0-materialized/v1");
+    assert.deepEqual(torn.rows.map((row) => row.id), ["c0001-aaaaaaaa", "c0002-bbbbbbbb"]);
+    // Corruption anywhere but the final line is still loud, not silently dropped.
+    const corrupted = path.join(dir, "corrupted.jsonl");
+    writeFileSync(corrupted, JSON.stringify(header) + "\n{not json}\n" + JSON.stringify(rows[0]) + "\n");
+    assert.throws(() => readMaterialized(corrupted), SyntaxError);
+  });
+});
+
+test("M0 dogfood F-190: an interrupted rewrite leaves the previous JSONL intact", () => {
+  temporary((dir) => {
+    const file = path.join(dir, "materialized.jsonl");
+    const header = { __meta__: "aacr-bench/m0-materialized/v1" };
+    writeMaterialized(file, header, [{ id: "c0001-aaaaaaaa" }]);
+    const before = readFileSync(file, "utf8");
+    // Inject a write failure at the temp path: writeMaterialized must throw
+    // before the destination is touched, never leave a half-rewritten cache.
+    mkdirSync(file + ".tmp");
+    assert.throws(() => writeMaterialized(file, header, [{ id: "c0002-bbbbbbbb" }]), /EISDIR|illegal operation/);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.deepEqual(readMaterialized(file).rows.map((row) => row.id), ["c0001-aaaaaaaa"]);
   });
 });
 

@@ -23,7 +23,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -306,13 +306,30 @@ export { commentId, sampleRecords, sampleDigest };
 export function readMaterialized(file) {
   if (!existsSync(file)) return { header: null, rows: [] };
   const lines = readFileSync(file, "utf8").split("\n").filter(Boolean);
-  const parsed = lines.map((line) => JSON.parse(line));
+  const parsed = [];
+  for (const [index, line] of lines.entries()) {
+    try {
+      parsed.push(JSON.parse(line));
+    } catch (error) {
+      // Dogfood F-190: a crash mid-flush can leave ONE torn trailing line. The
+      // write is atomic now, but caches written by the pre-atomic flush still
+      // hold them; keep every parseable row before it. Corruption anywhere
+      // else is still loud.
+      if (index === lines.length - 1) break;
+      throw error;
+    }
+  }
   return { header: parsed[0]?.__meta__ ? parsed[0] : null, rows: parsed.filter((row) => !row.__meta__) };
 }
 
 export function writeMaterialized(file, header, rows) {
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, [JSON.stringify(header), ...rows.map((row) => JSON.stringify(row))].join("\n") + "\n");
+  // Dogfood F-190: write to a same-directory temp file and rename over the
+  // destination, so an interrupted flush can never truncate the JSONL that
+  // --resume reads next.
+  const temp = file + ".tmp";
+  writeFileSync(temp, [JSON.stringify(header), ...rows.map((row) => JSON.stringify(row))].join("\n") + "\n");
+  renameSync(temp, file);
 }
 
 export function headerRow(meta, actualSha256, { seed, limit, sampleDigest: digest, ids, sideExcluded = 0 }) {
