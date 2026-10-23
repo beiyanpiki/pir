@@ -1,5 +1,5 @@
 /**
- * `pir _verify-comment` — internal M0 evaluation command (roadmap T3).
+ * `pir _verify-comment` — internal AACR-Bench M0 evaluation command.
  *
  * NOT part of the stable contract: underscore-prefixed, absent from help,
  * skills and docs, local-only (a remote server must never execute it), and

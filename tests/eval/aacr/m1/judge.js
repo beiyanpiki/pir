@@ -1,5 +1,5 @@
 /**
- * AACR-Bench M1 — judging delegation (roadmap T4).
+ * AACR-Bench M1 — judging delegation (pinned upstream judge and evaluate scripts).
  *
  * M1 never builds a judge. It reuses the pinned upstream framework
  * (alibaba/aacr-bench @ the commit in meta.json's `framework` block):

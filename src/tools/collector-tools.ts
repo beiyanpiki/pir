@@ -46,7 +46,7 @@ export interface CandidateCollector {
    */
   known?: readonly CandidateFinding[];
   /**
-   * Optional tap for the `line-corrected` observability event (roadmap B2).
+   * Optional tap for the `line-corrected` observability event (ADR 0005).
    * Fired once per anchor whose excerpt located locally, and only after the
    * whole candidate validated — a rejected submission never reports one.
    */
@@ -319,7 +319,7 @@ function citesReadPath(rationale: string, readPath: string): boolean {
 }
 
 /**
- * Normalize a rejected verdict's ground (roadmap B4). The enum is the model's
+ * Normalize a rejected verdict's ground (ADR 0008). The enum is the model's
  * vocabulary, not a gate: an unknown or differently-spelled value collapses to
  * `other` so a rejection is never lost to a vocabulary mismatch. A *missing*
  * ground on a change-mode rejection is still a tool-boundary error, which the

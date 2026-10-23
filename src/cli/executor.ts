@@ -1353,7 +1353,7 @@ async function cmdFind(
 }
 
 /**
- * `_verify-comment` (roadmap M0): internal eval command, OUTSIDE the stable
+ * `_verify-comment` (ADR 0007): internal eval command, OUTSIDE the stable
  * contract — underscore-prefixed, not listed in USAGE/HELP_SECTIONS, local-only,
  * and gated on PIR_EVAL=1. It verifies ONE materialized AACR-Bench comment and
  * prints the verdict, so the offline benchmark measures the shipped verifier.

@@ -7,7 +7,7 @@ export interface SourceAnchor {
   endLine?: number;
   /**
    * Optional verbatim snippet from the pinned file, used for local
-   * re-location (roadmap B2). Absent means the supplied lines are trusted
+   * re-location (ADR 0005). Absent means the supplied lines are trusted
    * exactly as before.
    */
   excerpt?: string;

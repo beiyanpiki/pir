@@ -48,7 +48,7 @@ export interface FindingIdentity {
 
 /**
  * One anchor whose excerpt located locally and overrode the model's range
- * (roadmap B2). Carried by the `line-corrected` run event; the anchor itself
+ * (ADR 0005). Carried by the `line-corrected` run event; the anchor itself
  * keeps the same data as `lineCorrected`/`originalStartLine` fields.
  */
 export interface AnchorLineCorrection {
@@ -114,7 +114,7 @@ export interface DecisionAssessment {
 export type UncertaintyReason = "missing-evidence" | "tool-limit" | "provider-error" | "missing-verdict";
 
 /**
- * Why the verifier rejected a candidate (roadmap B4). A rejection must name
+ * Why the verifier rejected a candidate (ADR 0008). A rejection must name
  * one of these, because the reason is what the reviewer — and the benchmark —
  * can audit later: an invariant the code contradicts is not the same claim as
  * a patch that simply predates the change. `other` is the normalized bucket

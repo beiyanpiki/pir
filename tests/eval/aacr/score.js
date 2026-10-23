@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — scoring (roadmap T5). Pure functions plus a thin CLI.
+ * AACR-Bench M0 — scoring (kill-family and accuracy/precision/recall metrics). Pure functions plus a thin CLI.
  *
  * Label semantics: label = 1 means the comment is correct (it should survive),
  * label = 0 means it is incorrect (it should be intercepted). "keep" is the
@@ -17,7 +17,7 @@
  * share of incorrect comments intercepted), falseKillRate (share of correct
  * comments destroyed — the B4 gate) and interceptPrecision (share of kills that
  * were actually noise), plus confidence AUC. ADR-0007 §5 explains why all three
- * kill-family numbers are reported together (roadmap R9).
+ * kill-family numbers are reported together — a rate read alone can look like an improvement.
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";

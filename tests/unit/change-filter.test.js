@@ -86,7 +86,7 @@ test("B1: audit selection is unchanged — include narrows, then skip and the de
 });
 
 // ---------------------------------------------------------------------------
-// the four gates (roadmap B1/T2)
+// the four gates (ADR 0004)
 // ---------------------------------------------------------------------------
 
 const HEADER = "@@ -1,1 +1,1 @@";

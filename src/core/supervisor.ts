@@ -66,13 +66,13 @@ export interface FindOptions {
    */
   minConfidence?: number;
   /**
-   * Specialized finder angles (roadmap F1, default off): round 1 fans out
+   * Specialized finder angles (ADR 0003, default off): round 1 fans out
    * one reviewer session per angle (capped at 4, budget-guarded) instead of
    * one general session. Later rounds stay single general-session.
    */
   angles?: string[];
   /**
-   * Separate verifier model (roadmap Q5): `<provider>/<model>` or a fuzzy id
+   * Separate verifier model (ADR 0003): `<provider>/<model>` or a fuzzy id
    * (see `pir models`). Reviewer sessions keep `model`; verifier sessions
    * resolve this one through the standard model-resolution path (an
    * unresolvable id is a hard session error, never a silent fallback).
@@ -1043,7 +1043,7 @@ export interface AuditOptions {
    * and still count toward maxFindings.
    */
   minConfidence?: number;
-  /** Separate verifier model (roadmap Q5); defaults to `model` when unset. */
+  /** Separate verifier model (ADR 0003); defaults to `model` when unset. */
   verifierModel?: string;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];

@@ -14,7 +14,7 @@ const usage = (over = {}) => ({
 
 test("B3: the documented find ceilings are 1.2M reviewer + 0.8M verifier input tokens", () => {
   // Pinned on purpose: these constants may only be tightened after checking
-  // the M1 per-PR token distribution (roadmap B3/A2), recorded as an ADR 0006
+  // the M1 per-PR token distribution, recorded as an ADR 0006
   // amendment — not by an incidental edit.
   assert.equal(DEFAULT_FIND_REVIEWER_INPUT_TOKENS, 1_200_000);
   assert.equal(DEFAULT_FIND_VERIFIER_INPUT_TOKENS, 800_000);

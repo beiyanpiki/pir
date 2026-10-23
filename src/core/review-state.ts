@@ -66,7 +66,7 @@ export function reportedCount(state: ReviewState): number {
 }
 
 /**
- * Deterministic run-level verdict (roadmap Q4) — computed from the verified
+ * Deterministic run-level verdict (ADR 0003) — computed from the verified
  * findings alone, no extra session. Mirrors Codex's overall_correctness:
  * style findings never flip "incorrect" (a P0 style nit is still not a
  * broken change), and decision-suppressed findings are not reported, so

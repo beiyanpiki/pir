@@ -1,6 +1,6 @@
 /**
  * OCR's tier-1 comment-positioning algorithm, adapted to pir's
- * record_candidate anchors (roadmap B2; open-code-review
+ * record_candidate anchors (ADR 0005; open-code-review
  * \`internal/diff/resolver.go\`, \`ResolveComment\` :62).
  *
  * A reviewer excerpt is text the model copied out of a rendered diff, so the

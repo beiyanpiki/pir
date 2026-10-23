@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M1 — fixture builder (roadmap T1).
+ * AACR-Bench M1 — fixture builder (upstream samples to the pinned test set).
  *
  * Downloads (or accepts `--from <file>`) the pinned upstream
  * `dataset/positive_samples.json`, verifies the sha256 pin in meta.json's

@@ -1,7 +1,7 @@
 import type { ChangeSet } from "../changes/change-set.js";
 
 /**
- * Change-mode coverage ledger (roadmap C1, stage 1 — observational).
+ * Change-mode coverage ledger (stage 1 — observational; ADR 0003 §2).
  *
  * The denominator is the reviewed diff: every hunk of every changed file.
  * A hunk counts as covered when the reviewer saw its content through one of

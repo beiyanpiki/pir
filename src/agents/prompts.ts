@@ -2,7 +2,7 @@ import type { CandidateFinding, FindingCategory, MemoryMatch } from "../findings
 import type { SimilarDismissedResult } from "../memory/issue-memory.js";
 
 /**
- * One specialized finder angle (roadmap F1): a narrow reviewer scope over
+ * One specialized finder angle (ADR 0003): a narrow reviewer scope over
  * the same diff. `maintainability`/`style` deliberately get NO angle — Q1's
  * do-not-report blacklist is their governor.
  */
