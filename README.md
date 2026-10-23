@@ -169,6 +169,7 @@ pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # staged, unstaged, and untracked work
 pir find --preview --json               # what a review would select, and what it withholds
+pir find --background-file pr-description.md --base origin/main --json  # state the intent of the change
 
 pir audit --json                        # committed HEAD snapshot
 pir audit --path src/auth --path src/payments --json
@@ -283,6 +284,12 @@ run before any model session starts. The applied rules and a canonical
 `sha256` hash are recorded in the run manifest (`projectRules`), and `pir
 config show` prints the loaded layers, rules and hash. Rules apply to `find`
 only; `--rule` is a local path and is rejected in remote mode.
+
+### User background
+
+A review knows the diff but not what the change was meant to do. `--background <text>` and `--background-file <path>` hand the reviewer one explicit, delimited context block — the stated goal, an intentional behaviour change, a migration note — and change nothing else. The input is opt-in, `find`-only, and capped: 1 MiB raw from a file, 8,000 characters of sanitised text in the prompt (longer input is truncated with an explicit marker in the prompt and a warning on stderr), and a 2,000-character soft cap that only warns. Control characters and invisible formatting characters are stripped, blank-line runs collapse, and any occurrence of the reserved `<user_background>` delimiter is rejected outright. `--background-file` wins when both flags are given, and a relative path resolves against the invocation directory like `--rule`.
+
+The reviewer prompt carries the text inside a reserved `<user_background>` section, placed after every process rule and immediately before the evidence block, labelled as user-supplied context that is neither instructions nor evidence: it cannot override provenance rules, severity, the do-not-report list or the reporting cap, and claims in it must be verified against the pinned code. Verifier sessions never see it, `audit` rejects both flags, and the only persisted trace is `background` in `run.json` — source, canonical `sha256`, character counts and the truncation flag, never the text. `--background` may be forwarded to a remote server (a same-version server is required); `--background-file` is a local path and is rejected in remote mode.
 
 ## Output contract
 

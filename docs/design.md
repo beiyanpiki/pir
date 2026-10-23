@@ -125,6 +125,15 @@ untrusted evidence. Installed pir language packs are a separate source of
 review guidance. Agents have structured submission tools but no source-edit,
 shell-execution, or decision-memory-write tools.
 
+The reviewer prompt can additionally carry one explicit, user-supplied
+background block (`--background` / `--background-file`, ADR 0016). It is
+sanitised, hard-capped, delimited, and labelled as context rather than
+instruction; it is injected after every process rule and immediately before
+the evidence block, and every verifier session keeps its prompt unchanged.
+Only its provenance is persisted: `run.json.background` records the source,
+the canonical sha256 of the supplied text, the character counts, and the
+truncation flag — never the text itself.
+
 ## Findings and durable state
 
 The reviewer submits candidates through `record_candidate` and finishes with

@@ -124,6 +124,7 @@ pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # 暂存、未暂存和未跟踪的内容
 pir find --preview --json               # 预演本次评审会选择哪些文件、遮蔽哪些文件
+pir find --background-file pr.md --base origin/main --json  # 说明这次改动的意图
 
 pir audit --json                        # 已提交的 HEAD 快照
 pir audit --path src/auth --path src/payments --json
@@ -199,6 +200,12 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 ```
 
 `guidanceFile` 与仓库层规则文件本身都按不可信仓库内容处理：仓库相对路径、仅限 `.md`/`.markdown`/`.txt`、最大 64 KiB、经 `realpath` 解析后必须仍在仓库根内。规则文件损坏、guidance 逃逸或过大，或渲染后的 PROJECT RULES 超过 48,000 字符，都会在任何模型会话开始前直接失败。实际生效的规则与规范化 `sha256` 会写入 run manifest 的 `projectRules`；`pir config show` 打印已加载的层、规则与哈希。规则仅用于 `find`；`--rule` 是本地路径，远程模式会在客户端与服务端两侧被拒绝。
+
+### 用户背景
+
+评审看得到 diff，却看不到这次改动想达成什么。`--background <text>` 与 `--background-file <path>` 给 reviewer 一个显式、带定界符的上下文块——改动目标、有意的行为变更、迁移说明——除此之外不改变任何东西。该输入默认关闭、仅用于 `find`，并且有明确上限：文件原始大小 1 MiB、进入 prompt 的净化文本 8,000 字符（超长会被截断，prompt 内写明截断标记并在 stderr 警告）、2,000 字符软上限只警告。控制字符与不可见格式字符会被剥离，连续空行会合并，出现保留的 `<user_background>` 定界符会直接报错；两个 flag 同时给出时文件优先，相对路径与 `--rule` 一样相对调用目录解析。
+
+reviewer prompt 把该文本放在保留的 `<user_background>` 区段里——位于全部流程规则之后、证据块之前——并标注它是由用户提供的上下文，既不是指令也不是证据：它不能覆盖来源校验、严重度、do-not-report 清单或报告上限，其中的说法必须用钉住的代码验证。verifier 会话永远看不到它，`audit` 会直接拒绝这两个 flag，唯一被持久化的痕迹是 `run.json` 的 `background`——来源、规范化 `sha256`、字符数与截断标记，绝不包含正文。`--background` 可以转发到远端（需要同版本 server）；`--background-file` 是本地路径，远程模式会被拒绝。
 
 ## 服务 API 与任务
 
