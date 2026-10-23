@@ -356,7 +356,7 @@ schema, flag or state changed.
 
 ---
 
-### S6 · SARIF output · Track B · evidence: `code fact` · ADR: written at execution · Status: ☐
+### S6 · SARIF output · Track B · evidence: `code fact` · ADR: [0020](adr/0020-sarif-output.md) · Status: ☑
 
 **Why.** pir has text/JSON and stable exit codes; it has no SARIF, so GitHub Code Scanning and other SARIF
 consumers cannot ingest findings. OCR ships a full SARIF 2.1.0 writer (`cmd/opencodereview/sarif.go`).
@@ -365,18 +365,36 @@ consumers cannot ingest findings. OCR ships a full SARIF 2.1.0 writer (`cmd/open
 
 **Tasks**
 
-- [ ] **T0 ADR** (short): result mapping, rule ids, severity levels, fingerprints, incomplete-run invocation.
-- [ ] **T1 Mapping.** `category` → ruleId; `P0/P1` → `error`, `P2` → `warning`, `P3` → `note`;
-      anchors → physical locations; finding identity → `partialFingerprints`.
-- [ ] **T2 CLI.** `--format sarif` on `find` and `audit`; no findings → valid empty `results`; incomplete run
-      represented in `invocations`.
-- [ ] **T3 Golden/schema tests** and docs.
+- [x] **T0 ADR** (short): result mapping, rule ids, severity levels, fingerprints, incomplete-run invocation.
+      **Written ([ADR 0020](adr/0020-sarif-output.md)):** the mapping table, the rule-id sanitization, the
+      location rules, the fingerprint slot and the invocation contract.
+- [x] **T1 Mapping.** `category` → ruleId; `P0/P1` → `error`, `P2` → `warning`, `P3` → `note`;
+      anchors → physical locations; finding identity → `partialFingerprints`. **Shipped:** the builder maps
+      one reported finding to one result, drops unusable anchors instead of clamping them, and uses the
+      canonical `buildIdentity` fingerprint under `pirFinding/v1`.
+- [x] **T2 CLI.** `--format sarif` on `find` and `audit`; no findings → valid empty `results`; incomplete run
+      represented in `invocations`. **Shipped:** `--format text|json|sarif` (with `--json` the legacy spelling
+      of `json`), validated before transport/bundle work; the invocation records `executionSuccessful` plus a
+      stop-reason notification, and an audit invocation carries coverage. Preview/readout lanes reject sarif.
+- [x] **T3 Golden/schema tests** and docs. `tests/unit/sarif.test.js` (with a structural validator for the
+      SARIF subset used), `tests/unit/output-format.test.js`, `tests/integration/sarif-cli.test.js`;
+      README, `docs/README.zh-CN.md` and `docs/for-llm.md` document the flag and the document.
 
 **Acceptance**
 
-- [ ] A1 Output validates against the SARIF 2.1.0 schema subset used.
-- [ ] A2 Empty and incomplete runs are valid.
-- [ ] A3 JSON/text outputs are unchanged.
+- [x] A1 Output validates against the SARIF 2.1.0 schema subset used.
+- [x] A2 Empty and incomplete runs are valid.
+- [x] A3 JSON/text outputs are unchanged.
+
+**Outcome (2026-10-23).** Shipped `--format sarif` on `find` and `audit`
+([ADR 0020](adr/0020-sarif-output.md)). One SARIF 2.1.0 log per invocation: `category` becomes the rule id
+(sanitized, sorted, one rule per distinct category), P0/P1 map to `error`, P2 to `warning` and P3 to `note`,
+the first anchor is the primary location and the rest become `relatedLocations`, and the finding's canonical
+identity is `partialFingerprints["pirFinding/v1"]`. `invocations[0]` records `executionSuccessful` from the
+run's `incomplete` flag plus a notification carrying `stoppedBecause`, and an audit invocation carries the
+coverage summary. No findings yields valid empty `results`; the text and `--json` outputs are byte-identical to
+before and exit codes do not move. `--json` with a contradictory `--format` is a usage error, and
+`find --preview`, `audit --dry-run` and `audit coverage` reject sarif rather than ignoring it.
 
 ---
 
@@ -489,6 +507,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-23 | S2 | Shipped: opt-in `--background` / `--background-file` for `find` (ADR 0016), reviewer prompt only, delimited and labelled, hash-only provenance in `run.json`; A1–A3 done, T4 dogfood partial (this PR, with and without a background) | Iteration 3, first item; the locked M1 baseline is untouched |
 | 2026-10-23 | S3 | Shipped: bounded per-file attention prompt `CHANGED FILES` + accounting request (ADR 0017); prompt-only, zero extra calls, byte-identical when the change set is empty; A1/A2 done, A3 not measured, item parked ⏸ | Iteration 3, second item; no M1 round was run, so no recall claim is made |
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
+| 2026-10-23 | S6 | Shipped `--format sarif` on `find` and `audit` (ADR 0020): one SARIF 2.1.0 log per run with category rule ids, severity levels, anchor locations, canonical partial fingerprints and an invocation that records completeness; `--json` and text are unchanged; A1–A3 done | Track B, second item; SARIF consumers can ingest findings without a custom mapper |
 | 2026-10-23 | S7 | Shipped `pir rules check <path>` (ADR 0019): client-side, no run/database/session, text + `rules.check` JSON with the rendered PROJECT RULES section; the winning-rule matcher is now shared with `applyProjectRules`; A1–A3 done | Track B, first item; rules could be listed but not resolved for one path |
 | 2026-10-23 | S4 | Iteration 4 closed as discovery only: the record holds one interrupted ~6.5-hour audit (a pre-#38 run with no ledger, most likely killed with its terminal) and no request for resume; identity/state protocol and cost estimate written, **no-go** for implementation ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)); D2 not triggered | The series' rule is measured gaps, not parity: the one loss on record predates the ledger a resume needs, and local durability is the cheaper remedy for its cause |
 
