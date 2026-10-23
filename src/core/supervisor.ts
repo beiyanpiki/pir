@@ -23,6 +23,7 @@ import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
 import { applyVerdict, computeRunVerdict, createReviewState, reportedCount, type RoundInfo, type RunVerdict } from "./review-state.js";
 import { ChangeCoverage } from "./change-coverage.js";
+import { userBackgroundRecord, type UserBackground } from "./user-background.js";
 import type { VerifiedFinding } from "../findings/types.js";
 import type { FindingRow } from "../memory/finding-store.js";
 import type { CandidateFinding } from "../findings/types.js";
@@ -87,6 +88,13 @@ export interface FindOptions {
    * discovered from the repository root and the client config dir.
    */
   ruleFile?: string;
+  /**
+   * S2 (ADR-0016): the user's stated background for this change, already
+   * sanitised and capped by `resolveUserBackground`. Absent by default — the
+   * reviewer prompt is then byte-identical to the pre-S2 one. Reviewer-only:
+   * verifier and audit sessions never see it.
+   */
+  background?: UserBackground;
 }
 
 export interface FindEvent {
@@ -539,6 +547,15 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     });
   };
   if (transcriptDir) onProgress({ type: "info", message: `transcripts: ${transcriptDir}` });
+  // S2 (ADR-0016): the background is opt-in. When present it is named once in
+  // the progress stream (sizes and hash only — the text is never logged).
+  const background = options.background;
+  if (background) {
+    onProgress({
+      type: "info",
+      message: `user background: ${background.characters} characters from ${background.source}${background.truncated ? ` (truncated from ${background.suppliedCharacters})` : ""}, sha256 ${background.sha256.slice(0, 12)}`,
+    });
+  }
 
   const memoryPack = buildMemoryPack(deps.memory, {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
@@ -651,6 +668,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
                   fanoutSize: roundAngles.length,
                   languageGuidance: reviewerLanguageGuidance,
                   projectRules: projectRuleApplication.section || undefined,
+                  ...(background ? { userBackground: background } : {}),
                   transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
                   onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id,
                     ...(transcriptDir ? { transcriptFile: file } : {}) }),
@@ -669,7 +687,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           for (const { ok } of oks) {
             for (const hunk of ok.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
             for (const read of ok.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, ok.assistantText, ok.summary);
+            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, ok.assistantText, ok.summary);
           }
           const allCandidates = [
             ...oks.flatMap(({ ok }) => ok.candidates),
@@ -808,6 +826,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           known: state.known,
           languageGuidance: reviewerLanguageGuidance,
           projectRules: projectRuleApplication.section || undefined,
+          ...(background ? { userBackground: background } : {}),
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round,
             ...(transcriptDir ? { transcriptFile: reviewerFile } : {}) }),
@@ -817,7 +836,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         // discard the reviewer's deliberate reads from the ledger (F-122).
         for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
         for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, result.assistantText, result.summary);
+        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
         freshCount = dedup.fresh.length;
@@ -925,6 +944,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
       files: changeSet.files.map(changedFileSummary),
       ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
+      ...(background ? { background: userBackgroundRecord(background) } : {}),
     });
     throw error;
   }
@@ -970,6 +990,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
     files: changeSet.files.map(changedFileSummary),
     ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
+    ...(background ? { background: userBackgroundRecord(background) } : {}),
   });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,

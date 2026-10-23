@@ -507,6 +507,12 @@ export interface RunManifest {
    * loaded.
    */
   projectRules?: import("../rules/project-rules.js").ProjectRulesSummary;
+  /**
+   * S2 (ADR-0016): provenance for an explicit user background — where it came
+   * from, its canonical sha256 and its sizes. The text itself is never
+   * persisted; absent when the run had no background (the default).
+   */
+  background?: import("../core/user-background.js").UserBackgroundRecord;
   /** Audit mode: coverage ledger summary and work-unit states. */
   coverage?: CoverageSummary;
   units?: Array<{ id: string; module: string; state: string; reason?: string; files: number; attempts: number }>;

@@ -25,6 +25,7 @@ import {
   pirConfigDir,
   type ProjectRuleSet,
 } from "../rules/project-rules.js";
+import { UserBackgroundError, resolveUserBackground, type UserBackground } from "../core/user-background.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
 import { FINDER_ANGLES } from "../agents/prompts.js";
@@ -134,6 +135,22 @@ Usage:
                       guidance for the run. Applied rules and their hash are
                       recorded in run.json; \`pir config show\` prints the
                       layers. Local mode only; find only
+  --background <text> user background for this change (S2/ADR-0016): the
+                      stated goal, intentional behaviour changes, migration
+                      notes. Delimited and labelled as untrusted context in
+                      the reviewer prompt — never as instructions, and never
+                      for verifier or audit sessions. At most 8,000 characters
+                      after sanitisation (longer input is truncated loudly;
+                      keep it under ~2,000); control characters stripped,
+                      blank lines collapsed, the reserved <user_background>
+                      delimiters rejected. The canonical sha256 and sizes are
+                      recorded in run.json, never the text
+  --background-file <path>
+                      read the background from a file instead (UTF-8, at most
+                      1 MiB raw, regular file). Wins over --background with a
+                      warning; relative paths resolve against the invocation
+                      directory. Local path: rejected in remote mode (client
+                      and server)
   --no-sync-index     skip codegraph index sync
   --preview           print the file selection a real find of the same range
                       would review (#B1): per-file status and churn, plus
@@ -438,6 +455,8 @@ export const VALUE_FLAGS = new Set([
   "--offset",
   "--plugins",
   "--rule",
+  "--background",
+  "--background-file",
   "--path",
   "--skip",
   "--task-file",
@@ -630,6 +649,9 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     if (flags.has("--branch")) throw new UsageError("audit selects a commit with --head; --branch is not supported");
     if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
     if (flags.has("--rule")) throw new UsageError("--rule applies to find only (audit has no change-mode prompt)");
+    if (flags.has("--background") || flags.has("--background-file")) {
+      throw new UsageError("audit has no reviewer background; --background/--background-file are find-only flags (S2/ADR-0016)");
+    }
   }
 
   // Server-side registered repo: fetch the clone, review in a throwaway worktree.
@@ -1021,6 +1043,31 @@ export function anglesFlag(flags: Map<string, string | boolean>): string[] | und
 }
 
 /**
+ * S2 (ADR-0016): `--background` / `--background-file` → the prompt-ready
+ * record. `--background-file` wins with a warning; every guard failure is a
+ * usage error, so a run never starts half-set. Warnings go to the progress
+ * channel (stderr): a truncation must never be silent, even under --json.
+ */
+export function userBackgroundFromFlags(
+  flags: Map<string, string | boolean>,
+  warn: (message: string) => void,
+): UserBackground | undefined {
+  const text = flags.get("--background");
+  const file = flags.get("--background-file");
+  try {
+    return resolveUserBackground({
+      ...(typeof text === "string" ? { text } : {}),
+      ...(typeof file === "string" ? { file } : {}),
+      cwd: process.cwd(),
+      warn: (message) => warn(`warning: ${message}`),
+    });
+  } catch (error) {
+    if (error instanceof UserBackgroundError) throw new UsageError(error.message);
+    throw error;
+  }
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -1095,7 +1142,7 @@ async function cmdFind(
   // session, no writes. Run-shaping flags cannot affect a selection, so they
   // are rejected instead of silently ignored (the audit --dry-run precedent).
   if (flags.get("--preview") === true) {
-    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins", "--rule"]) {
+    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins", "--rule", "--background", "--background-file"]) {
       if (flags.has(shaping)) {
         throw new UsageError(`find --preview previews the file selection only; ${shaping} shapes a real run`);
       }
@@ -1114,6 +1161,10 @@ async function cmdFind(
   if (ruleFile !== undefined && (typeof ruleFile !== "string" || ruleFile.trim() === "")) {
     throw new UsageError("--rule requires a path to a project rule file");
   }
+  // S2 (ADR-0016): resolve the background before any run row or session
+  // exists. A missing/oversized file, empty text or a reserved delimiter is a
+  // usage error (exit 2) — never a run that silently drops the context.
+  const background = userBackgroundFromFlags(flags, log);
   let result: Awaited<ReturnType<typeof runFind>>;
   try {
     result = await runFind(ctx, {
@@ -1129,6 +1180,7 @@ async function cmdFind(
       angles: anglesFlag(flags),
       ...(await parsePluginsFlag(flags)),
       ...(typeof ruleFile === "string" ? { ruleFile } : {}),
+      ...(background ? { background } : {}),
       onProgress: (event) => log(`• ${event.message}`),
     });
   } catch (error) {

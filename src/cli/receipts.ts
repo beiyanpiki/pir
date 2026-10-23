@@ -4,6 +4,7 @@ import path from "node:path";
 import { UsageError, helpFor, parseArgs } from "./executor.js";
 import { configDir } from "./config.js";
 import { runUrl } from "./web-client.js";
+import { redactUserBackgroundArgv } from "../core/user-background.js";
 
 /**
  * Local submission receipts (#52): when the server accepts a review as an
@@ -59,7 +60,10 @@ function sanitizeReceiptArgv(argv: string[]): string[] {
     if (token.startsWith("--token=") || token.startsWith("--viewer-token=")) continue;
     out.push(token);
   }
-  return out;
+  // A receipt lives on disk forever; the inline user background is model
+  // input, not receipt metadata, so its value is redacted too (ADR-0016,
+  // dogfood F-2).
+  return redactUserBackgroundArgv(out);
 }
 
 /** Atomic, owner-only write: tmp file (0600) + rename. */

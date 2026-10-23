@@ -195,7 +195,7 @@ Do not change field names or semantics.
 
 ---
 
-### S2 · Explicit user background for `find` + reviewer only · P2 · evidence: `product direction` · ADR: written at execution · Status: ☐
+### S2 · Explicit user background for `find` + reviewer only · P2 · evidence: `product direction` · ADR: [0016](adr/0016-user-background-for-find.md) · Status: ☑
 
 **Why.** There is no explicit background flag in [`find`](../src/cli/executor.ts#L81-L146). The reviewer does
 receive memory, project rules, focus, prior summaries and the diff, so the claim is not "no context at all"; the
@@ -208,26 +208,39 @@ entrypoints. Do not change the request-envelope contract. Default remains no bac
 
 **Tasks**
 
-- [ ] **T0 Write the ADR.** Record the scope, the trust boundary ("user-supplied context, not instructions"),
-      and why verifier/audit are deferred.
-- [ ] **T1 Flags and guards.** `--background <text>` and `--background-file <path>`; file wins with a warning;
+- [x] **T0 Write the ADR.** Record the scope, the trust boundary ("user-supplied context, not instructions"),
+      and why verifier/audit are deferred. ([ADR 0016](adr/0016-user-background-for-find.md))
+- [x] **T1 Flags and guards.** `--background <text>` and `--background-file <path>`; file wins with a warning;
       1MB raw cap; 8,000-character hard / 2,000-character soft; strip control characters and collapse blank
       lines; reject content containing the reserved delimiters; reject directories/empty-after-sanitisation.
-- [ ] **T2 Injection and provenance.** Wrap in a reserved `<user_background>` section in the reviewer prompt,
+      (The soft cap warns rather than truncates and the hard cap truncates rather than rejects — rationale in
+      ADR 0016 §Decision 3–4.)
+- [x] **T2 Injection and provenance.** Wrap in a reserved `<user_background>` section in the reviewer prompt,
       after process rules and before evidence; record a canonical hash (never the text) in `run.json`.
-- [ ] **T3 Tests.** Precedence, size limits, sanitisation, delimiter rejection, hash stability, no-background
+- [x] **T3 Tests.** Precedence, size limits, sanitisation, delimiter rejection, hash stability, no-background
       path byte-identical.
 - [ ] **T4 Dogfood.** 3–5 real PRs with descriptions; compare findings and note any over-fitting to the stated
       goal. Do not change the locked M1 baseline; a later M1 round may be justified separately.
+      **Partial (2026-10-23):** this item's own PR ran three times with a background description and once
+      without (same HEAD) — observational notes and the run-by-run outcome are in the PR. The remaining PRs are follow-up dogfood, not a merge gate. The
+      locked M1 baseline was not changed.
 
 **Acceptance**
 
-- [ ] A1 Unit tests cover every guard and the no-background path.
-- [ ] A2 Dogfood notes exist; any improvement is labelled observational, not measured.
-- [ ] A3 The flag is opt-in and remote-mode forwarding is documented or explicitly rejected.
+- [x] A1 Unit tests cover every guard and the no-background path.
+- [x] A2 Dogfood notes exist; any improvement is labelled observational, not measured.
+- [x] A3 The flag is opt-in and remote-mode forwarding is documented or explicitly rejected.
 
 **Decision rule.** Ship as an opt-in input after A1/A2; promote it into a measured M1 round only with a separate
 decision.
+
+**Outcome (2026-10-23).** Shipped as an opt-in input ([ADR 0016](adr/0016-user-background-for-find.md)):
+`--background` / `--background-file` on `find`, reviewer prompt only. Guards are 1 MiB raw, 8,000-character
+hard truncation, a 2,000-character soft warning, sanitisation, and reserved-delimiter rejection; the prompt carries
+a delimited `<user_background>` section after every process rule and before the evidence block; `run.json`
+records hash and sizes only. Audit rejects the flags, verifier prompts are untouched, `--background-file` is
+rejected in remote mode on both sides (CLI and the server's `/v1/review`/`/v1/exec` lanes, dogfood F-1) and
+`--background` needs a same-version server.
 
 ---
 
@@ -411,6 +424,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | all | Iteration labels renamed (Iteration 1–4) to avoid collision with the M1 benchmark; ADR numbering fixed at 0014; deletion checklist added | Drafting hygiene; keeps the tracker unambiguous while it exists |
 | 2026-10-22 | S5 | Shipped: optional visibility-only duplicate hint in `record_candidate` (ADR 0014), shared `duplicateMatch` predicate, strict prior-round baseline; no dedup/reporting change | Iteration 1 contract clarity |
 | 2026-10-22 | S1 | [ADR 0015](adr/0015-tool-schema-field-order-diagnostic.md) accepted (diagnostic only); T0/T1 done — declared and captured wire order both assert `verdict, rationale, …`, and the repeat protocol is pre-registered | Diagnostic first: the reorder stays undecided until the Iteration 2 M0 comparison |
+| 2026-10-23 | S2 | Shipped: opt-in `--background` / `--background-file` for `find` (ADR 0016), reviewer prompt only, delimited and labelled, hash-only provenance in `run.json`; A1–A3 done, T4 dogfood partial (this PR, with and without a background) | Iteration 3, first item; the locked M1 baseline is untouched |
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
 
 ---

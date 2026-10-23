@@ -1,6 +1,6 @@
 import type { AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
-import { auditReviewerPrompt, reviewerPrompt, type AngleDef } from "./prompts.js";
+import { auditReviewerPrompt, reviewerPrompt, type AngleDef, type UserBackgroundContext } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
 import type { ReviewWorkUnit } from "../core/audit-planner.js";
@@ -109,6 +109,11 @@ export interface ReviewerDeps {
   languageGuidance?: string;
   /** Rendered PROJECT RULES section (B5/ADR-0010); absent when no rule applies. */
   projectRules?: string;
+  /**
+   * S2 (ADR-0016): the user's stated background for this change. Reviewer
+   * sessions only — the audit prompt and every verifier session ignore it.
+   */
+  userBackground?: UserBackgroundContext;
   /**
    * ADR-0014: prior-round candidates this session's duplicate hint compares
    * against. A snapshot is taken here, so knowledge accumulated later in the
@@ -221,6 +226,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           fanoutSize: deps.fanoutSize,
           languageGuidance: deps.languageGuidance,
           projectRules: deps.projectRules,
+          ...(deps.userBackground ? { userBackground: deps.userBackground } : {}),
         });
     deps.onSessionEvent?.sessionStarted(prompt);
     await session.prompt(prompt);

@@ -99,6 +99,14 @@ async function main(argv: string[]): Promise<number> {
   if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
     throw new UsageError("--rule is a local file path and is not forwarded to a server; commit .pir/rule.json, use the server's global rule.json, or run with --local");
   }
+  // S2 (ADR-0016): `--background` is inline text and may be forwarded (a server
+  // running an older build drops it, so remote needs a same-version server),
+  // but `--background-file` names a file on the caller's machine — forwarding
+  // the path would read a server-side file (or fail there) under the same
+  // spelling. Reject it rather than resolve it somewhere the user did not mean.
+  if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
+    throw new UsageError("--background-file is a local file path and is not forwarded to a server; pass the text inline with --background, or run with --local");
+  }
   if (command === "jobs") {
     // jobs talks to the server's job registry directly (GET /v1/jobs) —
     // there is nothing to forward through the executor.

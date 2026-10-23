@@ -218,6 +218,8 @@ and their canonical hash are recorded in `run.json` under `projectRules`, and
 `pir config show [--json]` prints the loaded layers and rules. Rules are
 `find`-only; `--rule` is a local path and is rejected in remote mode.
 
+`find` can also carry one explicit user background: `--background <text>` or `--background-file <path>` (ADR 0016). It is opt-in, `find`-only, and reviewer-only: verifier sessions never see it, and `audit` rejects both flags. The text is turned into one `<user_background>` section placed after every process rule and before the evidence block, labelled as user-supplied context that is neither instructions nor evidence. Guards: 1 MiB raw file cap; sanitisation (LF line endings, control and invisible characters stripped, blank runs collapsed, trailing whitespace removed); empty-after-sanitisation and any reserved `<user_background>` delimiter rejected; 8,000 characters hard cap (truncated with an explicit marker in the prompt and a warning on stderr); 2,000 characters soft cap (warning only). `--background-file` wins over `--background` with a warning. `run.json` records `background: {source, sha256, characters, suppliedCharacters, truncated}` — the canonical hash of the supplied sanitised text, never the text; the surfaces that echo argv (server error log, job registry, submission receipts) redact the value as `<background redacted>`. Session transcripts, when enabled, record the prompt like every other session input. `--background-file` is a local path and is rejected in remote mode on both sides (the CLI before forwarding, and the server's `/v1/review`/`/v1/exec` lanes, so a direct API caller cannot read a server file into a prompt); `--background` may be forwarded to a same-version server.
+
 Limits:
 
 | Option | Default / meaning |
@@ -232,6 +234,8 @@ Limits:
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|frontend,golang,typescript` | `auto`, detected at selected head |
 | `--rule PATH` | no default; explicit highest-priority project rule file (`find` only, local mode) |
+| `--background TEXT` | no default; explicit user background for the change, reviewer prompt only (`find` only); ≤8,000 characters after sanitisation (truncated loudly), non-empty, no reserved `<user_background>` delimiter |
+| `--background-file PATH` | no default; read the background from a UTF-8 regular file (≤1 MiB raw); wins over `--background`; local path, rejected in remote mode |
 | `--no-sync-index` | skip optional codegraph index synchronization |
 
 `PIR_CODEGRAPH=1` (server/serve deployments) makes throwaway-worktree reviews

@@ -192,3 +192,30 @@ test("receipts (#52): credential-looking argv tokens are scrubbed even if they s
     restore();
   }
 });
+
+test("receipts: the inline user background is redacted (ADR 0016, dogfood F-2)", () => {
+  const restore = isolatedReceiptsEnv();
+  try {
+    const file = writeSubmissionReceipt({
+      kind: "find",
+      origin: ORIGIN_A,
+      jobId: "job-bgredact1",
+      projectId: null,
+      base: "b".repeat(40),
+      head: "h".repeat(40),
+      argv: ["find", "--background", "GOAL: internal migration detail", "--background=second value", "--json"],
+    });
+    const raw = readFileSync(file, "utf8");
+    assert.ok(!raw.includes("internal migration"), "the background text must not reach the receipt file");
+    const receipt = JSON.parse(raw);
+    assert.deepEqual(receipt.argv, [
+      "find",
+      "--background",
+      "<background redacted>",
+      "--background=<background redacted>",
+      "--json",
+    ]);
+  } finally {
+    restore();
+  }
+});
