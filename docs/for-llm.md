@@ -397,11 +397,11 @@ submit-time wait), a stderr status line prints on state changes and about
 once a minute (#55) — it reports connection liveness and log growth, never
 review progress.
 
-`find`/`audit --detach` (#53) submits and returns immediately: stdout carries
-a `<command>.detach` envelope with the full job id, origin, project, head and
-follow-up commands; the run id is `null` until pickup. Exit `0` means the
-submission was accepted — never that the review ran or passed. Pick up later
-with `pir jobs wait/fetch`; the local receipt keeps the record.
+In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
+
+In local mode, the same flag detaches the run from the terminal instead (ADR 0022): the CLI re-executes itself as a background process, prints a `find.detach`/`audit.detach` envelope (`jobId`, `mode: "local"`, `logPath`, `receiptPath`, `followUp`), and exits `0` once the child is accepted. The log is `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`); the receipt settles with the child's final `exitCode`; `--fail-on` cannot gate the parent. `--detach` is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit (exit `2`).
+
+A local detach has no watchdog: an unsettled receipt whose log stopped growing means the child was killed, not that the review is still running, and nothing resumes it. Two concurrent detaches are told apart by their receipts and logs, never by `pir audit coverage --latest` (which names the newest run).
 
 ```bash
 pir jobs list --json
@@ -686,7 +686,7 @@ own 120-second request timeout.
 | `failed to prepare the review bundle locally …` | a LOCAL git error, not server connectivity; bundling itself is read-only since #46, so this now means missing objects or temp-dir problems (the bundle-free `findings list/show` lane needs no bundle unless the server demands full history) |
 | Long audit cost unknown | `pir audit --dry-run --list-files` previews the exact scope and unit count first (#56) |
 | Findings capped too early | rerun with `--max-findings unlimited` (#57); JSON reports `run.maxFindingsMode` |
-| Submit-and-continue | `pir find/audit --detach` returns after acceptance; pick up with `pir jobs wait` (#53) |
+| Submit-and-continue | `pir find/audit --detach` returns after acceptance: remote picks up with `pir jobs wait` (#53); local keeps running with `~/.pir/logs/<jobId>.log` and a receipt whose `exitCode` settles the run (ADR 0022) |
 | Job ID missing after restart | `pir receipts list` — the local receipt names the job, project and run; `pir jobs fetch` still works while the registry lives |
 | Run URL from the web UI | `pir runs status <run-url>` / `pir findings list --run <run-url>` / `pir findings export --run <run-url>` — no checkout needed |
 | Viewer auth required (401 on /api) | pass `--viewer-token` (the server's `PIR_WEB_UI_TOKEN`); it is independent of `--token` |

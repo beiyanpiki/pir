@@ -82,6 +82,12 @@ local configuration is:
 Add `"model": "provider/model"` to choose a default. `--model` has highest
 priority, followed by `PIR_MODEL`, this config value, and Pi settings.
 
+### Long local runs survive their terminal
+
+`pir find --detach` and `pir audit --detach` in local mode re-execute the same CLI as a background process and return as soon as it is accepted (ADR 0022). Exit 0 means *accepted*, not *reviewed*: the review keeps running after the terminal closes, and its outcome lives in the log at `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`), in the receipt under `~/.pir/receipts/` whose `exitCode` is the child's final exit code once it settles, and in the project database (`pir findings list`, `pir audit coverage --latest`). With `--json` the submission envelope is `<command>.detach` and carries the job id, `mode: "local"`, the log path, the receipt path and follow-up commands; without it the same facts print as text. `--detach` is opt-in — an ordinary local run is unchanged — and it is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit, because those lanes produce no run to detach. The parent cannot gate on `--fail-on`: check the receipt's `exitCode` or the findings afterwards.
+
+There is no watchdog. A killed detach (`SIGKILL`, OOM, reboot) leaves an unsettled receipt with no `settledAt`/`exitCode` and a log that stopped growing — a running detach also has an unsettled receipt, so compare log growth, and `pir audit coverage --latest` shows the newest run's status. Two concurrent detaches are told apart by their receipts and logs, never by `--latest`. Nothing resumes a killed detach: `--detach` prevents the terminal-loss failure, it is not audit resume.
+
 ### Remote mode
 
 With an existing `pir serve` instance, the client needs just a connection:
@@ -394,8 +400,9 @@ Remote audits sent from a checkout are asynchronous jobs by default.
 `pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
 memory and retains the latest 100 settled jobs; runs and findings remain in
 SQLite. `PIR_REMOTE_ASYNC=1` applies
-job submission to other review commands. `find`/`audit --detach` submits the
-job and returns immediately (#53): stdout carries the submission envelope
+job submission to other review commands. In remote mode, `find`/`audit
+--detach` submits the job and returns immediately (#53): stdout carries the
+submission envelope
 with the full job id and follow-up commands, and the local receipt is the
 durable record — exit 0 means *accepted*, not *reviewed*. While waiting
 (`jobs wait` or the submit-time poll), a status line prints on state changes

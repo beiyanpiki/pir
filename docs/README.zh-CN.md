@@ -233,6 +233,10 @@ reviewer prompt 把该文本放在保留的 `<user_background>` 区段里——�
 
 bundle 在一个临时 bare 仓库中打包，该仓库通过 alternates 只读取 checkout 的对象库（#46）：源仓库的 refs、index、config 和对象零写入，只读 `.git` 也可用。唯一例外是 `find --uncommitted`——它按设计先在源仓库记录工作区对象再打包。
 
+本地模式下同一个 `--detach` 让运行脱离终端继续（ADR 0022）：CLI 以分离的后台进程重新执行自身并立即返回——退出码 `0` 只表示**已受理**，不表示评审完成。日志位于 `~/.pir/logs/<jobId>.log`（0600，目录 0700，跟随 `PIR_CONFIG_DIR`）；回执在子进程退出时写入最终 `exitCode`，`--json` 输出 `find.detach`/`audit.detach` 信封（含 jobId、`mode: "local"`、日志与回执路径）；`pir receipts show <id8>` 打印本地后续命令，`pir audit coverage --latest` 查看该运行的覆盖率状态。`--detach` 是显式开关，普通本地运行行为不变；`find --preview`、`audit --dry-run`、`audit coverage` 以及其他命令都会以用法错误（退出码 2）拒绝。父进程无法用 `--fail-on` 把关，需事后检查回执的 `exitCode` 或 findings。
+
+分离运行没有 watchdog：被杀（`SIGKILL`、OOM、重启）会留下未结算的回执和停止增长的日志——运行中的分离任务回执同样未结算，因此要对比日志是否还在增长，`pir audit coverage --latest` 指向最新一次运行的状态。并发两个分离运行时只能靠各自的回执与日志区分，不能用 `--latest` 判断。被杀掉的分离运行不会自动恢复或续跑（`--detach` 解决的是终端丢失，不是 audit resume）；远程 `--detach` 的语义保持不变。
+
 远程响应等待时长依次为 `--remote-timeout <秒>`（0 禁用）> `PIR_REMOTE_TIMEOUT` > 配置 `server.timeoutSeconds` > 默认 1800 秒（#54）。异步任务轮询（5 秒间隔）没有总时限。
 
 可选的只读浏览界面通过 `--web` 或 `PIR_WEB_UI=1` 开启，使用独立于 `PIR_SERVER_TOKEN` 的 `PIR_WEB_UI_TOKEN`。开启界面时，未设置的 `PIR_TRANSCRIPTS` 默认取 `1`，设置为 `0` 可以禁用转录。Compose 会传入这个变量，因此需要在 `.env` 中显式设置 `PIR_TRANSCRIPTS=1` 才能记录历史时间线。实时时间线覆盖 serve 进程中的评审；历史转录也能显示提示词、工具调用和可用的 thinking 内容。界面开发方式见 [web 文档](../web/README.md)。
