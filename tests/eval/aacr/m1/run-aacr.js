@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M1 — end-to-end eval driver (roadmap T2).
+ * AACR-Bench M1 — end-to-end eval driver (clone, checkout, spawn find, normalize).
  *
  * One M1 task = one positive_samples PR. For each task:
  *   1. reuse the shared depth-1 clone cache,

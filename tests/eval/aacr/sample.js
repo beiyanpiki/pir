@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — dataset sampling (roadmap T5 sampling contract; T2/T4 input).
+ * AACR-Bench M0 — dataset sampling (sampling contract shared by the materializer and the driver).
  *
  * Pure functions only: no fs, no network, no git. The sample must be
  * reproducible from (dataset, seed, limit) alone, because the materializer,

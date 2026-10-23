@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M1 — results renderer (roadmap A1).
+ * AACR-Bench M1 — results renderer (renders the first M1 results document).
  *
  * Pure renderer plus a thin CLI. It reads one driver round:
  *

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — eval driver (roadmap T4).
+ * AACR-Bench M0 — eval driver (spawns _verify-comment with rb-grade isolation).
  *
  * Spawns `pir _verify-comment` once per materialized comment with the same
  * environment isolation ReviewBench uses (tests/eval/reviewbench/run-rb.js):

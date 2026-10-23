@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — results renderer (roadmap A1). Pure renderer plus a thin CLI.
+ * AACR-Bench M0 — results renderer (renders the first M0 results document). Pure renderer plus a thin CLI.
  *
  * The protocol section is copied from tests/eval/reviewbench/RESULTS.md (the
  * RB variance rules) and extended with the M0-specific rules from ADR-0007:
