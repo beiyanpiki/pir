@@ -492,6 +492,17 @@ test("a repository-controlled path cannot add a prompt line (S3 dogfood F-1)", (
   assert.ok(blank.includes("- <path unavailable> (added, +1/-0)"));
   // An ordinary path is untouched.
   assert.ok(reviewerPrompt({ ...changeMinimalInput, changedFiles: CHANGED_FILES }).includes("- src/app.ts (modified, +12/-3)"));
+  // Legal whitespace survives: only unsafe runs are rewritten (dogfood F-4).
+  const spaced = reviewerPrompt({ ...changeMinimalInput, changedFiles: [{ path: "src/a  b.ts", status: "added", additions: 1, deletions: 0 }] });
+  assert.ok(spaced.includes("- src/a  b.ts (added, +1/-0)"), "ordinary spaces in a path are preserved");
+  const runOfControls = reviewerPrompt({ ...changeMinimalInput, changedFiles: [{ path: "src/a\u0000\u0001b.ts", status: "added", additions: 1, deletions: 0 }] });
+  assert.ok(runOfControls.includes("- src/a b.ts (added, +1/-0)"), "a run of unsafe characters becomes one space");
+});
+
+test("the accounting request names finish_round's 40-entry coverage cap (S3 dogfood F-3)", () => {
+  const prompt = reviewerPrompt({ ...changeMinimalInput, changedFiles: CHANGED_FILES });
+  assert.match(prompt, /coverage holds at most 40 entries/);
+  assert.match(prompt, /group related files into one entry instead of dropping any file/);
 });
 
 test("an absent or empty change set renders nothing, so the prompt is byte-identical (S3)", () => {

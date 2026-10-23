@@ -220,11 +220,13 @@ export const CHANGED_FILES_LIMIT = 60;
  * those characters collapse to a space and the value is length-capped. Nothing
  * else is rewritten — a visibly hostile name stays visible next to its churn.
  */
-const PROMPT_FIELD_UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+const PROMPT_FIELD_UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]+/g;
 
 function promptSafeField(value: string, max = 300): string {
-  const flat = value.replace(PROMPT_FIELD_UNSAFE, " ").replace(/ {2,}/g, " ").trim();
-  if (flat === "") return "<path unavailable>";
+  // Only the unsafe run is rewritten. Ordinary spaces are legal in a path and
+  // are left exactly as they are, so the reviewer can open what is listed.
+  const flat = value.replace(PROMPT_FIELD_UNSAFE, " ");
+  if (flat.trim() === "") return "<path unavailable>";
   return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
 }
 
@@ -244,7 +246,7 @@ function changedFileLines(files?: readonly ChangedFileLine[]): string[] {
       return `- ${promptSafeField(file.path)} (${promptSafeField(file.status, 40)}, +${file.additions}/-${file.deletions})${reason}`;
     }),
     ...(files.length > CHANGED_FILES_LIMIT ? [`... ${files.length - CHANGED_FILES_LIMIT} more changed files not listed`] : []),
-    "ACCOUNT FOR EVERY CHANGED FILE: before finish_round, each file above is either investigated or explicitly skipped with a stated reason in coverage (for example \"skipped src/gen.ts: generated\"). A stated skip is honest; an unread file silently omitted is not. This is not a hard error — reading every file is not required, accounting for them is.",
+    "ACCOUNT FOR EVERY CHANGED FILE: before finish_round, each file above is either investigated or explicitly skipped with a stated reason in coverage (for example \"skipped src/gen.ts: generated\"). coverage holds at most 40 entries, so when this list is longer, group related files into one entry instead of dropping any file. A stated skip is honest; an unread file silently omitted is not. This is not a hard error — reading every file is not required, accounting for them is.",
   ];
 }
 
