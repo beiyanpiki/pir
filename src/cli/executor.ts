@@ -535,7 +535,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 export type OutputFormat = "text" | "json" | "sarif";
 
 /**
- * `find`/`audit` output selection (roadmap S6, ADR 0020). `--format` names the
+ * `find`/`audit` output selection (ADR 0020). `--format` names the
  * format and the legacy `--json` is the same choice spelled differently, so
  * asking for two different formats at once is a usage error rather than a
  * silent precedence rule. Resolved before any run row or session exists.

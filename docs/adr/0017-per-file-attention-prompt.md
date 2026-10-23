@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-23).** Second OCR-borrow series, item S3 (Iteration 3). Prompt-only: zero extra model calls, no new tool, no new enforcement, no hard error. Shipped as an attention aid; its effect on recall is **not measured** in this ADR.
+**Accepted (2026-10-23).** Second OCR-borrow series, item S3 (Iteration 3). Prompt-only: zero extra model calls, no new tool, no new enforcement, no hard error. Shipped as an attention aid; its effect on recall is **not measured** in this ADR. Item closed `✗ not measured` on 2026-10-23; the prompt ships, no recall benefit is claimed, and measuring it needs a separate protocol-compliant round.
 
 ## Context
 
@@ -62,4 +62,3 @@ The constraint that decides the design: the plan phase is a separate decision po
 - Baseline and caveats: [`M1-2026-10-20-baseline-glm.md`](../../tests/eval/aacr/results/M1-2026-10-20-baseline-glm.md), [`RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md), [ADR 0009](0009-m1-end-to-end-benchmark.md) (M1 protocol), [ADR 0007](0007-aacr-verifier-offline-benchmark.md) (caliber caveats).
 - Related: [ADR 0004](0004-change-mode-file-filter.md) (the exclusion record this section renders), [ADR 0013](0013-change-coverage-manifest-decision.md) (why coverage stays one ledger, not an enforced prompt contract), [ADR 0016](0016-user-background-for-find.md) (the other Iteration 3 input; deliberately a separate PR).
 - External mechanism: OCR (pinned `375f64c`) `prompts/main_task_system.md:16-23` (per-file pass requirement) and `prompts/main_task_user.md:1-8` (changed-file list); hypothesis for pir.
-- Roadmap: `docs/roadmap-ocr-second-pass.md` §3, item S3.

@@ -10,7 +10,7 @@
 
 OCR treats that input as a first-class, bounded, delimited artifact rather than a free-form prelude: a background file is read with explicit size limits and injected as labelled context (`cmd/opencodereview/background_file.go:15-118`, `prompts/main_task_user.md:12-14`). The evidence level here is **product direction**: the missing input is easy to name and cheap to add, but no study in this repository measures whether it improves review quality. This ADR therefore ships the input as opt-in and makes no quality claim.
 
-The trust boundary is the reason for the guard list below. User background is a prompt-injection and secret-leak channel (roadmap risk R3): it is text a user pastes from a PR description, a ticket or a terminal, it reaches a model verbatim, and it can look exactly like an instruction.
+The trust boundary is the reason for the guard list below. User background is a prompt-injection and secret-leak channel: it is text a user pastes from a PR description, a ticket or a terminal, it reaches a model verbatim, and it can look exactly like an instruction.
 
 ## Decision
 
@@ -59,4 +59,3 @@ The trust boundary is the reason for the guard list below. User background is a 
 - Tests: [`tests/unit/user-background.test.js`](../../tests/unit/user-background.test.js), [`tests/unit/prompts.test.js`](../../tests/unit/prompts.test.js), [`tests/integration/user-background.test.js`](../../tests/integration/user-background.test.js).
 - Precedent: [ADR 0010](0010-layered-project-rule-file.md) (path-scoped user guidance, canonical hash in the manifest, local-path rejection in remote mode), [ADR 0004](0004-change-mode-file-filter.md) (what the reviewer may and may not see), [ADR 0006](0006-default-token-budget-with-grace.md) (prompt-side accounting).
 - External mechanism: OCR (pinned `375f64c`) `cmd/opencodereview/background_file.go:15-118` and `prompts/main_task_user.md:12-14` — bounded, delimited background context; product-direction evidence only.
-- Roadmap: `docs/roadmap-ocr-second-pass.md` §3, item S2.

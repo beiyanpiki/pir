@@ -53,4 +53,3 @@ Two constraints decide the design. First, the answer must not be able to drift f
 - Implementation: [`src/cli/executor.ts`](../../src/cli/executor.ts) (`cmdRules`, `ruleCheckPath`), [`src/rules/project-rules.ts`](../../src/rules/project-rules.ts) (`matchProjectRule`, `checkProjectRules`).
 - Tests: [`tests/unit/project-rules-check.test.js`](../../tests/unit/project-rules-check.test.js), [`tests/integration/rules-cli.test.js`](../../tests/integration/rules-cli.test.js).
 - External mechanism: OCR `alibaba/open-code-review` @ `375f64c` (Apache-2.0), `ocr rules check` — product-direction evidence only.
-- Roadmap: `docs/roadmap-ocr-second-pass.md` §3, item S7.
