@@ -189,6 +189,60 @@ test("the repository rule file itself is contained: an outside symlink is fatal,
   assert.match(app.section, /INSIDE/);
 });
 
+test("a dangling rule-file symlink is a present-but-unusable layer, not an absent one (dogfood F-6)", (t) => {
+  // Repository layer: lstat sees the symlink, realpath follows it and fails.
+  const repo = tempDir(t);
+  mkdirSync(path.join(repo, ".pir"), { recursive: true });
+  symlinkSync(path.join(repo, ".pir", "missing.json"), path.join(repo, ".pir", "rule.json"));
+  assert.throws(
+    () => loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }),
+    (error) => error instanceof ProjectRuleError && /repository rule file does not exist/.test(error.message),
+  );
+
+  // Global layer: a dangling symlink makes readCappedFile fail, not disappear.
+  const emptyRepo = tempDir(t);
+  const configDir = tempDir(t);
+  symlinkSync(path.join(configDir, "missing.json"), path.join(configDir, "rule.json"));
+  assert.throws(
+    () => loadProjectRules({ repoRoot: emptyRepo, configDir }),
+    (error) => error instanceof ProjectRuleError && /rule file cannot be read/.test(error.message),
+  );
+
+  // Control: a genuinely absent rule file is still an absent layer.
+  assert.deepEqual(loadProjectRules({ repoRoot: tempDir(t), configDir: tempDir(t) }).layers, []);
+});
+
+test("layer include/exclude globs obey the rule-glob path contract (dogfood F-8)", (t) => {
+  const repo = tempDir(t);
+  const file = path.join(repo, ".pir", "rule.json");
+  const cases = [
+    ["/src/**", /repo-relative/],
+    ["../src/**", /must not contain "\.\."/],
+    ["src\\**", /must use "\/"/],
+  ];
+  for (const field of ["include", "exclude"]) {
+    for (const [glob, pattern] of cases) {
+      writeJson(file, { [field]: [glob], rules: [] });
+      assert.throws(
+        () => loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }),
+        (error) => error instanceof ProjectRuleError && pattern.test(error.message),
+        field + ": " + glob,
+      );
+    }
+  }
+  // The same forms stay rejected for rule paths (the shared contract is not
+  // loosened for the entries that already had it).
+  writeJson(file, { rules: [rule("/src/**", "x")] });
+  assert.throws(() => loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }), /repo-relative/);
+  // Valid layer globs still load, including the default when omitted.
+  writeJson(file, { include: ["src/**"], exclude: ["src/generated/**"], rules: [rule("src/**", "OK")] });
+  const set = loadProjectRules({ repoRoot: repo, configDir: tempDir(t) });
+  assert.deepEqual(set.layers[0].include, ["src/**"]);
+  assert.deepEqual(set.layers[0].exclude, ["src/generated/**"]);
+  writeJson(file, { rules: [] });
+  assert.deepEqual(loadProjectRules({ repoRoot: repo, configDir: tempDir(t) }).layers[0].include, ["**"]);
+});
+
 test("rule-file validation is strict: unknown keys, both/neither guidance, bad shapes", (t) => {
   const repo = tempDir(t);
   const file = path.join(repo, ".pir", "rule.json");

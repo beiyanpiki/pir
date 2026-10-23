@@ -687,7 +687,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           for (const { ok } of oks) {
             for (const hunk of ok.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
             for (const read of ok.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, ok.assistantText, ok.summary);
+            // F-7/F-9: the rendered PROJECT RULES section is prompt content too,
+            // so a usage-less session's fallback estimate charges it with the rest.
+            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, projectRuleApplication.section, ok.assistantText, ok.summary);
           }
           const allCandidates = [
             ...oks.flatMap(({ ok }) => ok.candidates),
@@ -836,7 +838,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         // discard the reviewer's deliberate reads from the ledger (F-122).
         for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
         for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, result.assistantText, result.summary);
+        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, projectRuleApplication.section, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
         freshCount = dedup.fresh.length;

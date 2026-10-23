@@ -16,7 +16,7 @@
  * be applied completely is a hard error before any session exists.
  */
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathMatchesGlob } from "../changes/filter.js";
@@ -189,22 +189,31 @@ function resolveGuidanceFile(repoRoot: string, reference: string, ruleFile: stri
   return { file: normalized, text };
 }
 
+/**
+ * Repo-relative glob contract shared by a rule's `path` and a layer's
+ * `include`/`exclude` entries: no host-absolute path, no `..` segment, and
+ * POSIX separators (a backslash form would silently never match a
+ * repo-relative path, so it is rejected instead of accepted as a no-op).
+ */
+function repoRelativeGlob(glob: string, where: string, what: string): string {
+  if (path.isAbsolute(glob)) fail(where, `${what} must be repo-relative, got: ${glob}`);
+  if (glob.split("/").some((segment) => segment === "..")) fail(where, `${what} must not contain "..": ${glob}`);
+  if (glob.includes("\\")) fail(where, `${what} must use "/" separators: ${glob}`);
+  return glob;
+}
+
 function stringList(value: unknown, where: string, field: string): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) fail(where, `"${field}" must be an array of globs`);
   return value.map((entry) => {
     if (typeof entry !== "string" || entry.trim() === "") fail(where, `"${field}" entries must be non-empty strings`);
-    return entry.trim();
+    return repoRelativeGlob(entry.trim(), where, `"${field}" entries`);
   });
 }
 
 function ruleGlob(value: unknown, where: string, index: number): string {
   if (typeof value !== "string" || value.trim() === "") fail(where, `rules[${index}].path must be a non-empty glob`);
-  const glob = value.trim();
-  if (path.isAbsolute(glob)) fail(where, `rules[${index}].path must be repo-relative, got: ${glob}`);
-  if (glob.split("/").some((segment) => segment === "..")) fail(where, `rules[${index}].path must not contain "..": ${glob}`);
-  if (glob.includes("\\")) fail(where, `rules[${index}].path must use "/" separators: ${glob}`);
-  return glob;
+  return repoRelativeGlob(value.trim(), where, `rules[${index}].path`);
 }
 
 /** Parse one rule file. Shapes are strict: unknown keys are errors (a typo must not silently change behavior). */
@@ -268,8 +277,24 @@ export function parseRuleFile(input: {
  * `guidanceFile` references get). The `--rule` and global layers are
  * user-selected paths and are read literally.
  */
+/**
+ * Presence for an optional layer: `lstat` counts a dangling symlink as present
+ * (it is a file the user created, just unusable), where `existsSync` would
+ * follow the link and classify it as an absent layer. The subsequent
+ * `realpathOrFail`/`readCappedFile` call then raises the existing
+ * `ProjectRuleError` instead of silently reviewing without the layer.
+ */
+function layerFilePresent(file: string): boolean {
+  try {
+    lstatSync(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function loadLayer(input: { file: string | undefined; layer: RuleLayerName; repoRoot: string; contain?: boolean }): RuleLayer | null {
-  if (!input.file || !existsSync(input.file)) return null;
+  if (!input.file || !layerFilePresent(input.file)) return null;
   let readPath = input.file;
   if (input.contain) {
     const rootReal = realpathOrFail(input.repoRoot, "repository root");

@@ -7,7 +7,7 @@ import path from "node:path";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { findIssues } from "../../dist/core/supervisor.js";
-import { ProjectRuleError, loadProjectRules } from "../../dist/rules/project-rules.js";
+import { ProjectRuleError, applyProjectRules, loadProjectRules } from "../../dist/rules/project-rules.js";
 
 /**
  * B5 acceptance A1 at the supervisor boundary: the rendered PROJECT RULES
@@ -132,6 +132,35 @@ test("the global layer is the isolated config dir's rule.json, and the repo laye
     assert.doesNotMatch(prompts[0], /GLOBAL-SHADOWED/);
     assert.ok(prompts[0].indexOf('RULE "src/**" (layer repo') !== -1);
     assert.ok(prompts[0].indexOf('RULE "go.mod" (layer global') !== -1);
+  } finally { f.cleanup(); }
+});
+
+test("a usage-less session's fallback estimate charges the PROJECT RULES section (dogfood F-7, F-9)", async () => {
+  // The fallback estimate must include the rendered section: a rules-heavy run
+  // reporting no usage would otherwise under-count the prompt by up to 12k tokens.
+  // F-3's fixture isolates PIR_CONFIG_DIR for this test (no real ~/.pir layer).
+  const f = await fixture();
+  try {
+    const withoutRule = await findIssues({ ...f.ctx, factory: capturingFactory([]), options: { maxRounds: 1 } });
+    const guidance = "BUDGET-RULE: keep increments overflow-safe. " + "x".repeat(4000);
+    writeRule(path.join(f.repo.dir, ".pir", "rule.json"), { rules: [{ path: "src/**", guidance }] });
+    const prompts = [];
+    const withRule = await findIssues({ ...f.ctx, factory: capturingFactory(prompts), options: { maxRounds: 1 } });
+
+    assert.equal(withoutRule.usageComplete, false);
+    assert.equal(withRule.usageComplete, false);
+    assert.equal(withRule.memoryPackTokens, withoutRule.memoryPackTokens, "only the rules section should move the estimate");
+    assert.match(prompts[0], /PROJECT RULES/);
+
+    const section = applyProjectRules(loadProjectRules({ repoRoot: f.repo.dir, configDir: f.configDir }), [{ path: "src/counter.go" }]).section;
+    assert.match(section, /BUDGET-RULE/);
+    assert.ok(section.length > 4000 && section.length < 48_000, "fixture section is renderable and bounded");
+    assert.equal(
+      withRule.estimatedTokens - withoutRule.estimatedTokens,
+      Math.ceil(section.length / 4),
+      "the usage-less reviewer charge includes exactly the rendered section",
+    );
+
   } finally { f.cleanup(); }
 });
 
