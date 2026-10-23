@@ -293,34 +293,66 @@ measures it.
 
 ---
 
-### S4 · Audit resume: discovery and protocol only · P3 · evidence: capability gap, demand unproven · ADR: written at execution · Status: ☐
+### S4 · Audit resume: discovery and protocol only · P3 · evidence: capability gap, demand unproven · ADR: [0018](adr/0018-audit-resume-identity-protocol.md) · Status: ☑ discovery complete — implementation is a **no-go** (one pre-ledger interruption recorded; D2 not triggered)
 
-**Why.** The docs are explicit: [`review-loop.md`](review-loop.md#L146-L150) "There is no automatic
-restart/resume of an interrupted audit"; [`design.md`](design.md#L139-L150) "Reading stored candidates
-does not resume them in a later run." Audit candidates and coverage are persisted, so the raw material exists.
-What is missing is an identity/state protocol and evidence that users need it: multi-day audits appear as a
-scenario in docs/CLI, but no user request, issue or dogfood finding in this repository's record documents an
-interrupted-audit loss.
+**Why.** The docs are explicit: [`review-loop.md`](review-loop.md#L156-L160) "There is no automatic
+restart/resume of an interrupted audit"; [`design.md`](design.md#L155-L163) "Reading stored candidates
+does not resume them in a later run." Audit candidates and coverage are persisted (since the #38 ledger fixes),
+so the raw material exists for runs produced today. What is missing is an identity/state protocol and evidence
+that users need it: multi-day audits appear as a scenario in docs/CLI, and no user request, issue or dogfood
+finding in this repository's record documents an interrupted-audit loss (the operator's own state does — see the
+T0 answer below).
 
 **Scope guard.** This item is discovery, not implementation. Do not write code, do not promise L, and do not
 describe it as a coverage-contract change (D-B8 / ADR 0013 remains rejected).
 
 **Tasks**
 
-- [ ] **T0 Demand discovery.** Who runs multi-day audits, how often, what they do after an interruption, and
+- [x] **T0 Demand discovery.** Who runs multi-day audits, how often, what they do after an interruption, and
       whether restarting is acceptable. Record the answers (or the absence of answers) in the ADR.
-- [ ] **T1 Identity protocol.** Snapshot commit/tree; scope (`--path`/`--skip`); filter/planner version;
+      **Answered (2026-10-23):** five audit runs are recorded on 2026-09-30 against one private repository
+      — three never finished and produced nothing, one stopped at the findings cap with 690 files unreviewed,
+      and one ran ~6.5 hours, produced 152 verified findings and never finished (its row is still `running`);
+      no reboot occurred, and the journal shows the operator's SSH session ending minutes after the last model
+      call, so terminal-bound execution is the likeliest cause. No request for continuing an interrupted audit
+      exists, and the operator never restarted the six-hour run. **Demand is one measured cost, not a stated
+      need**, and that run predates the #38 ledger a resume needs.
+- [x] **T1 Identity protocol.** Snapshot commit/tree; scope (`--path`/`--skip`); filter/planner version;
       reviewer and verifier model; rule hash; plugin and prompt versions; budget policy. State which changes
-      force a full refusal rather than partial reuse.
-- [ ] **T2 State semantics.** Completed/reused/failed/waived units; in-progress re-run; blocked retry; pending
+      force a full refusal rather than partial reuse. **Written (ADR 0018):** compare-and-refuse table over the
+      persisted target plus the model/verifier/pack identity; whole refusal, never partial reuse; the rule hash
+      is excluded because audit rejects `--rule`; build identity does not exist yet and is named as a gap;
+      model, verifier and pack identity live only in `run.json`, which is absent unless transcripts are on.
+- [x] **T2 State semantics.** Completed/reused/failed/waived units; in-progress re-run; blocked retry; pending
       candidates (reuse or re-verify); dedup against completed findings; budget carry-over or reset.
-- [ ] **T3 ADR + estimate.** Only after T0–T2, write the ADR and a cost estimate; record go/no-go.
+      **Written (ADR 0018):** a durable-state table over pir's actual vocabulary (`pending`, `in-progress`,
+      `reviewed`, `blocked`, `failed` — there is no `waived` state and none is invented); pending candidates
+      are re-verified, never re-discovered; the `known` dedup set is rebuilt from candidate rows; attempts and
+      `--max-tokens` spend carry, the wall clock restarts.
+- [x] **T3 ADR + estimate.** Only after T0–T2, write the ADR and a cost estimate; record go/no-go.
+      **Recorded (ADR 0018):** two PRs, ~500–800 lines plus tests, one migration to persist identity and usage;
+      go/no-go is **no-go**.
 
 **Acceptance**
 
-- [ ] A1 Discovery answers recorded, including "no demand recorded".
-- [ ] A2 Identity and state protocol written.
-- [ ] A3 Go/no-go recorded; implementation is a separate ADR/PR.
+- [x] A1 Discovery answers recorded, including "no demand recorded".
+- [x] A2 Identity and state protocol written.
+- [x] A3 Go/no-go recorded; implementation is a separate ADR/PR.
+
+**Outcome (2026-10-23).** Discovery complete, implementation declined
+([ADR 0018](adr/0018-audit-resume-identity-protocol.md)). The record contains more than the roadmap assumed:
+five audits ran on 2026-09-30, and one of them — ~6.5 hours, 152 verified findings — stopped without finishing
+and is still marked `running`; its findings survived, its remaining coverage did not. But that run predates the
+incremental ledger (#38), so the state a resume needs did not exist for it; its likeliest cause is a
+terminal-bound local run (no reboot; an SSH disconnect minutes after the last model call); and no one has asked
+for the feature since. The ADR therefore writes the identity/state protocol a future implementation must
+follow — exact match on project, commit/tree, scope, selection and planner versions, reviewer/verifier models,
+language packs and a build identity that does not exist yet; whole-run refusal on any mismatch and on a
+pre-ledger run; reuse of `reviewed` units, re-run of `in-progress`, retry of `failed` only inside the
+two-attempt cap, `blocked` stays blocked, pending candidates re-verified, and the same run row continued rather
+than a second one created — and records **no-go**, pointing the next investment at local durability (a local
+audit that survives its terminal) rather than at a resume state machine. D2 is **not triggered**; no code,
+schema, flag or state changed.
 
 ---
 
@@ -377,7 +409,7 @@ B5's resolver already has the winning-rule data.
 | ID | Topic | Trigger | Action when triggered | Status |
 | --- | --- | --- | --- | --- |
 | D1 | Plan phase for large changes | S3 dogfood or a protocol-compliant M1 round still shows weak coverage/recall after the changed-file/per-file prompt, and the budget allows one extra call per PR | Write an ADR; one plan call gated by OCR's 50/100-line thresholds; inject as advisory text in round 1 only; strip on round 2+ because a plan can become a coverage ceiling; fall back to no plan on failure | ➜ waiting on S3 |
-| D2 | Audit resume implementation | S4 T0–T2 show real demand and an agreed identity/state protocol | Separate ADR and implementation PR; reuse completed units only under exact identity; never mix models or prompt versions | ➜ waiting on S4 |
+| D2 | Audit resume implementation | S4 T0–T2 show real demand and an agreed identity/state protocol | Separate ADR and implementation PR; reuse completed units only under exact identity; never mix models or prompt versions | ✗ not triggered — S4 found one interruption (2026-09-30, a pre-#38 run whose ledger was never written, most likely terminal-bound) and no request; the protocol is written ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)) |
 | D3 | `record_candidate` field reorder | S1 shows a real, replicated effect and a second experiment is affordable | Separate ADR; move category/severity after anchors/evidence; measure on M1, not M0 | ➜ waiting on S1 |
 | D4 | Reflection filter as a pre-verifier funnel | New cost data shows the filter is much cheaper per candidate than the verifier and the removal surface remains small | Do not reopen on the current M0 percentages alone; if reopened, measure filter cost and verifier cost per candidate, not percentages | ✗ not triggered |
 | D5 | Semantic grouping / large-PR slicing | A protocol-compliant full-corpus or 50-PR run shows a large-PR-specific coverage/cost failure that the attention prompt does not fix | ADR 0011's conditions still apply; grouping must fail back to per-file and never gate correctness | ✗ rejected (ADR 0011) |
@@ -441,6 +473,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-23 | S2 | Shipped: opt-in `--background` / `--background-file` for `find` (ADR 0016), reviewer prompt only, delimited and labelled, hash-only provenance in `run.json`; A1–A3 done, T4 dogfood partial (this PR, with and without a background) | Iteration 3, first item; the locked M1 baseline is untouched |
 | 2026-10-23 | S3 | Shipped: bounded per-file attention prompt `CHANGED FILES` + accounting request (ADR 0017); prompt-only, zero extra calls, byte-identical when the change set is empty; A1/A2 done, A3 not measured, item parked ⏸ | Iteration 3, second item; no M1 round was run, so no recall claim is made |
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
+| 2026-10-23 | S4 | Iteration 4 closed as discovery only: the record holds one interrupted ~6.5-hour audit (a pre-#38 run with no ledger, most likely killed with its terminal) and no request for resume; identity/state protocol and cost estimate written, **no-go** for implementation ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)); D2 not triggered | The series' rule is measured gaps, not parity: the one loss on record predates the ledger a resume needs, and local durability is the cheaper remedy for its cause |
 
 ---
 
