@@ -26,6 +26,15 @@ test("JobRegistry: queued -> running -> completed carries the result for pickup"
   assert.equal(done.finishedAt !== null, true);
 });
 
+test("JobRegistry redacts an inline user background in the stored argv (dogfood F-2)", () => {
+  const registry = new JobRegistry();
+  // GET /v1/jobs and `pir jobs` print this argv: the text is model input, not
+  // job metadata.
+  const job = registry.create({ command: "find", argv: ["find", "--background", "PRIVATE-GOAL", "--json"] });
+  assert.deepEqual(registry.get(job.jobId).argv, ["find", "--background", "<background redacted>", "--json"]);
+  assert.deepEqual(registry.list()[0].argv, ["find", "--background", "<background redacted>", "--json"]);
+});
+
 test("JobRegistry: failed jobs keep their error and still settle", () => {
   const registry = new JobRegistry();
   const job = registry.create({ command: "find", argv: ["find"] });

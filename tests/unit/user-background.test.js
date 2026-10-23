@@ -6,8 +6,10 @@ import path from "node:path";
 import {
   USER_BACKGROUND_HARD_LIMIT,
   USER_BACKGROUND_MAX_FILE_BYTES,
+  USER_BACKGROUND_REDACTED,
   USER_BACKGROUND_SOFT_LIMIT,
   UserBackgroundError,
+  redactUserBackgroundArgv,
   resolveUserBackground,
   sanitizeUserBackground,
   userBackgroundRecord,
@@ -100,6 +102,23 @@ test("a file supplies the background, wins over inline text, and resolves relati
     assert.equal(resolved.text, "Goal: add SSO.\n\nThe legacy path stays.");
     assert.match(warnings[0], /using --background-file/);
   });
+});
+
+test("bookkeeping surfaces keep the flag and redact the text (dogfood F-2)", () => {
+  assert.deepEqual(
+    redactUserBackgroundArgv(["find", "--background", "secret goal", "--json"]),
+    ["find", "--background", USER_BACKGROUND_REDACTED, "--json"],
+  );
+  assert.deepEqual(
+    redactUserBackgroundArgv(["find", "--background=secret goal"]),
+    ["find", "--background=" + USER_BACKGROUND_REDACTED],
+  );
+  // A dangling flag is still redacted rather than passed through.
+  assert.deepEqual(redactUserBackgroundArgv(["find", "--background"]), ["find", "--background", USER_BACKGROUND_REDACTED]);
+  // Everything else is untouched — including the file flag, whose value is a
+  // path, and the text of other flags.
+  assert.deepEqual(redactUserBackgroundArgv(["audit", "--json"]), ["audit", "--json"]);
+  assert.deepEqual(redactUserBackgroundArgv(["--background-file", "x.md"]), ["--background-file", "x.md"]);
 });
 
 test("file guards: missing, directory, oversized, and empty values", () => {

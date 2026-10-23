@@ -12,6 +12,7 @@ import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVer
 import { createWebUi, defaultWebRoot } from "./web.js";
 import { LiveRegistry } from "./live-registry.js";
 import { JobRegistry } from "./jobs.js";
+import { redactUserBackgroundArgv } from "../core/user-background.js";
 import { pirStateBase } from "./web-store.js";
 import { isGitRepo } from "../changes/git.js";
 
@@ -328,6 +329,10 @@ export async function startServer(input: {
       if (cleanedArgv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
         throw new Error("--background-file names a client-side file and is not accepted on /v1/review; pass the text inline with --background, or run with --local");
       }
+      // ADR-0016 (dogfood F-3): this argv is echoed into the serve log and the
+      // job record. An inline user background is model input, so every echo
+      // uses the redacted form — the executor itself still gets the real argv.
+      const redactedArgvLabel = redactUserBackgroundArgv(cleanedArgv).join(" ");
       const meta = {
         remoteUrl: parsed.remoteUrl ?? null,
         rootCommit: parsed.rootCommit,
@@ -353,7 +358,7 @@ export async function startServer(input: {
           };
           const logRead = (message: string): void => {
             logLines.push(message);
-            log(`${cleanedArgv.join(" ")} :: ${message}`);
+            log(`${redactedArgvLabel} :: ${message}`);
           };
           const result = await fastLane.run(() =>
             executePirCommand(["--cwd", input.workspace, ...cleanedArgv], {
@@ -412,7 +417,7 @@ export async function startServer(input: {
               onLog: (message) => {
                 logLines.push(message);
                 job.progress(message);
-                log(`${cleanedArgv.join(" ")} :: ${message}`);
+                log(`${redactedArgvLabel} :: ${message}`);
               },
             });
             return { needFull: false, code: result.code, output: result.output };
@@ -424,7 +429,7 @@ export async function startServer(input: {
       if (parsed.async) {
         res.writeHead(202, { "content-type": "application/json" });
         res.end(JSON.stringify({ jobId: job.jobId, status: "queued" }));
-        log(`review job ${job.jobId} accepted (async): ${cleanedArgv.join(" ")}`);
+        log(`review job ${job.jobId} accepted (async): ${redactedArgvLabel}`);
         void runQueued().then(
           (outcome) => {
             if (outcome.needFull) {
@@ -680,7 +685,7 @@ export async function startServer(input: {
         ...(lane === "readonly" ? { readOnlyMemory: true } : {}),
         onLog: (message: string) => {
           logLines.push(message);
-          log(`${argv!.join(" ")} :: ${message}`);
+          log(`${redactUserBackgroundArgv(argv!).join(" ")} :: ${message}`);
         },
       };
       // Only the queued lane joins the serial chain; the other two run
@@ -701,7 +706,9 @@ export async function startServer(input: {
       }
       // Failures log their argv too — the request is otherwise unrecoverable
       // from the server log alone (body already consumed).
-      log(`error: ${argv ? `${argv.join(" ")} :: ` : ""}${message}`);
+      // ADR-0016 (dogfood F-2): the background text is model input, not log
+      // material — keep the flag visible, redact its value.
+      log(`error: ${argv ? `${redactUserBackgroundArgv(argv).join(" ")} :: ` : ""}${message}`);
       res.writeHead(400, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: message }));
     }

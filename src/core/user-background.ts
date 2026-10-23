@@ -134,6 +134,33 @@ export function resolveUserBackground(input: UserBackgroundInput): UserBackgroun
   };
 }
 
+/** What bookkeeping surfaces show instead of the text (ADR-0016). */
+export const USER_BACKGROUND_REDACTED = "<background redacted>";
+
+/**
+ * S2 (ADR-0016, dogfood F-2): the background reaches the model, but it must not
+ * reach any bookkeeping surface. Server error logs, the job registry and local
+ * receipts echo argv, so they pass it through here first: the flag stays
+ * visible (an operator can see it was used) and its value never does.
+ */
+export function redactUserBackgroundArgv(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i += 1) {
+    const token = argv[i]!;
+    if (token === "--background") {
+      out.push(token, USER_BACKGROUND_REDACTED);
+      i += 1; // skip the value, whatever it is
+      continue;
+    }
+    if (token.startsWith("--background=")) {
+      out.push("--background=" + USER_BACKGROUND_REDACTED);
+      continue;
+    }
+    out.push(token);
+  }
+  return out;
+}
+
 /** The persisted projection: hash and sizes only, never the text (ADR-0016). */
 export function userBackgroundRecord(background: UserBackground): UserBackgroundRecord {
   return {
