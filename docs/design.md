@@ -407,10 +407,14 @@ with an explicit evidence-not-instructions preamble. Groups are sorted by
 glob and file lists are sorted, so the section is byte-stable. A canonical
 hash of the effective rules (canonicalized text, globs, include/exclude and
 `mergeBuiltin`; never absolute paths) is recorded in `run.json` under
-`projectRules`, and `pir config show` prints the loaded layers and rules. Rules
-are allowed in change-mode `find` only: audit has no diff to scope them, and
-`--rule` is a local path, so remote mode rejects it while the repository and
-global layers keep working from the bundle.
+`projectRules`, and `pir config show` prints the loaded layers and rules.
+`pir rules check <path>` answers the per-path question — winning layer and
+glob, `mergeBuiltin`, canonical guidance and rules hash, or the gate that
+stopped each layer — from the same matcher the prompt uses
+(`matchProjectRule`); it opens no project database and starts no session
+(ADR 0019). Rules are allowed in change-mode `find` only: audit has no diff to
+scope them, and `--rule` is a local path, so remote mode rejects it while the
+repository and global layers keep working from the bundle.
 
 ## Related decisions
 
