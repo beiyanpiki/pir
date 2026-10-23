@@ -1,5 +1,5 @@
 /**
- * OCR comment-reflection prompt — M0 comparison arm (roadmap T6).
+ * OCR comment-reflection prompt — the AACR-Bench M0 comparison arm.
  *
  * Evaluation apparatus, NOT product prompt text. Ported from
  * alibaba/open-code-review @ 8eb83340a487b1150af00701b94f01af97e4b4d6 (Apache-2.0):

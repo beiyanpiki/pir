@@ -1,5 +1,5 @@
 /**
- * Layered project rule files (roadmap B5, ADR-0010).
+ * Layered project rule files (ADR-0010).
  *
  * A rule file pairs a path glob with review guidance. Three layers are
  * loaded independently — `--rule` > repo `<root>/.pir/rule.json` > global

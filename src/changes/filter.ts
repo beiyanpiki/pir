@@ -1,5 +1,5 @@
 /**
- * Shared file-filter policy (roadmap B1).
+ * Shared file-filter policy (ADR 0004).
  *
  * Audit and change mode must not drift on what counts as reviewable input, so
  * the policy tables and the classifiers live here and both modes consume them:
@@ -290,7 +290,7 @@ type FilterableFile = Pick<FileDiff, "path" | "oldPath" | "hunks">;
 
 /**
  * The single pure decision function of the change-mode gate. Evaluation order
- * (roadmap B1/T2): binary -> secret paths -> include scope -> skip patterns ->
+ * (ADR 0004): binary -> secret paths -> include scope -> skip patterns ->
  * oversized single-file diff. Include bypasses the last two gates only;
  * binary and secret are non-overridable.
  */

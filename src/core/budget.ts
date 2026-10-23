@@ -8,7 +8,7 @@ import type { SessionUsage } from "../agents/types.js";
  * silently cap a multi-day sweep.
  *
  * Tightening either constant requires checking the M1 per-PR token
- * distribution first (roadmap B3 / A2) and recording the result as an
+ * distribution first (ADR 0006) and recording the result as an
  * ADR 0006 amendment here — not a drive-by edit.
  */
 export const DEFAULT_FIND_REVIEWER_INPUT_TOKENS = 1_200_000;

@@ -30,7 +30,7 @@ export type IssueDraft = Omit<IssueMemory, "id" | "anchorPaths"> & { anchorPaths
 
 /**
  * Decisions that count as a historical dismissal for cross-entity signal
- * (roadmap M1) — the same list as applyVerdict's suppressive decisions;
+ * (ADR 0003) — the same list as applyVerdict's suppressive decisions;
  * "confirmed" is not a dismissal. Kept local to avoid a runtime cycle with
  * core/review-state.
  */
@@ -182,7 +182,7 @@ export class IssueMemoriesRepo {
   }
 
   /**
-   * Cross-entity dismissal signal (roadmap M1, observational): past findings
+   * Cross-entity dismissal signal (ADR 0003, observational): past findings
    * that were dismissed AND resemble this candidate by shared anchor path or
    * claim overlap. Unlike the scope-channels in matchIssueHistory, this is a
    * straight table scan over the whole project's issues (bounded size; index
