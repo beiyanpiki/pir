@@ -3,6 +3,7 @@ import process from "node:process";
 import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
+import { settleLocalReceipt } from "./receipts.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
@@ -19,6 +20,16 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // ADR 0022: a detached local run is this same CLI with PIR_LOCAL_JOB_ID set.
+  // Its exit hook is what makes the receipt durable: it records when the child
+  // ended and with which code. A signal death runs no exit hook, so a killed
+  // detach legitimately stays unsettled — that is how it is told apart from a
+  // running one. A missing receipt makes settlement a no-op.
+  const localJobId = process.env.PIR_LOCAL_JOB_ID;
+  if (localJobId) {
+    process.on("exit", (code) => settleLocalReceipt(localJobId, code));
+  }
+
   // --help is answered locally before anything else (#43): no config load,
   // no wizard, no transport resolution, no git, no network — so help works
   // offline, outside a repository, with a read-only .git and with a missing
@@ -147,6 +158,26 @@ async function main(argv: string[]): Promise<number> {
     return remoteExec(transport.url, argv, {
       token: transport.token,
       insecure: transport.insecure,
+    });
+  }
+
+  // ADR 0022: local --detach re-executes this CLI as a detached background
+  // process with a log and a receipt, then returns once the child is accepted.
+  // Handled AFTER the remote-forward branch so remote detach keeps its
+  // semantics, and the executor's server-lane rejections stay untouched. The
+  // child (PIR_LOCAL_JOB_ID) never re-detaches; anything that is not a
+  // find/audit run has nothing to detach and is a usage error.
+  if (argv.includes("--detach") && !process.env.PIR_LOCAL_JOB_ID) {
+    if (command !== "find" && command !== "audit") {
+      throw new UsageError("--detach applies to `pir find` / `pir audit`; this command has no run to detach");
+    }
+    const { localDetach } = await import("./detach.js");
+    return await localDetach({
+      argv,
+      cwd: process.cwd(),
+      env: process.env,
+      emit: (text) => process.stdout.write(text),
+      log: (message) => process.stderr.write(`${message}\n`),
     });
   }
 

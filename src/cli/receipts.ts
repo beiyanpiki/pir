@@ -25,13 +25,22 @@ export interface Receipt {
   projectId: string | null;
   base: string | null;
   head: string;
-  mode: "async";
+  /**
+   * "async" is a submission a server accepted (the historical value);
+   * "local" is a detached local run (ADR 0022). A file with no mode at all
+   * predates local detach and reads as a remote submission.
+   */
+  mode: "async" | "local";
   submittedAt: string;
   /** argv as sent (transport flags stripped, credential-looking tokens dropped). */
   argv: string[];
   /** Set from the job's result envelope once the run id is authoritative. */
   runId: string | null;
   settledAt?: string | null;
+  /** Local detach only: where the detached child writes its stdout/stderr. */
+  logPath?: string;
+  /** Local detach only: the child's final exit code, once it settled. */
+  exitCode?: number | null;
 }
 
 export function receiptsDir(): string {
@@ -64,6 +73,11 @@ function sanitizeReceiptArgv(argv: string[]): string[] {
   // input, not receipt metadata, so its value is redacted too (ADR-0016,
   // dogfood F-2).
   return redactUserBackgroundArgv(out);
+}
+
+/** POSIX-shell single-quoting for a path printed into a follow-up command. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Atomic, owner-only write: tmp file (0600) + rename. */
@@ -112,6 +126,69 @@ export function writeSubmissionReceipt(input: {
     return file;
   } catch {
     return null;
+  }
+}
+
+export interface LocalReceiptInput {
+  /** "find" or "audit". */
+  kind: string;
+  jobId: string;
+  head: string;
+  /** argv as the detached child will run it (credential-free). */
+  argv: string[];
+  logPath: string;
+}
+
+/**
+ * A local detach's receipt (ADR 0022): no server, no project identity and no
+ * run id — origin is "local" and the durable facts are the log path and, once
+ * the child's exit hook runs, the final exit code. Built before the spawn so
+ * the record exists even if the child never starts.
+ */
+export function buildLocalReceipt(input: LocalReceiptInput): Receipt {
+  return {
+    schemaVersion: 1,
+    kind: input.kind,
+    origin: "local",
+    jobId: input.jobId,
+    projectId: null,
+    base: null,
+    head: input.head,
+    mode: "local",
+    submittedAt: new Date().toISOString(),
+    argv: sanitizeReceiptArgv(input.argv),
+    runId: null,
+    logPath: input.logPath,
+    exitCode: null,
+  };
+}
+
+/** Persist a local receipt; null (best effort) when the write fails. */
+export function writeLocalReceipt(receipt: Receipt): string | null {
+  try {
+    const file = path.join(receiptsDir(), receiptFileName(receipt.jobId, new Date(receipt.submittedAt)));
+    writeReceiptFile(file, receipt);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Settle a detached local run from the child's exit hook: record when it
+ * ended and with which code. A missing receipt is a no-op (the parent may
+ * have failed to write one, and a signal death runs no exit hook at all, so
+ * an unsettled receipt is the honest state of a killed detach).
+ */
+export function settleLocalReceipt(jobId: string, exitCode: number | null): void {
+  try {
+    for (const { file, receipt } of findReceipts(jobId)) {
+      if (receipt.mode !== "local") continue;
+      writeReceiptFile(file, { ...receipt, settledAt: new Date().toISOString(), exitCode });
+    }
+  } catch {
+    // The run's own result is already in the log and the project database;
+    // losing the settlement update is not fatal to the review.
   }
 }
 
@@ -196,6 +273,18 @@ export function updateReceiptFromResult(jobId: string, resultOutput: string): vo
  */
 export function receiptRecoveryCommands(receipt: Receipt): string[] {
   const id8 = receipt.jobId.slice(0, 8);
+  // A detached local run has no server and no job registry: everything about
+  // it is local (ADR 0022). Two concurrent detaches are told apart by these
+  // receipts and logs, never by `audit coverage --latest`.
+  if (receipt.mode === "local") {
+    const local = [
+      ...(receipt.logPath ? [`tail -f ${shellQuote(receipt.logPath)}    # the detached run's log`] : []),
+      `pir receipts show ${id8}    # the child's exit code, once it settled`,
+      ...(receipt.kind === "audit" ? ["pir audit coverage --latest    # that run's status (a local detach records no run id)"] : []),
+      "pir findings list    # what the run has written so far",
+    ];
+    return local;
+  }
   const commands = [
     `pir jobs wait ${id8} --server ${receipt.origin}    # follow it again`,
     `pir jobs fetch ${id8} --server ${receipt.origin}   # relay a finished result`,

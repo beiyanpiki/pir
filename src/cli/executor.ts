@@ -170,8 +170,12 @@ Usage:
                       diff. Excluded files stay visible as metadata; their
                       diff bodies never reach a model. No run, no model, no
                       writes; run-shaping flags are rejected
-  --detach            remote only: submit as an async job and return
-                      immediately (#53; see Remote mode)`,
+  --detach            return once the run is accepted instead of waiting
+                      (#53, ADR 0022): locally the review is re-executed as a
+                      detached background process with a 0600 log at
+                      ~/.pir/logs/<jobId>.log and a receipt; remotely it is
+                      an async job (see Remote mode). Exit 0 means accepted,
+                      never that the review ran or passed`,
 
   audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
@@ -209,8 +213,12 @@ Usage:
                       classification counts, planned units — no run, no
                       model, no writes. --list-files adds per-file
                       selection/classification/reason
-  --detach            remote only: submit as an async job and return
-                      immediately (#53; see Remote mode)
+  --detach            return once the run is accepted instead of waiting
+                      (#53, ADR 0022): locally the review is re-executed as a
+                      detached background process with a 0600 log at
+                      ~/.pir/logs/<jobId>.log and a receipt; remotely it is
+                      an async job (see Remote mode). Exit 0 means accepted,
+                      never that the review ran or passed
   coverage            post-run readout of one recorded audit run (#56):
                       per-file coverage ledger from the local project db.
                       Exactly one of --run <run-id> | --latest
@@ -329,12 +337,15 @@ Usage:
                       overall deadline by design (#54)
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
-  --detach            submit find/audit as an async job and exit 0 without
-                      waiting (#53): implies async, writes the #52 receipt,
-                      prints the submission envelope (full jobId, origin,
-                      project, head/base, follow-up commands) on stdout.
-                      Exit 0 means accepted, not reviewed. Local mode
-                      rejects the flag
+  --detach            submit find/audit and return after acceptance, never
+                      after the review (#53, ADR 0022). Exit 0 means
+                      accepted, not reviewed. Remote — an async job, and
+                      stdout carries the submission envelope (full jobId,
+                      origin, project, head/base, follow-up commands); the
+                      #52 receipt is the durable record. Local — the run
+                      continues as a detached background process with its
+                      log at ~/.pir/logs/<jobId>.log and a receipt that
+                      carries the child's final exit code
 
   Review bundles are packed in a throwaway temporary bare repository that
   reads the checkout's object store (#46): the source repo's refs, index,
@@ -1194,8 +1205,10 @@ async function cmdFind(
   log: Log,
 ): Promise<number> {
   const format = resolveOutputFormat(flags);
-  // --detach is a remote-submission flag (#53): local execution cannot honor
-  // it, and a server receiving it unstripped (old client) must not ignore it.
+  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // before the executor runs, and the remote client strips the flag before
+  // forwarding. This guard's remaining job is the server lane — a server
+  // receiving an unstripped --detach (old client) must fail, never ignore it.
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
   }
@@ -1375,8 +1388,10 @@ async function cmdAudit(
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
-  // --detach is remote-only (#53): a local run cannot detach, and a server
-  // receiving the flag unstripped (old client) must fail instead of ignoring.
+  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // before the executor runs, and the remote client strips the flag before
+  // forwarding. A server receiving it unstripped (old client) must fail
+  // instead of ignoring it.
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
   }

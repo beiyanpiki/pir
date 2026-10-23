@@ -159,6 +159,8 @@ are also stored as the run progresses, so stored findings and coverage can be
 examined before a long audit ends. There is no automatic restart/resume of an
 interrupted audit.
 
+A long local audit can outlive its terminal with `pir audit --detach` (ADR 0022): the run continues as a detached background process, its log is `~/.pir/logs/<jobId>.log`, and its receipt records the final exit code once it settles. That is durability, not resume — a killed detach is not restarted or continued (ADR 0018's no-go stands), and an unsettled receipt whose log stopped growing is how a killed detach is told apart from a running one; there is no watchdog. Two concurrent detaches are distinguished by their receipts and logs, not by `pir audit coverage --latest`.
+
 Coverage records the work that was completed:
 
 | File state | Meaning |

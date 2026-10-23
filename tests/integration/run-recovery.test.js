@@ -790,7 +790,7 @@ test("--detach (#53): submit, print the envelope, never poll", async (t) => {
   assert.match(text.stdout, /pir jobs wait/);
 });
 
-test("--detach (#53): rejected for non-review commands and in local mode", async (t) => {
+test("--detach (#53): rejected for non-review commands", async (t) => {
   const { base, seen } = await withJobStub(t);
   const { cwd, env } = scratchEnv(t);
   // models forwards through /v1/exec — detach has nothing to detach there.
@@ -800,18 +800,8 @@ test("--detach (#53): rejected for non-review commands and in local mode", async
   );
   assert.equal(wrongCommand.code, 2);
   assert.match(wrongCommand.stderr, /--detach applies to/);
-  // Local execution cannot detach either (executor-side validation, #53).
-  const repo = mkdtempSync(path.join(tmpdir(), "pir-detach-local-"));
-  t.after(() => rmSync(repo, { recursive: true, force: true }));
-  execFileSync("git", ["init", "--quiet"], { cwd: repo });
-  writeFileSync(path.join(repo, "a.txt"), "hello\n");
-  execFileSync("git", ["add", "."], { cwd: repo });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--quiet", "-m", "one"], { cwd: repo });
-  const local = await pir(["find", "--detach", "--local", "--cwd", repo], { cwd, env }).then(
-    () => assert.fail("expected exit 2"),
-    (err) => err,
-  );
-  assert.equal(local.code, 2);
-  assert.match(local.stderr, /--detach submits to a remote server/);
   assert.equal(seen.length, 0, "validation failures never reach the network");
+  // Local mode is a supported detach lane since ADR 0022; its acceptance, its
+  // receipt settlement, its refusals and the executor's server-lane rejection
+  // are covered end to end in tests/integration/cli-detach-local.test.js.
 });

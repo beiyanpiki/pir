@@ -270,11 +270,9 @@ Every queued `/v1/review` request has a job. With `async: true`, the service
 responds with HTTP 202 and a job ID; clients poll `/v1/jobs/<id>` for the
 result. A synchronous client's disconnect also leaves the job running and its
 result available. Bundled remote audits use asynchronous submission by default.
-`--detach` makes any find/audit submission asynchronous and returns right
-after acceptance (#53): stdout carries a submission envelope with the full
-job id; exit 0 attests acceptance, never review success. Wait paths render a
-poll-liveness line on state changes and about once a minute (#55) —
-connection alive and log growth, explicitly not review progress.
+In remote mode, `--detach` makes any find/audit submission asynchronous and returns right after acceptance (#53): stdout carries a submission envelope with the full job id; exit 0 attests acceptance, never review success. Wait paths render a poll-liveness line on state changes and about once a minute (#55) — connection alive and log growth, explicitly not review progress.
+
+In local mode the same flag keeps the run alive without a server (ADR 0022). The CLI re-executes itself with `detached: true` and `stdio: ["ignore", logFd, logFd]` bound to `~/.pir/logs/<jobId>.log` (0600, directory 0700), writes a schemaVersion-1 receipt before the spawn, and the child settles that receipt from its exit hook (`settledAt`, `exitCode`). A signal death runs no exit hook, so an unsettled receipt plus a log that stopped growing is exactly how a killed detach is identified; there is no watchdog and nothing resumes it. The local receipt reuses the #52 layer instead of introducing a second record: `mode: "local"` carries `logPath`, no origin and no run id, and `pir receipts show` prints local follow-up commands instead of the remote jobs lane.
 
 Jobs are process-local delivery records. They keep 2,000 recent log lines,
 cap retained output at 32 MiB, and retain the latest 100 settled jobs. A restart
