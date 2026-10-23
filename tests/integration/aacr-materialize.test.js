@@ -14,8 +14,8 @@ import {
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
 import {
-  assertResumeCompatible, buildDigest, ensureFetchedAsync, materializeTask, materializeTaskAsync,
-  parseOptions as runOptions, releaseTask, releaseTaskAsync, scoreRow, sha256,
+  assertResumeCompatible, buildDigest, ensureFetchedAsync, isReusableRow, materializeTask, materializeTaskAsync,
+  parseOptions as runOptions, readPreviousRound, releaseTask, releaseTaskAsync, reusableForTask, scoreRow, sha256, summarizeArm,
 } from "../eval/aacr/run-m0.js";
 
 function temporary(fn) {
@@ -63,6 +63,35 @@ test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
   assert.throws(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "b".repeat(64) }), /refuses to mix CLI builds/);
   // A previous summary without provenance (older format) is not a mismatch.
   assert.doesNotThrow(() => assertResumeCompatible({}, { model: "m-b", cliSha256: "b".repeat(64) }));
+});
+
+test("M0 dogfood F-182/F-189: a resume reuses only ok rows and keeps seen errors visible", () => {
+  temporary((root) => {
+    const roundDir = path.join(root, "round");
+    const verifierDir = path.join(roundDir, "verifier");
+    mkdirSync(verifierDir, { recursive: true });
+    writeFileSync(path.join(verifierDir, "c0001-aaaaaaaa.json"), JSON.stringify({ id: "c0001-aaaaaaaa", arm: "verifier", status: "ok" }));
+    writeFileSync(path.join(verifierDir, "c0002-bbbbbbbb.json"), JSON.stringify({ id: "c0002-bbbbbbbb", arm: "verifier", status: "error", error: "CLI exited 3" }));
+    writeFileSync(path.join(verifierDir, "c0003-cccccccc.json"), '{"id":"c0003-cccccccc"');
+    const scanned = readPreviousRound(roundDir, ["verifier", "ocr"]);
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0001-aaaaaaaa")), true);
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0002-bbbbbbbb")), false, "an error row is retried, never reused");
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0003-cccccccc")), false, "an unreadable row is retried");
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c9999-missing")), false);
+    assert.equal(isReusableRow(null), false);
+    assert.deepEqual(scanned.errors, { verifier: 1, ocr: 0 });
+    // The driver's per-task fast path and its per-arm reuse decision share the guard.
+    assert.equal(reusableForTask(scanned.rows, ["verifier"], "c0001-aaaaaaaa"), true);
+    assert.equal(reusableForTask(scanned.rows, ["verifier"], "c0002-bbbbbbbb"), false);
+    assert.equal(reusableForTask(scanned.rows, ["verifier", "ocr"], "c0001-aaaaaaaa"), false, "every arm row must be reusable");
+    // A retried row may finish ok, but the error seen on disk stays counted.
+    assert.deepEqual(
+      summarizeArm([{ arm: "verifier", status: "reused" }, { arm: "verifier", status: "ok" }], scanned.errors.verifier),
+      { rows: 2, ok: 1, errors: 1, reused: 1 },
+    );
+    // A fresh (non-resumed) run keeps its existing counts exactly.
+    assert.deepEqual(summarizeArm([{ arm: "verifier", status: "ok" }], 0), { rows: 1, ok: 1, errors: 0, reused: 0 });
+  });
 });
 
 test("B4: buildDigest distinguishes builds that share the CLI entry file", () => {
