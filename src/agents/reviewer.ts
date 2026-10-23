@@ -3,6 +3,7 @@ import { READONLY_BUILTIN_TOOLS } from "./types.js";
 import { auditReviewerPrompt, reviewerPrompt, type AngleDef, type UserBackgroundContext } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
+import { changedFileSummary } from "../changes/change-set.js";
 import type { ReviewWorkUnit } from "../core/audit-planner.js";
 import type { ToolContext } from "../tools/context.js";
 import type { SessionEventEmitter } from "../observability/run-events.js";
@@ -227,6 +228,9 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           languageGuidance: deps.languageGuidance,
           projectRules: deps.projectRules,
           ...(deps.userBackground ? { userBackground: deps.userBackground } : {}),
+          // S3 (ADR-0017): the same change-set projection the envelope and the
+          // manifest carry — the reviewer gets the map, not just the diff.
+          ...(sessionCtx.changeSet ? { changedFiles: sessionCtx.changeSet.files.map(changedFileSummary) } : {}),
         });
     deps.onSessionEvent?.sessionStarted(prompt);
     await session.prompt(prompt);
