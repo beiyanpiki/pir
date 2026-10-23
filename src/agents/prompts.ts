@@ -195,6 +195,61 @@ function userBackgroundLines(background?: UserBackgroundContext): string[] {
   ];
 }
 
+/**
+ * S3 (ADR-0017): one changed file as the reviewer prompt lists it. The
+ * shape is the change-set projection (B1): path, status, churn, and — for a
+ * file the change-mode filter withheld — the exclusion reason.
+ */
+export interface ChangedFileLine {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  excluded?: boolean;
+  excludedReason?: string;
+}
+
+/** S3: cap on rendered entries; the list says how many it left out. */
+export const CHANGED_FILES_LIMIT = 60;
+
+/**
+ * S3 (ADR-0017, dogfood F-2): a changed file is
+ * repository-controlled text. A path can carry control characters, line
+ * separators or invisible formatting, so an unsanitised path could end its
+ * bullet and add a line that reads like prompt text. One entry stays one line:
+ * those characters collapse to a space and the value is length-capped. Nothing
+ * else is rewritten — a visibly hostile name stays visible next to its churn.
+ */
+const PROMPT_FIELD_UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]+/g;
+
+function promptSafeField(value: string, max = 300): string {
+  // Only the unsafe run is rewritten. Ordinary spaces are legal in a path and
+  // are left exactly as they are, so the reviewer can open what is listed.
+  const flat = value.replace(PROMPT_FIELD_UNSAFE, " ");
+  if (flat.trim() === "") return "<path unavailable>";
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+/**
+ * S3 (ADR-0017): the bounded changed-file map plus the per-file accounting
+ * request. OCR requires a pass per reviewed file; pir asks for the same
+ * coverage without making it a hard error — a stated skip reason is a valid
+ * pass, and nothing in the loop enforces reads.
+ */
+function changedFileLines(files?: readonly ChangedFileLine[]): string[] {
+  if (!files || files.length === 0) return [];
+  const shown = files.slice(0, CHANGED_FILES_LIMIT);
+  return [
+    `CHANGED FILES (all ${files.length} file${files.length === 1 ? "" : "s"} in this change; path, status, churn)`,
+    ...shown.map((file) => {
+      const reason = file.excluded ? ` — excluded: ${promptSafeField(file.excludedReason ?? "filtered out of diff review")}` : "";
+      return `- ${promptSafeField(file.path)} (${promptSafeField(file.status, 40)}, +${file.additions}/-${file.deletions})${reason}`;
+    }),
+    ...(files.length > CHANGED_FILES_LIMIT ? [`... ${files.length - CHANGED_FILES_LIMIT} more changed files not listed`] : []),
+    "ACCOUNT FOR EVERY CHANGED FILE: before finish_round, each file above is either investigated or explicitly skipped with a stated reason in coverage (for example \"skipped src/gen.ts: generated\"). coverage holds at most 40 entries, so when this list is longer, group related files into one entry instead of dropping any file. A stated skip is honest; an unread file silently omitted is not. This is not a hard error — reading every file is not required, accounting for them is.",
+  ];
+}
+
 export function reviewerPrompt(input: {
   base: string; head: string; mergeBase?: string;
   round: number; maxRounds: number; maxFindings: number | null; findingsRemaining: number | null;
@@ -213,11 +268,17 @@ export function reviewerPrompt(input: {
   projectRules?: string;
   /** S2 (ADR-0016): sanitised user background; absent by default. */
   userBackground?: UserBackgroundContext;
+  /**
+   * S3 (ADR-0017): the reviewed change's files as the reviewer prompt lists
+   * them. Absent/empty leaves the prompt byte-identical to the pre-S3 one.
+   */
+  changedFiles?: readonly ChangedFileLine[];
 }): string {
   const lines = [
     "You are the REVIEWER. Find actionable problems INTRODUCED or unmasked by this change, not pre-existing debt.",
     `Change: ${input.base}..${input.head}; merge-base (actual old side): ${input.mergeBase ?? input.base}. Review round ${input.round} of at most ${input.maxRounds}.`,
     ...(input.angle ? angleLines(input.angle) : []),
+    ...changedFileLines(input.changedFiles),
     "PROCESS",
     "Start with get_change, then investigate highest-risk changed behavior first. Trace the minimal causal slice: changed logic, reachable trigger, affected caller/callee or invariant, and concrete impact. Expand only to resolve a specific uncertainty; do not exhaustively read the repository or every document.",
     "Use read_code at head and merge-base (base only when needed), search_text and relevant find_* queries to prove change attribution. Actively seek counter-evidence: guards, callers, tests, contracts or alternate paths that would disprove the claim.",

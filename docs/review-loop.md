@@ -38,6 +38,16 @@ provenance and pagination information.
 For deleted or renamed files, old-side reads use the explicit old path. Audit
 reviewers use `list_snapshot_files` to navigate the pinned tree.
 
+A change-mode reviewer also receives the change's file list up front — path,
+status, churn, and the change-mode filter's exclusion reason for a withheld
+file, capped at 60 entries with an explicit remainder line (ADR 0017). The list
+is the projection `data.run.files[]` records, so the prompt cannot disagree with
+the run record. The reviewer is asked to account for every listed file before
+`finish_round` — investigated, or explicitly skipped with a stated reason in
+`coverage` — and a stated skip is a valid pass: no read is enforced, and
+coverage that omits a file is visible to the operator rather than fatal to the
+run.
+
 Built-in filesystem reads and codegraph queries are navigation aids. They can
 reflect a different revision, so pinned reads are needed to support a claim
 about the target. A truncated page or a search with no matches cannot prove

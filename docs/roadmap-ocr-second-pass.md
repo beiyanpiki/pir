@@ -244,7 +244,7 @@ rejected in remote mode on both sides (CLI and the server's `/v1/review`/`/v1/ex
 
 ---
 
-### S3 · Lightweight per-file attention prompt · P3 · evidence: `data signal` · ADR: written at execution · Status: ☐
+### S3 · Lightweight per-file attention prompt · P3 · evidence: `data signal` · ADR: [0017](adr/0017-per-file-attention-prompt.md) · Status: ⏸ parked — shipped prompt-only; effect **not measured** (A3: no M1 round)
 
 **Why.** M1 recall is weak across sizes, not only for large PRs: `≥500` lines = 4 PRs / 6.9% recall;
 `50–199` lines = 20 PRs / 8.7% recall. OCR injects the changed-file list and requires a pass per
@@ -257,25 +257,39 @@ point (D1) and must not ride along. Do not force a read of every file; allow a s
 
 **Tasks**
 
-- [ ] **T0 Write the ADR.** Record the weak-signal caveat (4 PRs in the large bucket; maintainability-heavy
-      reference population) and the zero-extra-call constraint.
-- [ ] **T1 Changed-file block.** Inject a bounded `CHANGED FILES` section (path, status, churn, and
+- [x] **T0 Write the ADR.** Record the weak-signal caveat (4 PRs in the large bucket; maintainability-heavy
+      reference population) and the zero-extra-call constraint. ([ADR 0017](adr/0017-per-file-attention-prompt.md))
+- [x] **T1 Changed-file block.** Inject a bounded `CHANGED FILES` section (path, status, churn, and
       `excludedReason` for filtered files), capped at 60 entries with an explicit "… N more" line.
-- [ ] **T2 Attention language.** Ask the reviewer to account for every changed file before `finish_round` —
+- [x] **T2 Attention language.** Ask the reviewer to account for every changed file before `finish_round` —
       either a pass or a stated skip reason in `coverage`; do not make unread files a hard error.
-- [ ] **T3 Tests.** Prompt rendering, cap, excluded reasons, and byte-stable output when the change set is empty.
-- [ ] **T4 Dogfood first.** Inspect whether the model's `coverage` and finding distribution change. Only if the
+- [x] **T3 Tests.** Prompt rendering, cap, excluded reasons, and byte-stable output when the change set is empty.
+- [x] **T4 Dogfood first.** Inspect whether the model's `coverage` and finding distribution change. Only if the
       signal is real, run M1 on the full 50-PR subset; report the whole set and buckets, not only `≥500`.
+      **Dogfood done (2026-10-23):** this item's own PR ran with the section present and its reviewer `coverage`
+      and findings are recorded in the PR as observational notes. No clear recall signal emerged from one PR, so
+      the conditional M1 round was not started — the item is parked as not-measured rather than promoted.
 
 **Acceptance**
 
-- [ ] A1 Prompt tests.
-- [ ] A2 Dogfood notes.
+- [x] A1 Prompt tests.
+- [x] A2 Dogfood notes.
 - [ ] A3 If M1 is run: protocol-compliant comparison with the subset digest and both CLI shas; otherwise the item
-      is closed as "not measured" or ✗, not "done".
+      is closed as "not measured" or ✗, not "done". **Not measured:** no M1 round was run, so the item is parked
+      as **not measured** (per this criterion), not marked done.
 
 **Decision rule.** Do not treat a large-bucket-only improvement as success; the 50–199 bucket and Code Defect
 recall must be read.
+
+**Outcome (2026-10-23).** Shipped prompt-only ([ADR 0017](adr/0017-per-file-attention-prompt.md)): the change-mode
+reviewer prompt carries a bounded `CHANGED FILES` section (path, status, churn, exclusion reason for withheld
+files; 60 entries plus an explicit remainder line) and asks for per-file accounting in `coverage` without making
+unread files an error. Zero extra calls, no new state, no new manifest field, and a byte-identical prompt when the
+change set is empty. Three dogfood rounds on the rebased branch changed the implementation before merge: the
+accounting request now names `finish_round`'s 40-entry `coverage` cap (F-3), repository-controlled paths are
+flattened to one line and length-capped (F-2), and the flattener preserves legal path whitespace (F-4) — see
+ADR 0017 decisions 4 and 7. The M1 baseline is untouched; the item stays ⏸ until a protocol-compliant round
+measures it.
 
 ---
 
@@ -425,6 +439,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | S5 | Shipped: optional visibility-only duplicate hint in `record_candidate` (ADR 0014), shared `duplicateMatch` predicate, strict prior-round baseline; no dedup/reporting change | Iteration 1 contract clarity |
 | 2026-10-22 | S1 | [ADR 0015](adr/0015-tool-schema-field-order-diagnostic.md) accepted (diagnostic only); T0/T1 done — declared and captured wire order both assert `verdict, rationale, …`, and the repeat protocol is pre-registered | Diagnostic first: the reorder stays undecided until the Iteration 2 M0 comparison |
 | 2026-10-23 | S2 | Shipped: opt-in `--background` / `--background-file` for `find` (ADR 0016), reviewer prompt only, delimited and labelled, hash-only provenance in `run.json`; A1–A3 done, T4 dogfood partial (this PR, with and without a background) | Iteration 3, first item; the locked M1 baseline is untouched |
+| 2026-10-23 | S3 | Shipped: bounded per-file attention prompt `CHANGED FILES` + accounting request (ADR 0017); prompt-only, zero extra calls, byte-identical when the change set is empty; A1/A2 done, A3 not measured, item parked ⏸ | Iteration 3, second item; no M1 round was run, so no recall claim is made |
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
 
 ---

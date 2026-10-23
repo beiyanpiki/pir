@@ -68,6 +68,16 @@ untracked content, using a temporary index. The user's index and branches are
 preserved. For a review limited to uncommitted work, an explicit `--base HEAD`
 also makes the intended comparison consistent across local and remote runs.
 
+A change-mode reviewer also receives the change's file list before its first
+read (ADR 0017): path, status, churn, and the filter's exclusion reason for a
+withheld file, capped at 60 entries with an explicit remainder line. It is the
+same projection `data.run.files[]` records, so the prompt cannot disagree with
+the run. The prompt asks the reviewer to account for every listed file before
+`finish_round` — investigated, or explicitly skipped with a stated reason in
+`coverage` — and a stated skip is a valid pass: reads are never enforced, and
+a run whose coverage omits a file is visible to the operator, not marked
+failed.
+
 ### Audits
 
 `buildRepoSnapshot` inventories the committed tree with git, recording blob
