@@ -438,6 +438,13 @@ export interface ExecResult {
 export interface ExecOptions {
   /** Progress/log sink (CLI: stderr; server: server log; tests: capture). */
   onLog?: (message: string) => void;
+  /**
+   * Warning sink for messages a machine-mode invocation must never hide.
+   * The CLI wires this straight to stderr, so --json and --quiet cannot
+   * silence it (dogfood F-2); callers that only pass onLog keep the previous
+   * behaviour (progress channel), e.g. the server log.
+   */
+  onWarn?: (message: string) => void;
   /** Restrict --cwd to paths under this root (server mode guard). */
   cwdGuard?: string;
   /** Explicit sqlite location override (bundle/worktree server flows). */
@@ -636,6 +643,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   const out: string[] = [];
   const emit = (text: string) => out.push(text);
   const log = (message: string) => opts.onLog?.(message);
+  const warn = (message: string) => (opts.onWarn ?? opts.onLog)?.(message);
 
   // Help first (#43): no --repo materialization, no --uncommitted snapshot,
   // no context or db — a forwarded `pir findings list --help` must not make
@@ -743,7 +751,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = materialized.worktree;
     const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
     flags.set("--cwd", cwd);
-    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, materialized);
+    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
   }
 
   if (command === "version") {
@@ -763,7 +771,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, null, Boolean(opts.readOnlyMemory));
+  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
@@ -777,6 +785,7 @@ async function runInContext(
   out: string[],
   emit: Emit,
   log: Log,
+  warn: Log,
   materialized: import("../app/repos.js").MaterializedReview | null,
   readOnlyMemory = false,
 ): Promise<ExecResult> {
@@ -791,7 +800,7 @@ async function runInContext(
   try {
     switch (command) {
       case "find":
-        code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log);
+        code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log, warn);
         break;
       case "audit":
         code = await cmdAudit(ctx, positional.slice(1), flags, multi, json, emit, log);
@@ -1117,8 +1126,9 @@ export function anglesFlag(flags: Map<string, string | boolean>): string[] | und
 /**
  * S2 (ADR-0016): `--background` / `--background-file` → the prompt-ready
  * record. `--background-file` wins with a warning; every guard failure is a
- * usage error, so a run never starts half-set. Warnings go to the progress
- * channel (stderr): a truncation must never be silent, even under --json.
+ * usage error, so a run never starts half-set. Warnings go to the caller's
+ * warning sink, which the CLI wires straight to stderr: a truncation must
+ * never be silent, even under --json/--quiet (dogfood F-2).
  */
 export function userBackgroundFromFlags(
   flags: Map<string, string | boolean>,
@@ -1203,6 +1213,7 @@ async function cmdFind(
   json: boolean,
   emit: Emit,
   log: Log,
+  warn: Log,
 ): Promise<number> {
   const format = resolveOutputFormat(flags);
   // --detach is a client-side flag since ADR 0022: the local CLI detaches
@@ -1242,7 +1253,7 @@ async function cmdFind(
   // S2 (ADR-0016): resolve the background before any run row or session
   // exists. A missing/oversized file, empty text or a reserved delimiter is a
   // usage error (exit 2) — never a run that silently drops the context.
-  const background = userBackgroundFromFlags(flags, log);
+  const background = userBackgroundFromFlags(flags, warn);
   let result: Awaited<ReturnType<typeof runFind>>;
   try {
     result = await runFind(ctx, {

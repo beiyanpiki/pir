@@ -199,6 +199,10 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`${message}\n`);
       }
     },
+    // A warning about the run's inputs (a truncated background) must never be
+    // silent: it bypasses the progress gate above, so --json and --quiet
+    // cannot drop it while stdout stays machine-clean (dogfood F-2).
+    onWarn: (message) => process.stderr.write(`${message}\n`),
   });
   process.stdout.write(result.output);
   return result.code;
