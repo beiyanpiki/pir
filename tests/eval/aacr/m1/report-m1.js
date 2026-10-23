@@ -23,6 +23,7 @@
  *
  * Model-free: no network, no credentials, no model. Reading and rendering only.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,6 +152,37 @@ export function averageRounds(perRoundMaps, fields = ["precision", "recall", "ba
   return averaged;
 }
 
+/**
+ * Dogfood F-5: a round can run `--repeats N`, and every repeat produces its
+ * own judge entries. Selecting `.at(-1)` silently showed the last repeat while
+ * the health/cost tables aggregated every repeat. The repeat is now an explicit
+ * selection (default 1, `--repeat`) and the caller names it in Provenance.
+ */
+export function selectJudgeEntry(summary, view, repeat = 1) {
+  const entries = (summary?.judge ?? []).filter((entry) => entry.view === view && entry.ok !== false);
+  if (entries.length === 0) return null;
+  const chosen = entries.find((entry) => (entry.repeat ?? 1) === repeat);
+  if (chosen) return chosen;
+  const available = [...new Set(entries.map((entry) => entry.repeat ?? 1))].sort((a, b) => a - b);
+  throw new Error(`no successful judge entry for view ${view} repeat ${repeat} (available repeats: ${available.join(", ")})`);
+}
+
+/**
+ * Dogfood F-6: read the fixture the renderer will bucket by, but only after
+ * proving it is the bytes the round pinned in `summary.fixture.sha256`. A
+ * re-rendered round with a rebuilt fixture would otherwise print the recorded
+ * pin above tables bucketed by different metadata.
+ */
+export function readPinnedFixture(fixturePath, recordedSha256) {
+  if (!recordedSha256) throw new Error(`round summary records no fixture sha256; refusing to render ${fixturePath} unverified`);
+  const bytes = readFileSync(fixturePath);
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== recordedSha256) {
+    throw new Error(`fixture sha256 mismatch: round recorded ${recordedSha256}, ${fixturePath} is ${actual} (rebuild the fixture or pass the round's fixture)`);
+  }
+  return JSON.parse(bytes.toString("utf8"));
+}
+
 /** Locate the per-round metrics files behind one `summary.judge[]` entry. */
 export function loadJudgeMetrics(judgeEntry) {
   if (!judgeEntry?.metricsPath || !existsSync(judgeEntry.metricsPath)) {
@@ -207,7 +239,7 @@ function bulletList(items) {
  * Render the results document. `metricsByView` maps a view name to the result
  * of `loadJudgeMetrics`; `summary` is the driver round's summary.json.
  */
-export function renderM1Report({ summary, fixtureRows, metricsByView, meta, title, notes = [], allowPartial = false, renderedAt = new Date().toISOString() }) {
+export function renderM1Report({ summary, fixtureRows, metricsByView, meta, title, notes = [], allowPartial = false, repeat = 1, renderedAt = new Date().toISOString() }) {
   if (!allowPartial && !summary.finishedAt) {
     throw new Error("refusing to render a round without finishedAt (interrupted or still running); pass --allow-partial to publish it explicitly as partial");
   }
@@ -220,6 +252,7 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
   const judgeModel = judgeMode === "real"
     ? `${summary.limits?.judgeModel ?? "unrecorded"} (upstream judge model)`
     : judgeMode === "mock" ? "mock (pipeline check only — NOT a result)" : "off";
+  const repeats = summary.repeats ?? 1;
   const rows = summary.instances ?? [];
   const errorRows = rows.filter((row) => row.status === "error");
   const incompleteRows = rows.filter((row) => row.incomplete === true);
@@ -264,6 +297,7 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
     ["Selection", `${summary.population?.selected ?? rows.length} instances over ${summary.population?.repos ?? "?"} repositories` + (selectionFlags.length > 0 ? `, ${selectionFlags.map(code).join(", ")}` : "")],
     ["Run limits", `${code(`--max-rounds ${summary.limits?.maxRounds ?? "?"}`)}, ${code(`--max-tokens ${summary.limits?.maxTokens ?? "?"}`)}, ${code(`--max-findings ${summary.limits?.maxFindings ?? "?"}`)}, task timeout ${Math.round((summary.limits?.timeoutMs ?? 0) / 60000)} min`],
     ["Judge", `${judgeMode} (${judgeModel}), ${summary.limits?.evalRounds ?? 1} round(s) averaged per view`],
+    ["Repeats", repeats > 1 ? `${repeats} run(s); headline and bucket tables describe repeat ${repeat} of ${repeats}` : `${repeats}`],
     ["Judge framework pin", `${meta?.framework?.repo ?? "https://github.com/alibaba/aacr-bench"} @ ${code(summary.limits?.judgeFrameworkCommit ?? meta?.framework?.commit ?? "?")} (Apache-2.0)`],
     ["Started / finished", `${summary.startedAt ?? "?"} / ${summary.finishedAt ?? "not finished"}`],
     ["Citation", `${code(`arXiv:${arxiv}`)} — ${citation.replace(/\n/g, " ")}`],
@@ -297,19 +331,27 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
   lines.push(table(["View", "Evaluated", "Missing", "Reference", "Generated", "Matched refs", "Credited generated", "Precision", "Recall", "balanced_score"], headlineRows));
   lines.push("");
   lines.push(`> **${code("balanced_score")} is the external comparison caliber.** Missing instances stay out of the denominators: ${views.map((view) => `${code(view)} ${metricRow(metricsByView[view].average ?? {}).missing}`).join(", ")}.`);
+  if (repeats > 1) {
+    lines.push("");
+    lines.push(`> **Repeat selection (dogfood F-5).** This document's headline and bucket tables describe **repeat ${repeat} of ${repeats}**; the health and cost tables aggregate every repeat, so they are not a per-repeat value. Re-render another repeat with ${code(`--repeat <n>`)}.`);
+  }
   lines.push("");
 
   lines.push("## Buckets");
   lines.push("");
+  if (views.some((view) => (metricsByView[view].rounds?.length ?? 1) > 1)) {
+    lines.push("Matched counts are the mean of the per-round micro counts and rates are the mean of the per-round rates (identical population each judge round), so `matched/reference` recomputes the displayed mean rate (dogfood F-3).");
+    lines.push("");
+  }
   for (const view of views) {
     const metrics = metricsByView[view];
     const fixtureByIdLocal = fixtureById;
     const languageMaps = metrics.rounds.map((round) => bucketMetricsForRound(round.data.eval_res, fixtureByIdLocal, (row) => row.project_main_language ?? "unknown"));
     const sizeMaps = metrics.rounds.map((round) => bucketMetricsForRound(round.data.eval_res, fixtureByIdLocal, (row) => sizeBucketOf(row.change_line_count ?? 0)));
     const categoryMaps = metrics.rounds.map((round) => categoryMetricsForRound(round.data.eval_res, fixtureByIdLocal));
-    const languages = averageRounds(languageMaps, ["precision", "recall", "balanced"]);
-    const sizes = averageRounds(sizeMaps, ["precision", "recall", "balanced"]);
-    const categories = averageRounds(categoryMaps, ["recall"]);
+    const languages = averageRounds(languageMaps, ["precision", "recall", "balanced", "matchedRefs", "matchedGenerated"]);
+    const sizes = averageRounds(sizeMaps, ["precision", "recall", "balanced", "matchedRefs", "matchedGenerated"]);
+    const categories = averageRounds(categoryMaps, ["recall", "matchedRefs"]);
 
     lines.push(`### ${code(view)} — by language`);
     lines.push("");
@@ -394,8 +436,8 @@ export function renderM1Report({ summary, fixtureRows, metricsByView, meta, titl
   lines.push("");
   lines.push(`# 2. the reviewer round (${summary.population?.selected ?? rows.length} instances; costs model runs, never a CI gate)`);
   lines.push(`PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js --round ${summary.round} \\`);
-  lines.push(`  ${selectionFlags.length > 0 ? `${selectionFlags.join(" ")} ` : ""}--concurrency ${summary.limits?.concurrency ?? 8} --model ${summary.model} \\`);
-  lines.push(`  --view both --judge real --eval-rounds ${summary.limits?.evalRounds ?? 1}`);
+  lines.push(`  ${selectionFlags.length > 0 ? `${selectionFlags.join(" ")} ` : ""}--concurrency ${summary.limits?.concurrency ?? 8} --max-rounds ${summary.limits?.maxRounds ?? "?"} --timeout ${summary.limits?.timeoutMs ?? "?"} --model ${summary.model} \\`);
+  lines.push(`  --repeats ${repeats} --view both --judge real --eval-rounds ${summary.limits?.evalRounds ?? 1}`);
   lines.push("");
   lines.push(`# 3. this document`);
   lines.push(`node tests/eval/aacr/m1/report-m1.js --round tests/eval/aacr/out/${summary.round} --out tests/eval/aacr/results/M1-${summary.round}.md`);
@@ -415,9 +457,10 @@ export function parseOptions(argv = [], env = process.env) {
     title: env.PIR_AACR_TITLE,
     notes: [],
     allowPartial: false,
+    repeat: env.PIR_AACR_REPEAT === undefined || String(env.PIR_AACR_REPEAT).trim() === "" ? 1 : Number(env.PIR_AACR_REPEAT),
     help: false,
   };
-  const flags = { "--round": "round", "--fixture": "fixture", "--meta": "meta", "--out": "out", "--title": "title" };
+  const flags = { "--round": "round", "--fixture": "fixture", "--meta": "meta", "--out": "out", "--title": "title", "--repeat": "repeat" };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--allow-partial") { values.allowPartial = true; continue; }
     if (argv[i] === "--help") { values.help = true; continue; }
@@ -431,6 +474,8 @@ export function parseOptions(argv = [], env = process.env) {
     values[key] = argv[++i];
   }
   if (!values.round) throw new Error("--round is required (the driver round directory)");
+  if (typeof values.repeat === "string") values.repeat = Number(values.repeat);
+  if (!Number.isSafeInteger(values.repeat) || values.repeat < 1) throw new Error("repeat must be a positive integer");
   for (const key of ["fixture", "meta"]) values[key] = path.resolve(values[key]);
   return values;
 }
@@ -438,8 +483,8 @@ export function parseOptions(argv = [], env = process.env) {
 export function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
-    console.log("node tests/eval/aacr/m1/report-m1.js --round <out>/<round> --out <results file> [--fixture <path>] [--meta <path>] [--title <title>] [--note <text>]... [--allow-partial]\n" +
-      "Renders the committed M1 results document from one driver round and its upstream judge metrics. Model-free; a round without finishedAt is refused unless --allow-partial.");
+    console.log("node tests/eval/aacr/m1/report-m1.js --round <out>/<round> --out <results file> [--fixture <path>] [--meta <path>] [--repeat <n>] [--title <title>] [--note <text>]... [--allow-partial]\n" +
+      "Renders the committed M1 results document from one driver round and its upstream judge metrics. Model-free; a round without finishedAt is refused unless --allow-partial. --repeat selects which repeat's judge metrics are rendered (default 1).");
     return 0;
   }
   const roundDir = path.resolve(options.round);
@@ -448,18 +493,18 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
   const fixturePath = existsSync(options.fixture) ? options.fixture : summary.fixture?.path;
   if (!fixturePath || !existsSync(fixturePath)) throw new Error(`fixture is missing: ${fixturePath ?? "(none)"} (build it with fixtures/build-fixture.js)`);
-  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const fixture = readPinnedFixture(fixturePath, summary.fixture?.sha256);
   const meta = existsSync(options.meta) ? JSON.parse(readFileSync(options.meta, "utf8")) : null;
   const metricsByView = {};
   for (const view of summary.views ?? []) {
-    const entry = (summary.judge ?? []).filter((judge) => judge.view === view && judge.ok !== false).at(-1);
+    const entry = selectJudgeEntry(summary, view, options.repeat);
     if (!entry) throw new Error(`no successful judge entry for view ${view}; a results document cannot be rendered without it`);
     metricsByView[view] = loadJudgeMetrics(entry);
   }
   const markdown = renderM1Report({
     summary, fixtureRows: fixture.rows, metricsByView, meta,
     title: options.title ?? `AACR-Bench M1 — ${summary.round}`,
-    notes: options.notes, allowPartial: options.allowPartial,
+    notes: options.notes, allowPartial: options.allowPartial, repeat: options.repeat,
   });
   if (options.out) {
     writeFileSync(options.out, markdown);

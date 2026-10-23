@@ -179,6 +179,54 @@ export function parseOptions(argv = [], env = process.env) {
   return values;
 }
 
+/** A resumed round may reuse a row only when it finished cleanly (dogfood F-182). */
+export function isReusableRow(row) {
+  return row?.status === "ok";
+}
+
+/** Every arm row that already finished cleanly for `taskId` can be reused. */
+export function reusableForTask(previous, arms, taskId) {
+  return arms.every((arm) => isReusableRow(previous.get(`${arm}|${taskId}`)));
+}
+
+/**
+ * Scan an existing round directory for resumable rows. Error rows are read and
+ * returned like any other row (the caller retries them) and counted per arm, so
+ * a resume that retries and fixes them still reports the errors the round
+ * recorded (dogfood F-182, F-189).
+ */
+export function readPreviousRound(roundDir, arms) {
+  const rows = new Map();
+  const errors = Object.fromEntries(arms.map((arm) => [arm, 0]));
+  for (const arm of arms) {
+    const armDir = path.join(roundDir, arm);
+    if (!existsSync(armDir)) continue;
+    for (const file of readdirNames(armDir)) {
+      if (!file.endsWith(".json")) continue;
+      const id = file.replace(/\.json$/, "");
+      let row = null;
+      try {
+        row = JSON.parse(readFileSync(path.join(armDir, file), "utf8"));
+      } catch {
+        // An unreadable row cannot be proven clean, so it is retried.
+      }
+      rows.set(`${arm}|${id}`, row);
+      if (row?.status === "error") errors[arm] += 1;
+    }
+  }
+  return { rows, errors };
+}
+
+/** Per-arm summary counts; errors seen on disk stay visible across a resume. */
+export function summarizeArm(rowsForArm, previousErrorCount = 0) {
+  return {
+    rows: rowsForArm.length,
+    ok: rowsForArm.filter((run) => run.status === "ok").length,
+    errors: Math.max(previousErrorCount, rowsForArm.filter((run) => run.status === "error").length),
+    reused: rowsForArm.filter((run) => run.status === "reused").length,
+  };
+}
+
 function stderrTail(text, lines = 12) {
   return String(text ?? "").trim().split("\n").slice(-lines).join("\n");
 }
@@ -328,17 +376,16 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   // (dogfood F-181).
   const population = { materializedRows: rows.length, usable: usable.length, materializationErrors: materializationErrors.length, degradedDiffBases: usable.filter((row) => row.material?.diffBaseKind === "base-tip").length, selected: selected.length };
   const roundDir = path.join(options.outRoot, roundName);
-  const previous = new Map();
+  let previous = new Map();
+  let previousErrors = Object.fromEntries(options.arms.map((arm) => [arm, 0]));
   const cliSha256 = sha256(readFileSync(options.cli));
   const buildSha256 = buildDigest(path.resolve(path.dirname(options.cli), ".."));
   let startedAt = new Date().toISOString();
   if (existsSync(roundDir)) {
     if (!options.resume) throw new Error(`round directory already exists: ${roundDir} (pick a fresh --round name, remove it, or pass --resume)`);
-    for (const arm of options.arms) {
-      const armDir = path.join(roundDir, arm);
-      if (!existsSync(armDir)) continue;
-      for (const file of readdirNames(armDir)) previous.set(`${arm}|${file.replace(/\.json$/, "")}`, true);
-    }
+    const scanned = readPreviousRound(roundDir, options.arms);
+    previous = scanned.rows;
+    previousErrors = scanned.errors;
     const summaryPath = path.join(roundDir, "summary.json");
     if (existsSync(summaryPath)) {
       const previousSummary = JSON.parse(readFileSync(summaryPath, "utf8"));
@@ -372,7 +419,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       // A resumed round whose every arm row already exists needs no checkout:
       // paying the fetch/worktree cycle per reused task serializes the whole
       // resume behind git for no new evidence.
-      if (options.resume && options.arms.every((arm) => previous.get(`${arm}|${task.id}`))) {
+      if (options.resume && reusableForTask(previous, options.arms, task.id)) {
         for (const arm of options.arms) {
           console.error(`REUSED ${arm} ${task.id}`);
           taskRow.runs.push({ arm, status: "reused" });
@@ -405,7 +452,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       }
       for (const arm of options.arms) {
         const reuse = previous.get(`${arm}|${task.id}`);
-        if (options.resume && reuse) {
+        if (options.resume && isReusableRow(reuse)) {
           console.error(`REUSED ${arm} ${task.id}`);
           taskRow.runs.push({ arm, status: "reused" });
           continue;
@@ -446,8 +493,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     summary.cacheBytes = directoryBytes(options.cache);
     for (const arm of options.arms) {
       const rowsForArm = summary.tasks.flatMap((task) => task.runs.filter((run) => run.arm === arm));
-      summary.arms[arm] = { rows: rowsForArm.length, ok: rowsForArm.filter((run) => run.status === "ok").length, errors: rowsForArm.filter((run) => run.status === "error").length,
-        reused: rowsForArm.filter((run) => run.status === "reused").length };
+      summary.arms[arm] = summarizeArm(rowsForArm, previousErrors[arm] ?? 0);
     }
     flush();
     console.log(options.json ? JSON.stringify(summary) : JSON.stringify({ round: roundName, roundDir, tasks: summary.tasks.length, arms: summary.arms,

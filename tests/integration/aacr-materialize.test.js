@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,8 +14,8 @@ import {
 } from "../eval/aacr/materialize.js";
 import { commentId } from "../eval/aacr/sample.js";
 import {
-  assertResumeCompatible, buildDigest, ensureFetchedAsync, materializeTask, materializeTaskAsync,
-  parseOptions as runOptions, releaseTask, releaseTaskAsync, scoreRow, sha256,
+  assertResumeCompatible, buildDigest, ensureFetchedAsync, isReusableRow, materializeTask, materializeTaskAsync,
+  parseOptions as runOptions, readPreviousRound, releaseTask, releaseTaskAsync, reusableForTask, scoreRow, sha256, summarizeArm,
 } from "../eval/aacr/run-m0.js";
 
 function temporary(fn) {
@@ -63,6 +63,35 @@ test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
   assert.throws(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "b".repeat(64) }), /refuses to mix CLI builds/);
   // A previous summary without provenance (older format) is not a mismatch.
   assert.doesNotThrow(() => assertResumeCompatible({}, { model: "m-b", cliSha256: "b".repeat(64) }));
+});
+
+test("M0 dogfood F-182/F-189: a resume reuses only ok rows and keeps seen errors visible", () => {
+  temporary((root) => {
+    const roundDir = path.join(root, "round");
+    const verifierDir = path.join(roundDir, "verifier");
+    mkdirSync(verifierDir, { recursive: true });
+    writeFileSync(path.join(verifierDir, "c0001-aaaaaaaa.json"), JSON.stringify({ id: "c0001-aaaaaaaa", arm: "verifier", status: "ok" }));
+    writeFileSync(path.join(verifierDir, "c0002-bbbbbbbb.json"), JSON.stringify({ id: "c0002-bbbbbbbb", arm: "verifier", status: "error", error: "CLI exited 3" }));
+    writeFileSync(path.join(verifierDir, "c0003-cccccccc.json"), '{"id":"c0003-cccccccc"');
+    const scanned = readPreviousRound(roundDir, ["verifier", "ocr"]);
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0001-aaaaaaaa")), true);
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0002-bbbbbbbb")), false, "an error row is retried, never reused");
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c0003-cccccccc")), false, "an unreadable row is retried");
+    assert.equal(isReusableRow(scanned.rows.get("verifier|c9999-missing")), false);
+    assert.equal(isReusableRow(null), false);
+    assert.deepEqual(scanned.errors, { verifier: 1, ocr: 0 });
+    // The driver's per-task fast path and its per-arm reuse decision share the guard.
+    assert.equal(reusableForTask(scanned.rows, ["verifier"], "c0001-aaaaaaaa"), true);
+    assert.equal(reusableForTask(scanned.rows, ["verifier"], "c0002-bbbbbbbb"), false);
+    assert.equal(reusableForTask(scanned.rows, ["verifier", "ocr"], "c0001-aaaaaaaa"), false, "every arm row must be reusable");
+    // A retried row may finish ok, but the error seen on disk stays counted.
+    assert.deepEqual(
+      summarizeArm([{ arm: "verifier", status: "reused" }, { arm: "verifier", status: "ok" }], scanned.errors.verifier),
+      { rows: 2, ok: 1, errors: 1, reused: 1 },
+    );
+    // A fresh (non-resumed) run keeps its existing counts exactly.
+    assert.deepEqual(summarizeArm([{ arm: "verifier", status: "ok" }], 0), { rows: 1, ok: 1, errors: 0, reused: 0 });
+  });
 });
 
 test("B4: buildDigest distinguishes builds that share the CLI entry file", () => {
@@ -214,6 +243,39 @@ test("materialized JSONL round-trips header plus rows", () => {
     assert.equal(read.header.__meta__, "aacr-bench/m0-materialized/v1");
     assert.deepEqual(read.rows.map((row) => row.id), ["c0001-aaaaaaaa", "c0002-bbbbbbbb"]);
     assert.deepEqual(readMaterialized(path.join(dir, "absent.jsonl")), { header: null, rows: [] });
+  });
+});
+
+test("M0 dogfood F-190: a torn trailing line is dropped and the parseable prefix resumes", () => {
+  temporary((dir) => {
+    const file = path.join(dir, "materialized.jsonl");
+    const header = { __meta__: "aacr-bench/m0-materialized/v1", dataset: { sha256: "d".repeat(64) } };
+    const rows = [{ id: "c0001-aaaaaaaa", index: 1 }, { id: "c0002-bbbbbbbb", index: 2 }];
+    writeMaterialized(file, header, rows);
+    // A pre-atomic crash: the next row's JSON stops mid-write, with no newline.
+    appendFileSync(file, '{"id":"c0003-cccccccc","index":3');
+    const torn = readMaterialized(file);
+    assert.equal(torn.header.__meta__, "aacr-bench/m0-materialized/v1");
+    assert.deepEqual(torn.rows.map((row) => row.id), ["c0001-aaaaaaaa", "c0002-bbbbbbbb"]);
+    // Corruption anywhere but the final line is still loud, not silently dropped.
+    const corrupted = path.join(dir, "corrupted.jsonl");
+    writeFileSync(corrupted, JSON.stringify(header) + "\n{not json}\n" + JSON.stringify(rows[0]) + "\n");
+    assert.throws(() => readMaterialized(corrupted), SyntaxError);
+  });
+});
+
+test("M0 dogfood F-190: an interrupted rewrite leaves the previous JSONL intact", () => {
+  temporary((dir) => {
+    const file = path.join(dir, "materialized.jsonl");
+    const header = { __meta__: "aacr-bench/m0-materialized/v1" };
+    writeMaterialized(file, header, [{ id: "c0001-aaaaaaaa" }]);
+    const before = readFileSync(file, "utf8");
+    // Inject a write failure at the temp path: writeMaterialized must throw
+    // before the destination is touched, never leave a half-rewritten cache.
+    mkdirSync(file + ".tmp");
+    assert.throws(() => writeMaterialized(file, header, [{ id: "c0002-bbbbbbbb" }]), /EISDIR|illegal operation/);
+    assert.equal(readFileSync(file, "utf8"), before);
+    assert.deepEqual(readMaterialized(file).rows.map((row) => row.id), ["c0001-aaaaaaaa"]);
   });
 });
 

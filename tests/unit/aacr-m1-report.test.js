@@ -1,11 +1,20 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
+  averageRounds,
   balancedScore,
   bucketMetricsForRound,
   categoryMetricsForRound,
   instanceStatsFromEvalRes,
+  main,
+  parseOptions as reportOptions,
+  readPinnedFixture,
   renderM1Report,
+  selectJudgeEntry,
   sizeBucketOf,
 } from "../../tests/eval/aacr/m1/report-m1.js";
 
@@ -78,6 +87,35 @@ const metricsByView = {
       matched_file_semantic_notes: 2, matched_generated_notes: 1,
       file_semantic_match_rate: 0.5, file_semantic_recall_rate: 0.6667, balanced_score: 0.5714,
     },
+  },
+};
+
+const evalResRound2 = [
+  {
+    instance_id: "acme__web@abc1234",
+    comments: [
+      { note: "one", path: "a.ts", file_semantic_match: true },
+      { note: "two", path: "a.ts", file_semantic_match: false },
+    ],
+    generated_comments: [
+      { note: "hit", path: "a.ts", hit_new_gt: true },
+      { note: "miss", path: "a.ts", hit_new_gt: false },
+    ],
+  },
+  {
+    instance_id: "acme__api@def5678",
+    comments: [{ note: "three", path: "b.go", file_semantic_match: false }],
+    generated_comments: [],
+  },
+];
+
+const metricsByViewTwoRounds = {
+  reported: {
+    rounds: [
+      { round: 1, data: { eval_res: evalRes } },
+      { round: 2, data: { eval_res: evalResRound2 } },
+    ],
+    average: metricsByView.reported.average,
   },
 };
 
@@ -168,4 +206,69 @@ test("a round without finishedAt is refused unless explicitly partial", () => {
   );
   const markdown = renderM1Report({ summary: partial, fixtureRows, metricsByView, meta: null, allowPartial: true });
   assert.match(markdown, /PARTIAL ROUND/);
+});
+
+test("M0 dogfood F-3: matched counts are averaged with the rates they pair with", () => {
+  const byId = new Map(fixtureRows.map((row) => [row.instance_id, row]));
+  const round1 = bucketMetricsForRound(evalRes, byId, (row) => row.project_main_language);
+  const round2 = bucketMetricsForRound(evalResRound2, byId, (row) => row.project_main_language);
+  const averaged = averageRounds([round1, round2], ["precision", "recall", "balanced", "matchedRefs", "matchedGenerated"]);
+  const go = averaged.get("Go");
+  assert.equal(go.matchedRefs, 0.5, "round-1 count 1 and round-2 count 0 average to 0.5");
+  assert.equal(go.recall, 0.5);
+  assert.equal(go.judgeRounds, 2);
+  const markdown = renderM1Report({ summary, fixtureRows, metricsByView: metricsByViewTwoRounds, meta: null, renderedAt: "2026-10-20T05:00:00.000Z" });
+  const goRow = markdown.split("\n").find((line) => line.includes("| Go |"));
+  assert.ok(goRow, "no Go bucket row");
+  // The rendered pair recomputes: 0.5 matched of 1 reference = 50.0% recall.
+  assert.match(goRow, /0\.5\/1/);
+  assert.match(goRow, /50\.0%/);
+  assert.match(markdown, /Matched counts are the mean of the per-round micro counts/);
+});
+
+test("M0 dogfood F-5: a two-repeat summary renders the selected repeat and names it", () => {
+  const judge = [
+    { view: "reported", repeat: 1, ok: true, metricsPath: "/rounds/repeat-1/reported/metrics_1_average.json" },
+    { view: "reported", repeat: 2, ok: true, metricsPath: "/rounds/repeat-2/reported/metrics_2_average.json" },
+  ];
+  const twoRepeats = { ...summary, repeats: 2, judge };
+  assert.equal(selectJudgeEntry(twoRepeats, "reported", 1).metricsPath, "/rounds/repeat-1/reported/metrics_1_average.json");
+  assert.equal(selectJudgeEntry(twoRepeats, "reported", 2).metricsPath, "/rounds/repeat-2/reported/metrics_2_average.json");
+  assert.throws(() => selectJudgeEntry(twoRepeats, "reported", 3), /no successful judge entry for view reported repeat 3 \(available repeats: 1, 2\)/);
+  assert.equal(selectJudgeEntry({ judge: [] }, "reported", 1), null);
+  assert.equal(reportOptions(["--round", "r"], {}).repeat, 1);
+  assert.equal(reportOptions(["--round", "r", "--repeat", "2"], {}).repeat, 2);
+  assert.throws(() => reportOptions(["--round", "r", "--repeat", "0"], {}), /repeat must be a positive integer/);
+  const markdown = renderM1Report({ summary: twoRepeats, fixtureRows, metricsByView, meta: null, repeat: 1, renderedAt: "2026-10-20T05:00:00.000Z" });
+  assert.match(markdown, /2 run\(s\); headline and bucket tables describe repeat 1 of 2/);
+  assert.match(markdown, /headline and bucket tables describe \*\*repeat 1 of 2\*\*/);
+  assert.match(markdown, /--repeat <n>/);
+});
+
+test("M0 dogfood F-6: the renderer refuses a fixture that is not the round's pinned bytes", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "pir-m1-fixture-"));
+  try {
+    const fixturePath = path.join(dir, "fixture.json");
+    writeFileSync(fixturePath, JSON.stringify({ rows: fixtureRows }));
+    const sha = createHash("sha256").update(readFileSync(fixturePath)).digest("hex");
+    const roundDir = path.join(dir, "round");
+    mkdirSync(roundDir);
+    const summaryFor = (recorded) => ({ round: "r", startedAt: "2026-10-20T00:00:00.000Z", finishedAt: "2026-10-20T01:00:00.000Z", views: [], fixture: { path: fixturePath, sha256: recorded } });
+    writeFileSync(path.join(roundDir, "summary.json"), JSON.stringify(summaryFor("b".repeat(64))));
+    assert.throws(() => main(["--round", roundDir, "--fixture", fixturePath], {}), /fixture sha256 mismatch/);
+    // The matching pin gets past the check and only then hits the empty view set.
+    writeFileSync(path.join(roundDir, "summary.json"), JSON.stringify(summaryFor(sha)));
+    assert.throws(() => main(["--round", roundDir, "--fixture", fixturePath], {}), /no view metrics to render/);
+    assert.equal(readPinnedFixture(fixturePath, sha).rows.length, fixtureRows.length);
+    assert.throws(() => readPinnedFixture(fixturePath, undefined), /records no fixture sha256/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("M0 dogfood F-1: the Reproduce block carries the recorded --max-rounds and --timeout", () => {
+  const markdown = renderM1Report({ summary, fixtureRows, metricsByView, meta: null, renderedAt: "2026-10-20T05:00:00.000Z" });
+  assert.match(markdown, /--max-rounds 2/);
+  assert.match(markdown, /--timeout 7200000/);
+  assert.match(markdown, /--repeats 1/);
 });

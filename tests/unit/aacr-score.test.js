@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "assert/strict";
 
 import { bucketize, classify, confidenceAuc, isNoVerdict, keepScore, PRIMARY_POLICY, scoreRows, scoreRun, STRICT_POLICY, usageSummary } from "../eval/aacr/score.js";
-import { assertComparableRuns, deltaText, parseOptions as reportOptions, renderResultsMd } from "../eval/aacr/report.js";
+import { assertComparableRuns, deltaText, macroAverage, parseOptions as reportOptions, renderResultsMd } from "../eval/aacr/report.js";
 
 const verifierRow = (over = {}) => ({
   id: "c0001-aaaaaaaa", arm: "verifier", status: "ok", label: 1, decision: "keep", verdict: "confirmed",
@@ -359,6 +359,43 @@ const usageRun = {
   limits: { arms: ["verifier"], concurrency: 8, timeoutMs: 600000, cache: "/tmp/cache" },
   config: { model: "m", thinking: "max" }, startedAt: "2026-10-22T00:00:00.000Z", finishedAt: "2026-10-22T01:00:00.000Z", cacheBytes: 1024,
 };
+
+const macroRows = [
+  verifierRow({ id: "a", label: 1, verdict: "confirmed", decision: "keep", buckets: { source_model: "A", category: "Cat1", context: "Ctx1", is_ai_comment: true } }),
+  verifierRow({ id: "b", label: 0, verdict: "rejected", decision: "kill", buckets: { source_model: "B", category: "Cat2", context: "Ctx2", is_ai_comment: false } }),
+  verifierRow({ id: "c", label: 0, verdict: "confirmed", decision: "keep", buckets: { source_model: "A", category: "Cat1", context: "Ctx1", is_ai_comment: true } }),
+];
+
+test("M0 dogfood F-186: the headline carries a macro bucket-mean row beside the micro counts", () => {
+  const scores = scoreRun(macroRows);
+  const macro = macroAverage(scores.arms.verifier);
+  // Four cells in each of the two bucket families: the A rows and the B row.
+  assert.deepEqual(
+    { killRate: macro.killRate, falseKillRate: macro.falseKillRate, interceptPrecision: macro.interceptPrecision, accuracy: macro.accuracy, precision: macro.precision, recall: macro.recall, f1: macro.f1 },
+    { killRate: 0.5, falseKillRate: 0, interceptPrecision: 1, accuracy: 0.75, precision: 0.5, recall: 1, f1: 2 / 3 },
+  );
+  const markdown = renderResultsMd({ run: usageRun, scores });
+  const row = markdown.split("\n").find((line) => line.includes("macro (bucket mean)"));
+  assert.ok(row, "the headline table has no macro row");
+  // Micro counts (3 rows, 1 label-1 / 2 label-0) sit beside the macro rates.
+  assert.match(row, /\| verifier \| macro \(bucket mean\) \| 3 \| 1 \/ 2 \| acc 75\.0% \|/);
+  assert.match(row, /P 50\.0% \| R 100\.0% \| F1 66\.7% \| kill 50\.0% \| falseKill 0\.0% \| interceptP 100\.0% \| AUC — \|/);
+  // The micro row is still there and differs where the strata are unbalanced.
+  assert.match(markdown, /\| verifier \| \*\*uncertain=keep\*\* \| 3 \| 1 \/ 2 \| acc 66\.7%/);
+  assert.match(markdown, /unweighted mean of each metric over every bucket cell/);
+});
+
+test("M0 dogfood F-192: strict-unresolved reads the strict bucket, not the primary one", () => {
+  const scores = scoreRun([verifierRow({ id: "u", label: 1, verdict: "uncertain", decision: "keep", confidence: 0.4 })]);
+  const primary = scores.arms.verifier.policies[PRIMARY_POLICY].overall;
+  const strict = scores.arms.verifier.policies[STRICT_POLICY].overall;
+  assert.equal(primary.unresolvedPositive + primary.unresolvedNegative, 0, "primary uncertain=keep leaves nothing unresolved");
+  assert.equal(strict.unresolvedPositive + strict.unresolvedNegative, 1, "strict uncertain=miss resolves nothing");
+  const markdown = renderResultsMd({ run: usageRun, scores });
+  assert.match(markdown, /\| verifier \| errors \/ invalid \/ strict-unresolved \| 0 \/ 0 \/ 1 \|/);
+  // Before F-192 this row printed the primary bucket's 0 under the strict label.
+  assert.match(markdown, /\| verifier \| uncertain=miss \| 1 \| 1 \/ 0 \|/);
+});
 
 test("M0 S1: the results document records session usage and omits the section when no row reports it", () => {
   const withUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]) });
