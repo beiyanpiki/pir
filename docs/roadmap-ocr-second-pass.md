@@ -285,7 +285,11 @@ recall must be read.
 reviewer prompt carries a bounded `CHANGED FILES` section (path, status, churn, exclusion reason for withheld
 files; 60 entries plus an explicit remainder line) and asks for per-file accounting in `coverage` without making
 unread files an error. Zero extra calls, no new state, no new manifest field, and a byte-identical prompt when the
-change set is empty. The M1 baseline is untouched; the item stays ⏸ until a protocol-compliant round measures it.
+change set is empty. Three dogfood rounds on the rebased branch changed the implementation before merge: the
+accounting request now names `finish_round`'s 40-entry `coverage` cap (F-3), repository-controlled paths are
+flattened to one line and length-capped (F-2), and the flattener preserves legal path whitespace (F-4) — see
+ADR 0017 decisions 4 and 7. The M1 baseline is untouched; the item stays ⏸ until a protocol-compliant round
+measures it.
 
 ---
 
