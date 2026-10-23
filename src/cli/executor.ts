@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2207,12 +2207,28 @@ const ruleLayerFile = (set: ProjectRuleSet, index: number): string => layerLabel
 
 /** Normalize the checked path to the repo-relative POSIX form globs match. */
 function ruleCheckPath(repoRoot: string, raw: string): string {
-  const given = raw.trim().replace(/\\/g, "/");
-  if (given === "") throw new UsageError("rules check requires a non-empty <path>");
-  if (path.posix.isAbsolute(given)) {
-    const relative = path.relative(repoRoot, path.resolve(given)).split(path.sep).join("/");
+  const trimmed = raw.trim();
+  if (trimmed === "") throw new UsageError("rules check requires a non-empty <path>");
+  // Absolute-ness is decided on the raw argument, before backslashes become
+  // POSIX separators: a Windows drive/UNC path is absolute, not a relative path
+  // named "C:/repo/src/a.ts" (F-12). `win32.isAbsolute` also covers "/..." forms.
+  const given = trimmed.replace(/\\/g, "/");
+  if (path.win32.isAbsolute(trimmed) || path.posix.isAbsolute(given)) {
+    const resolved = path.resolve(given);
+    const relative = path.relative(repoRoot, resolved).split(path.sep).join("/");
     if (relative === "" || relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
       throw new UsageError("rules check path must be a file inside the repository");
+    }
+    // An existing target is contained by its real path, not by its spelling:
+    // a symlink that lives inside the checkout but points outside must not be
+    // reported as an in-repo path (F-11). A non-existent path has nothing to
+    // resolve, so the lexical check above stays the answer for it.
+    if (existsSync(resolved)) {
+      const rootReal = realpathSync(repoRoot);
+      const real = realpathSync(resolved);
+      if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
+        throw new UsageError("rules check path must be a file inside the repository");
+      }
     }
     return relative;
   }
@@ -2330,8 +2346,13 @@ async function cmdRules(
   const displayPath = ruleCheckPath(repoRoot, raw);
   const explicitPath = typeof flags.get("--rule") === "string" ? (flags.get("--rule") as string) : undefined;
   let set: ProjectRuleSet;
+  let renderedSection: string;
   try {
     set = loadProjectRules({ repoRoot, ...(explicitPath === undefined ? {} : { explicitPath }) });
+    // Rendering belongs to the same ProjectRuleError -> UsageError mapping:
+    // an over-cap rendered section (48,000 chars) is a configuration mistake
+    // the user can fix, so it exits 2 like the sibling `find` load, not 3 (F-10).
+    renderedSection = applyProjectRules(set, [{ path: displayPath }]).section;
   } catch (error) {
     if (error instanceof ProjectRuleError) throw new UsageError(error.message);
     throw error;
@@ -2339,7 +2360,6 @@ async function cmdRules(
   // Winner and layer explanation share the reviewer prompt's matcher, and the
   // rendered section is the same `applyProjectRules` output find consumes.
   const check = checkProjectRules(set, displayPath);
-  const renderedSection = applyProjectRules(set, [{ path: displayPath }]).section;
   const exists = existsSync(path.join(repoRoot, displayPath));
   emit(
     json

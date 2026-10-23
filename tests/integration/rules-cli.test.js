@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -228,6 +228,58 @@ test("an absolute path inside the repository is accepted and reported relative",
     const out = await pir(["rules", "check", absolute, "--cwd", repo.dir]);
     assert.equal(out.code, 0, out.stderr);
     assert.match(out.stdout, /^path: src\/a\.ts$/m);
+  } finally { repo.cleanup(); }
+});
+
+test("a rendered section over the 48k cap is a usage error, not a runtime crash (dogfood F-10)", async (t) => {
+  sandbox(t);
+  const repo = fixture("pir-s7-oversize-");
+  try {
+    // One 50,000-char guidance is over the rendered-section cap but under both
+    // the per-guidance cap and the rule-file byte cap, so only the render throws.
+    writeRepoRule(repo, { rules: [rule("src/**", "OVERSIZE " + "x".repeat(50_000))] });
+    for (const extra of [[], ["--json"]]) {
+      const out = await pir(["rules", "check", "src/a.ts", "--cwd", repo.dir, ...extra]);
+      assert.equal(out.code, 2, out.stderr);
+      assert.match(out.stderr + out.stdout, /rendered PROJECT RULES section is \d+ characters; the limit is 48000/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test("an absolute path is contained by its real path, not only by its spelling (dogfood F-11)", async (t) => {
+  sandbox(t);
+  const repo = fixture("pir-s7-symlink-");
+  const outsideDir = mkdtempSync(path.join(tmpdir(), "pir-s7-outside-"));
+  try {
+    writeRepoRule(repo, { rules: [rule("src/**", "SRC")] });
+    writeFileSync(path.join(outsideDir, "out.ts"), "export const outside = 1;\n");
+    symlinkSync(path.join(outsideDir, "out.ts"), path.join(repo.dir, "src", "link.ts"));
+    const escaped = await pir(["rules", "check", path.join(repo.dir, "src", "link.ts"), "--cwd", repo.dir]);
+    assert.equal(escaped.code, 2, escaped.stderr);
+    assert.match(escaped.stderr + escaped.stdout, /inside the repository/);
+
+    // An in-repo symlink stays accepted and is reported by its lexical path.
+    symlinkSync(path.join(repo.dir, "src", "a.ts"), path.join(repo.dir, "src", "alias.ts"));
+    const contained = await pir(["rules", "check", path.join(repo.dir, "src", "alias.ts"), "--cwd", repo.dir]);
+    assert.equal(contained.code, 0, contained.stderr);
+    assert.match(contained.stdout, /^path: src\/alias\.ts$/m);
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+    repo.cleanup();
+  }
+});
+
+test("a Windows drive-absolute path is recognised as absolute before normalisation (dogfood F-12)", async (t) => {
+  sandbox(t);
+  const repo = fixture("pir-s7-winabs-");
+  try {
+    writeRepoRule(repo, { rules: [rule("src/**", "SRC")] });
+    const out = await pir(["rules", "check", "C:\\repo\\src\\a.ts", "--cwd", repo.dir]);
+    // It is absolute, so it goes down the containment branch and is rejected as
+    // outside this checkout — never silently treated as the relative string
+    // "C:/repo/src/a.ts" that matches no rule.
+    assert.equal(out.code, 2, out.stderr);
+    assert.match(out.stderr + out.stdout, /inside the repository/);
   } finally { repo.cleanup(); }
 });
 
