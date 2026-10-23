@@ -6,7 +6,7 @@ import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version", "runs", "receipts", "_verify-comment"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "rules", "plugins", "help", "version", "runs", "receipts", "_verify-comment"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in
@@ -42,6 +42,7 @@ async function main(argv: string[]): Promise<number> {
     // and must keep working when the config is the broken part.
     if (
       command === "config" ||
+      command === "rules" ||
       command === "help" ||
       command === undefined ||
       command === "version" ||

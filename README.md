@@ -188,6 +188,8 @@ pir memory bootstrap
 pir memory refresh
 pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
+
+pir rules check src/core/supervisor.ts  # which project rule wins for a path
 ```
 
 `--max-findings` is a ceiling, not a target; `--max-findings unlimited`
@@ -284,6 +286,17 @@ run before any model session starts. The applied rules and a canonical
 `sha256` hash are recorded in the run manifest (`projectRules`), and `pir
 config show` prints the loaded layers, rules and hash. Rules apply to `find`
 only; `--rule` is a local path and is rejected in remote mode.
+
+`pir rules check <path>` answers the debugging question directly, without a
+run: the winning layer and its label, the matched glob, `mergeBuiltin`, the
+canonical guidance text and the rules hash — or, when nothing matches, one line
+per loaded layer naming the gate that failed (not included, excluded, no rule).
+The path is reported repository-relative and never as a host path; an absolute
+path inside the repository is accepted and reported relative, one outside it is
+a usage error, and a file that does not exist is flagged rather than silently
+matched. `--json` (`command: "rules.check"`) carries the same data plus the
+exact PROJECT RULES prompt block for that path. It reads rule files only: no
+review run, no project database, no model session.
 
 ### User background
 

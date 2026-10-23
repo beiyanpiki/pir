@@ -205,7 +205,7 @@ test("pir skill: path resolves the shipped file; install copies it", async () =>
 
 test("server refuses client-side commands over /v1/exec", async (t) => {
   const { base } = await withHttpServer(t);
-  for (const argv of [["config", "show"], ["skill", "path"]]) {
+  for (const argv of [["config", "show"], ["skill", "path"], ["rules", "check", "src/a.ts"]]) {
     const response = await fetch(`${base}/v1/exec`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },

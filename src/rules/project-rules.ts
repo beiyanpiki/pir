@@ -326,6 +326,84 @@ function layerIncludesPath(layer: RuleLayer, filePath: string): boolean {
   return !layer.exclude.some((glob) => pathMatchesGlob(filePath, glob));
 }
 
+/** One path's winning rule: the first match across layers, then declaration order. */
+export interface RuleMatch {
+  layerIndex: number;
+  ruleIndex: number;
+  layer: RuleLayer;
+  rule: RuleDefinition;
+}
+
+/**
+ * Resolve the winning rule for one path. Layers are scanned in priority order
+ * and rules in declaration order; the first match wins. An `oldPath` lets a
+ * rename match through its old spelling while the caller still reports the
+ * new path (`applyProjectRules`); `checkProjectRules` passes one path only.
+ */
+export function matchProjectRule(set: ProjectRuleSet, filePath: string, oldPath?: string): RuleMatch | null {
+  const candidates = oldPath && oldPath !== filePath ? [filePath, oldPath] : [filePath];
+  for (let layerIndex = 0; layerIndex < set.layers.length; layerIndex += 1) {
+    const layer = set.layers[layerIndex]!;
+    if (!layerIncludesPath(layer, filePath)) continue;
+    for (let ruleIndex = 0; ruleIndex < layer.rules.length; ruleIndex += 1) {
+      const rule = layer.rules[ruleIndex]!;
+      if (candidates.some((candidate) => pathMatchesGlob(candidate, rule.path))) {
+        return { layerIndex, ruleIndex, layer, rule };
+      }
+    }
+  }
+  return null;
+}
+
+/** Per-layer explanation of why a path did or did not select a rule. */
+export interface RuleLayerCheck {
+  layer: RuleLayerName;
+  rules: number;
+  include: string[];
+  exclude: string[];
+  /** First include glob the path matched; null when it matched none. */
+  includedBy: string | null;
+  /** First exclude glob the path matched (exclude wins over include); null otherwise. */
+  excludedBy: string | null;
+  /** First rule glob the path matched after the layer gates; null when none. */
+  rulePath: string | null;
+  /** True when this layer supplied the winning rule. */
+  won: boolean;
+}
+
+export interface ProjectRuleCheck {
+  path: string;
+  match: RuleMatch | null;
+  layers: RuleLayerCheck[];
+}
+
+/**
+ * Explain the winning rule for one path without rendering a prompt section:
+ * the same matcher `applyProjectRules` uses, plus the per-layer gate result a
+ * "why did no rule apply?" question needs. Every loaded layer is reported,
+ * including layers after the winner; `won` marks the one that decided.
+ */
+export function checkProjectRules(set: ProjectRuleSet, filePath: string): ProjectRuleCheck {
+  const match = matchProjectRule(set, filePath);
+  const layers = set.layers.map((layer, index) => {
+    const includedBy = layer.include.find((glob) => pathMatchesGlob(filePath, glob)) ?? null;
+    const excludedBy = layer.exclude.find((glob) => pathMatchesGlob(filePath, glob)) ?? null;
+    const gated = includedBy !== null && excludedBy === null;
+    const rulePath = gated ? (layer.rules.find((rule) => pathMatchesGlob(filePath, rule.path))?.path ?? null) : null;
+    return {
+      layer: layer.layer,
+      rules: layer.rules.length,
+      include: [...layer.include],
+      exclude: [...layer.exclude],
+      includedBy,
+      excludedBy,
+      rulePath,
+      won: match !== null && match.layerIndex === index,
+    };
+  });
+  return { path: filePath, match, layers };
+}
+
 interface WinningGroup {
   layer: RuleLayer;
   ruleIndex: number;
@@ -346,22 +424,12 @@ export function applyProjectRules(
   const matches: RuleApplication["matches"] = [];
   for (const file of changedPaths) {
     if (file.excluded === true) continue;
-    const candidates = file.oldPath && file.oldPath !== file.path ? [file.path, file.oldPath] : [file.path];
-    let won: { layerIndex: number; ruleIndex: number } | null = null;
-    for (let layerIndex = 0; layerIndex < set.layers.length && won === null; layerIndex += 1) {
-      const layer = set.layers[layerIndex]!;
-      if (!layerIncludesPath(layer, file.path)) continue;
-      for (let ruleIndex = 0; ruleIndex < layer.rules.length; ruleIndex += 1) {
-        const rule = layer.rules[ruleIndex]!;
-        if (candidates.some((candidate) => pathMatchesGlob(candidate, rule.path))) {
-          won = { layerIndex, ruleIndex };
-          break;
-        }
-      }
-    }
+    // Shared with `checkProjectRules` (the rules-check command): one matcher,
+    // so the prompt and the debug answer can never disagree.
+    const won = matchProjectRule(set, file.path, file.oldPath);
     if (!won) continue;
-    const layer = set.layers[won.layerIndex]!;
-    const rule = layer.rules[won.ruleIndex]!;
+    const layer = won.layer;
+    const rule = won.rule;
     const key = `${won.layerIndex}:${won.ruleIndex}`;
     const group = groups.get(key);
     if (group) group.files.push(file.path);

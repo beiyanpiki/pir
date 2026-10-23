@@ -143,6 +143,8 @@ pir memory bootstrap
 pir memory refresh
 pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
+
+pir rules check src/core/supervisor.ts  # 查看某个路径最终命中的项目规则
 ```
 
 `--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制，默认没有 token 上限。find 默认上限为 120 万 reviewer + 80 万 verifier 输入 token（ADR 0006）：触顶后不再开启新的 reviewer 轮次，但仍会验证已发现的全部候选，停止原因记录在 `stoppedBecause`，`incomplete` 语义不变（配合 `--fail-on` 退出码 3）。传 `--max-tokens N` 时改用单一显式的整轮上限，`--max-tokens unlimited` 取消全部 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Frontend、Go 和 TypeScript 包均支持 find 与 audit。前端包按框架 marker（`next.config.*`、`nuxt.config.*`、`svelte.config.*`、`astro.config.*`、`angular.json`、`vite.config.*`、`index.html`）在仓库任意深度自动激活，覆盖 React/Next、Vue/Nuxt、Svelte 等 Web UI——没有任何 marker 的纯 SPA 仓库可显式传 `--plugins frontend`。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
@@ -200,6 +202,8 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 ```
 
 `guidanceFile` 与仓库层规则文件本身都按不可信仓库内容处理：仓库相对路径、仅限 `.md`/`.markdown`/`.txt`、最大 64 KiB、经 `realpath` 解析后必须仍在仓库根内。规则文件损坏、guidance 逃逸或过大，或渲染后的 PROJECT RULES 超过 48,000 字符，都会在任何模型会话开始前直接失败。实际生效的规则与规范化 `sha256` 会写入 run manifest 的 `projectRules`；`pir config show` 打印已加载的层、规则与哈希。规则仅用于 `find`；`--rule` 是本地路径，远程模式会在客户端与服务端两侧被拒绝。
+
+`pir rules check <path>` 不开评审、直接回答"这个路径会命中哪条规则"：命中的层与其标签、匹配的 glob、`mergeBuiltin`、规范化后的 guidance 文本以及规则哈希；没有任何规则命中时，逐个已加载层给出一行原因（未被 include 命中、被 exclude 排除、该层无规则匹配）。输出的路径始终是仓库相对路径，绝不会出现宿主机绝对路径；仓库内的绝对路径会被接受并以相对形式输出，仓库外的路径是用法错误（退出码 2），不存在的文件会被标注而不是被静默匹配。`--json`（`command: "rules.check"`）返回同样内容，外加该路径会收到的完整 PROJECT RULES prompt 片段。该命令只读取规则文件：不创建评审 run、不打开项目数据库、不启动模型会话。
 
 ### 用户背景
 

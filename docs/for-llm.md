@@ -218,6 +218,22 @@ and their canonical hash are recorded in `run.json` under `projectRules`, and
 `pir config show [--json]` prints the loaded layers and rules. Rules are
 `find`-only; `--rule` is a local path and is rejected in remote mode.
 
+`pir rules check <path>` answers "which rule wins for this path?" without a
+run: the winning layer and label, the matched glob, `mergeBuiltin`, the
+canonical guidance text and the rules hash; when nothing matches it prints one
+line per loaded layer naming the gate (not included / excluded by / no rule
+matched). The path is reported repository-relative — an absolute path inside
+the repository is accepted and reported relative, one outside it is a usage
+error (exit 2) — and a file that does not exist is flagged rather than refused.
+`--json` returns `command: "rules.check"` with `path`, `exists`,
+`rulesHash`, `matched`, `winner` (`layer`, `file`, `rule`,
+`mergeBuiltin`, `guidanceSource`, `guidanceFile`, `guidance`),
+`layers[]` (include/exclude gates and which layer won) and
+`renderedSection` — the exact PROJECT RULES block that path would receive. It
+reads rule files only: no review run row, no project database, no model
+session. `--rule` is accepted as the flag layer; layer labels are
+`.pir/rule.json`, `~/.pir/rule.json` and `--rule`, never host paths.
+
 `find` can also carry one explicit user background: `--background <text>` or `--background-file <path>` (ADR 0016). It is opt-in, `find`-only, and reviewer-only: verifier sessions never see it, and `audit` rejects both flags. The text is turned into one `<user_background>` section placed after every process rule and before the evidence block, labelled as user-supplied context that is neither instructions nor evidence. Guards: 1 MiB raw file cap; sanitisation (LF line endings, control and invisible characters stripped, blank runs collapsed, trailing whitespace removed); empty-after-sanitisation and any reserved `<user_background>` delimiter rejected; 8,000 characters hard cap (truncated with an explicit marker in the prompt and a warning on stderr); 2,000 characters soft cap (warning only). `--background-file` wins over `--background` with a warning. `run.json` records `background: {source, sha256, characters, suppliedCharacters, truncated}` — the canonical hash of the supplied sanitised text, never the text; the surfaces that echo argv (server error log, job registry, submission receipts) redact the value as `<background redacted>`. Session transcripts, when enabled, record the prompt like every other session input. `--background-file` is a local path and is rejected in remote mode on both sides (the CLI before forwarding, and the server's `/v1/review`/`/v1/exec` lanes, so a direct API caller cannot read a server file into a prompt); `--background` may be forwarded to a same-version server.
 
 Limits:
