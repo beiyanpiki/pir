@@ -239,7 +239,8 @@ decision.
 hard truncation, a 2,000-character soft warning, sanitisation, and reserved-delimiter rejection; the prompt carries
 a delimited `<user_background>` section after every process rule and before the evidence block; `run.json`
 records hash and sizes only. Audit rejects the flags, verifier prompts are untouched, `--background-file` is
-rejected in remote mode and `--background` needs a same-version server.
+rejected in remote mode on both sides (CLI and the server's `/v1/review`/`/v1/exec` lanes, dogfood F-1) and
+`--background` needs a same-version server.
 
 ---
 
