@@ -380,9 +380,9 @@ consumers cannot ingest findings. OCR ships a full SARIF 2.1.0 writer (`cmd/open
 
 ---
 
-### S7 · `pir rules check <file>` · Track B · evidence: `code fact` · ADR: written at execution · Status: ☐
+### S7 · `pir rules check <file>` · Track B · evidence: `code fact` · ADR: [0019](adr/0019-project-rules-check.md) · Status: ☑
 
-**Why.** [`pir config show`](../src/cli/executor.ts#L1918-L1935) prints the loaded rule layers, but there is no
+**Why.** [`pir config show`](../src/cli/executor.ts#L1999-L2014) prints the loaded rule layers, but there is no
 per-file answer to "which rule wins for this path?". OCR has `ocr rules check` for exactly that debugging step.
 B5's resolver already has the winning-rule data.
 
@@ -390,17 +390,33 @@ B5's resolver already has the winning-rule data.
 
 **Tasks**
 
-- [ ] **T0 ADR or docs note** (small): output contract.
-- [ ] **T1 Command.** Print the winning rule, source layer, matched glob, and rendered text; reuse
-      `applyProjectRules`; no absolute paths.
-- [ ] **T2 Tests** for layer precedence, exclude wins, no-match, and byte-stable output.
-- [ ] **T3 Docs** in `for-llm.md` / README.
+- [x] **T0 ADR or docs note** (small): output contract. **Written ([ADR 0019](adr/0019-project-rules-check.md)):**
+      the text lines, the `rules.check` envelope (winner, per-layer gates, `renderedSection`), the path
+      contract and the no-host-paths rule.
+- [x] **T1 Command.** Print the winning rule, source layer, matched glob, and rendered text; reuse
+      `applyProjectRules`; no absolute paths. **Shipped:** the matcher was extracted from
+      `applyProjectRules` into `matchProjectRule`, so the prompt and the command cannot drift;
+      `checkProjectRules` adds the per-layer gate explanation. Paths are reported repository-relative;
+      layer labels come from `layerLabel`.
+- [x] **T2 Tests** for layer precedence, exclude wins, no-match, and byte-stable output.
+      `tests/unit/project-rules-check.test.js` (matcher/check agreement, gates, rename) and
+      `tests/integration/rules-cli.test.js` (text and JSON contracts, byte stability, no host paths, usage
+      guards, no state directory).
+- [x] **T3 Docs** in `for-llm.md` / README. README, `docs/README.zh-CN.md` and `docs/for-llm.md`
+      document the command and the JSON envelope.
 
 **Acceptance**
 
-- [ ] A1 Output is stable and path-safe.
-- [ ] A2 No run row, no model session.
-- [ ] A3 `config show` output is unchanged.
+- [x] A1 Output is stable and path-safe.
+- [x] A2 No run row, no model session.
+- [x] A3 `config show` output is unchanged.
+
+**Outcome (2026-10-23).** Shipped (`pir rules check <path>`, [ADR 0019](adr/0019-project-rules-check.md)).
+The command prints the winning layer, matched glob, `mergeBuiltin`, the canonical guidance text and the rules
+hash, or one line per loaded layer naming the gate that failed; `--json` adds the exact PROJECT RULES block the
+path would receive. It runs client-side in every mode, opens no project database, starts no session and writes
+nothing. One matcher backs both the reviewer prompt and the answer: `applyProjectRules` now calls the extracted
+`matchProjectRule`, and a unit test asserts the two agree on every fixture path.
 
 ---
 
@@ -473,6 +489,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-23 | S2 | Shipped: opt-in `--background` / `--background-file` for `find` (ADR 0016), reviewer prompt only, delimited and labelled, hash-only provenance in `run.json`; A1–A3 done, T4 dogfood partial (this PR, with and without a background) | Iteration 3, first item; the locked M1 baseline is untouched |
 | 2026-10-23 | S3 | Shipped: bounded per-file attention prompt `CHANGED FILES` + accounting request (ADR 0017); prompt-only, zero extra calls, byte-identical when the change set is empty; A1/A2 done, A3 not measured, item parked ⏸ | Iteration 3, second item; no M1 round was run, so no recall claim is made |
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
+| 2026-10-23 | S7 | Shipped `pir rules check <path>` (ADR 0019): client-side, no run/database/session, text + `rules.check` JSON with the rendered PROJECT RULES section; the winning-rule matcher is now shared with `applyProjectRules`; A1–A3 done | Track B, first item; rules could be listed but not resolved for one path |
 | 2026-10-23 | S4 | Iteration 4 closed as discovery only: the record holds one interrupted ~6.5-hour audit (a pre-#38 run with no ledger, most likely killed with its terminal) and no request for resume; identity/state protocol and cost estimate written, **no-go** for implementation ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)); D2 not triggered | The series' rule is measured gaps, not parity: the one loss on record predates the ledger a resume needs, and local durability is the cheaper remedy for its cause |
 
 ---
