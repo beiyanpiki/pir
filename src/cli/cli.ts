@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
@@ -31,6 +31,10 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = firstPositional(argv);
+  // find/audit output selection is validated before any transport or bundle
+  // work — and therefore before a remote forward — so a typo or a
+  // contradictory --json/--format pair fails fast with exit 2 (S6).
+  if (command === "find" || command === "audit") resolveOutputFormat(parseArgs(argv).flags);
   let config: UserConfig | null = null;
   const webRoute = webFindingsRoute(argv);
   try {
