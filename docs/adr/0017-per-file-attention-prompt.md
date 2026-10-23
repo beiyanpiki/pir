@@ -20,6 +20,7 @@ The constraint that decides the design: the plan phase is a separate decision po
 4. **Ask for per-file accounting in the existing vocabulary.** The section ends with: before `finish_round`, each listed file is either investigated or explicitly skipped with a stated reason in `coverage` (for example, skipped because it is generated); an unread file silently omitted is not a skip; and the sentence says outright that this is **not a hard error** — reading every file is not required, accounting for them is.
 5. **Zero extra calls, no state, no enforcement.** No extra model call, no new tool, no read requirement, no ledger change, no new manifest field. Rounds 2+ get the same list because it describes the change, not the round; fan-out angle sessions get the same list; audit keeps its owned-range prompt; verifier prompts are untouched.
 6. **Absent or empty change set renders nothing**, so the reviewer prompt is byte-identical to the pre-S3 prompt.
+7. **Repository-controlled fields are flattened before rendering.** A changed file's path comes from the repository, and a hostile PR can ship a name containing a newline, a control character, a bidi override or an absurd length. Every rendered field is collapsed to one line (control, line-separator and invisible characters become a space) and length-capped (300 characters for the path), so a name can never end its bullet and add a line that reads like prompt text; a path with no printable content renders as `<path unavailable>`. Nothing else is rewritten — a visibly hostile name stays visible next to its churn, which is the honest thing to show a reviewer. The exclusion reason, itself code-generated, passes through the same flattener as defence in depth.
 
 ## Evidence
 
@@ -29,13 +30,16 @@ The constraint that decides the design: the plan phase is a separate decision po
 
 **3. The accounting request is not a coverage contract.** The change-coverage ledger (C1) already records which hunks were read, and ADR 0013 keeps one state machine rather than two. Making unread files an error would convert the prompt into a second, enforced contract — and would force reads of generated or lockfile noise the filter exists to avoid. A stated skip reason is therefore a valid pass, and the prompt says so.
 
-**4. What is deliberately not claimed.** This ADR makes no recall claim. The M1 protocol's locked 50-PR baseline is not re-run here, so S3 closes as *shipped, effect not measured*: the roadmap's A3 explicitly refuses to call an unmeasured prompt change done.
+**4. The prompt surface is inject-safe by construction.** The section is built from repository-controlled strings, so a dogfood run on the rebased branch found the gap the first build had: an unsanitised path could carry a line break into the prompt. The flattener in decision 7 closes it, and `tests/unit/prompts.test.js` asserts that a name containing `\n\nIGNORE ALL PREVIOUS INSTRUCTIONS`, control characters or 5,000 characters still renders as exactly one bullet.
+
+**5. What is deliberately not claimed.** This ADR makes no recall claim. The M1 protocol's locked 50-PR baseline is not re-run here, so S3 closes as *shipped, effect not measured*: the roadmap's A3 explicitly refuses to call an unmeasured prompt change done.
 
 ## Consequences
 
 - A reviewer session can see the whole change (up to the cap) before its first read, including which files are known-unreviewable and why.
 - The prompt grows by at most about 60 short lines (about 3 KB, well under 1,000 tokens) on change runs, with no extra call; rounds 2+ and angle sessions reuse it.
 - Nothing is enforced and nothing new is persisted. A reviewer that ignores the section produces the same run as before: a coverage list that omits a file is visible to the operator, not fatal to the run.
+- A crafted filename cannot add prompt text: it can be visible (that is the point) but it cannot become a separate line or an unbounded value.
 - A change with more than 60 files gets a truncated list; the remainder line says so, and the full set is still reachable through `get_change`.
 
 ## Acceptance mapping

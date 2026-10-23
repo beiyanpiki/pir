@@ -213,6 +213,22 @@ export interface ChangedFileLine {
 export const CHANGED_FILES_LIMIT = 60;
 
 /**
+ * S3 (ADR-0017, dogfood F-2): a changed file is
+ * repository-controlled text. A path can carry control characters, line
+ * separators or invisible formatting, so an unsanitised path could end its
+ * bullet and add a line that reads like prompt text. One entry stays one line:
+ * those characters collapse to a space and the value is length-capped. Nothing
+ * else is rewritten — a visibly hostile name stays visible next to its churn.
+ */
+const PROMPT_FIELD_UNSAFE = /[\u0000-\u001F\u007F-\u009F\u2028\u2029\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+
+function promptSafeField(value: string, max = 300): string {
+  const flat = value.replace(PROMPT_FIELD_UNSAFE, " ").replace(/ {2,}/g, " ").trim();
+  if (flat === "") return "<path unavailable>";
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1)}…`;
+}
+
+/**
  * S3 (ADR-0017): the bounded changed-file map plus the per-file accounting
  * request. OCR requires a pass per reviewed file; pir asks for the same
  * coverage without making it a hard error — a stated skip reason is a valid
@@ -223,7 +239,10 @@ function changedFileLines(files?: readonly ChangedFileLine[]): string[] {
   const shown = files.slice(0, CHANGED_FILES_LIMIT);
   return [
     `CHANGED FILES (all ${files.length} file${files.length === 1 ? "" : "s"} in this change; path, status, churn)`,
-    ...shown.map((file) => `- ${file.path} (${file.status}, +${file.additions}/-${file.deletions})${file.excluded ? ` — excluded: ${file.excludedReason ?? "filtered out of diff review"}` : ""}`),
+    ...shown.map((file) => {
+      const reason = file.excluded ? ` — excluded: ${promptSafeField(file.excludedReason ?? "filtered out of diff review")}` : "";
+      return `- ${promptSafeField(file.path)} (${promptSafeField(file.status, 40)}, +${file.additions}/-${file.deletions})${reason}`;
+    }),
     ...(files.length > CHANGED_FILES_LIMIT ? [`... ${files.length - CHANGED_FILES_LIMIT} more changed files not listed`] : []),
     "ACCOUNT FOR EVERY CHANGED FILE: before finish_round, each file above is either investigated or explicitly skipped with a stated reason in coverage (for example \"skipped src/gen.ts: generated\"). A stated skip is honest; an unread file silently omitted is not. This is not a hard error — reading every file is not required, accounting for them is.",
   ];
