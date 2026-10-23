@@ -221,8 +221,8 @@ entrypoints. Do not change the request-envelope contract. Default remains no bac
       path byte-identical.
 - [ ] **T4 Dogfood.** 3–5 real PRs with descriptions; compare findings and note any over-fitting to the stated
       goal. Do not change the locked M1 baseline; a later M1 round may be justified separately.
-      **Partial (2026-10-23):** this item's own PR ran once with a background description and once without on the
-      same diff — observational notes in the PR. The remaining PRs are follow-up dogfood, not a merge gate. The
+      **Partial (2026-10-23):** this item's own PR ran three times with a background description and once
+      without (same HEAD) — observational notes and the run-by-run outcome are in the PR. The remaining PRs are follow-up dogfood, not a merge gate. The
       locked M1 baseline was not changed.
 
 **Acceptance**
