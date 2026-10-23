@@ -167,13 +167,13 @@ verifier 会话可以使用与 reviewer 不同的模型：`--verify-model <id>`�
 { "schemaVersion": 1, "command": "find", "data": { "findings": [], "incomplete": false } }
 ```
 
-进度和诊断信息写入 stderr。退出码 `0` 表示未触发门禁失败，`1` 表示有已报告的问题达到 `--fail-on` 阈值，`2` 表示用法错误，`3` 表示运行错误。
+进度和诊断信息写入 stderr。退出码 `0` 表示未触发门禁失败，`1` 表示有已报告的问题达到 `--fail-on` 阈值，`2` 表示用法错误，`3` 表示运行错误。默认 `--fail-on none` 下，不完整结果仍可能返回 `0`，需要检查 `data.incomplete`。设置门禁后，不完整评审返回 `3`，除非已有达到阈值的问题使其返回 `1`。
 
 `find` 与 `audit` 还可以输出 SARIF 2.1.0，而不是信封或文本报告：`--format sarif`（`--format text|json` 选择另外两种；`--json` 等价于 `--format json`，两者同时给出且取值不同是用法错误）。每个已报告的 finding 产出一条 result：`category` 成为 `ruleId`，P0/P1 映射为 `error`、P2 为 `warning`、P3 为 `note`，anchors 成为物理位置（第一个是主位置，其余进入 `relatedLocations`），finding 的规范化身份写入 `partialFingerprints["pirFinding/v1"]`。每次调用都会记录本次运行是否完成（`executionSuccessful`），提前停止时附带一条携带 `stoppedBecause` 的 `warning` 通知；audit 的调用还会带上覆盖率摘要。没有 finding 时输出合法的空 `results`。退出码契约不变；无法表达 finding 的通道（`find --preview`、`audit --dry-run`、`audit coverage`）会拒绝 `sarif`。远程模式需要同版本 server。
 
 ```bash
 pir find --base origin/main --head HEAD --format sarif > pir.sarif
-```默认 `--fail-on none` 下，不完整结果仍可能返回 `0`，需要检查 `data.incomplete`。设置门禁后，不完整评审返回 `3`，除非已有达到阈值的问题使其返回 `1`。
+```
 
 Audit 还返回覆盖率记录。范围内文件分别记为 `reviewed`、`partial`、`unreviewed`、`blocked` 或 `failed`；被排除及未选中的文件另行统计。`reviewed` 表示流程完成，不表示已经找到了全部缺陷。
 

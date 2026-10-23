@@ -315,7 +315,10 @@ review result looks like this:
 
 Progress and diagnostics go to stderr. Exit codes are stable: `0` means no
 gate failure, `1` means a reported finding met `--fail-on`, `2` is a usage
-error, and `3` is a runtime error.
+error, and `3` is a runtime error. With `--fail-on none` (the default), an
+incomplete result can still return `0`; check `data.incomplete`. With a gate
+configured, an incomplete run returns `3` unless a qualifying finding already
+caused `1`.
 
 `find` and `audit` can also write SARIF 2.1.0 instead of the envelope or the
 text report: `--format sarif` (`--format text|json` selects the other two, and
@@ -333,10 +336,7 @@ the lanes that cannot express findings — `find --preview`, `audit --dry-run`,
 
 ```bash
 pir find --base origin/main --head HEAD --format sarif > pir.sarif
-``` With `--fail-on none` (the default), an
-incomplete result can still return `0`; check `data.incomplete`. With a gate
-configured, an incomplete run returns `3` unless a qualifying finding already
-caused `1`.
+```
 
 Audits also return a coverage ledger. Each selected file is accounted for as
 `reviewed`, `partial`, `unreviewed`, `blocked`, or `failed`; excluded and
