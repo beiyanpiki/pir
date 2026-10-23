@@ -63,6 +63,25 @@ function metricLine(metrics, auc) {
   ].join(" | ");
 }
 
+/**
+ * ADR-0007 §6: headline numbers are macro-averaged over the dataset's own
+ * bucket strata, and micro counts are always shown next to them. Each bucket
+ * cell is one observation; a metric that is undefined in a cell (e.g. killRate
+ * for a bucket with no label-0 row) is excluded from the mean, not counted as
+ * zero (dogfood F-186).
+ */
+export const MACRO_FIELDS = ["killRate", "falseKillRate", "interceptPrecision", "accuracy", "precision", "recall", "f1"];
+
+export function macroAverage(armScore, policy = PRIMARY_POLICY) {
+  const cells = Object.values(armScore?.policies?.[policy]?.buckets ?? {}).flat();
+  const macro = {};
+  for (const field of MACRO_FIELDS) {
+    const values = cells.map((cell) => cell[field]).filter((value) => typeof value === "number" && Number.isFinite(value));
+    macro[field] = values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+  }
+  return macro;
+}
+
 function bucketTable(bucketRows) {
   const lines = [
     "| value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |",
@@ -151,8 +170,16 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
         overall.label1 + " / " + overall.label0, metricLine(overall, bucket.auc?.auc), "" ].join(" | "));
     }
     const primary = armScore.policies[PRIMARY_POLICY].overall;
-    lines.push([ "", arm, "errors / invalid / strict-unresolved", primary.errors + " / " + primary.invalid + " / " + (primary.unresolvedPositive + primary.unresolvedNegative), "", "" ].join(" | "));
+    // ADR-0007 §6 + dogfood F-186: the macro row is the unweighted mean of the
+    // per-bucket metrics; the overall sample size and label split are the
+    // micro counts that must stay beside it.
+    const macro = macroAverage(armScore);
+    lines.push([ "", arm, "macro (bucket mean)", String(primary.sampleSize), primary.label1 + " / " + primary.label0, metricLine(macro, null), "" ].join(" | "));
+    const strict = armScore.policies[STRICT_POLICY].overall;
+    lines.push([ "", arm, "errors / invalid / strict-unresolved", primary.errors + " / " + primary.invalid + " / " + (strict.unresolvedPositive + strict.unresolvedNegative), "", "" ].join(" | "));
   }
+  lines.push("");
+  lines.push("The macro row is the unweighted mean of each metric over every bucket cell below (the four dataset strata of ADR-0007 §6); the " + code("n") + " and " + code("label1/label0") + " beside it are the micro overall counts. A metric undefined in a bucket (for example " + code("killRate") + " with no label-0 rows) is left out of the mean rather than counted as zero, and the " + code("strict-unresolved") + " counter is read from the strict (uncertain = miss) bucket while " + code("errors") + "/" + code("invalid") + " stay policy-independent.");
   lines.push("");
   const usageArms = Object.entries(scores.arms).filter(([, armScore]) => (armScore.usage?.rowsWithUsage ?? 0) > 0);
   if (usageArms.length > 0) {
