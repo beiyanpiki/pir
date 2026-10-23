@@ -244,7 +244,7 @@ rejected in remote mode on both sides (CLI and the server's `/v1/review`/`/v1/ex
 
 ---
 
-### S3 · Lightweight per-file attention prompt · P3 · evidence: `data signal` · ADR: [0017](adr/0017-per-file-attention-prompt.md) · Status: ⏸ parked — shipped prompt-only; effect **not measured** (A3: no M1 round)
+### S3 · Lightweight per-file attention prompt · P3 · evidence: `data signal` · ADR: [0017](adr/0017-per-file-attention-prompt.md) · Status: ✗ not measured - prompt shipped under ADR 0017; no M1 round, so no recall claim (A3)
 
 **Why.** M1 recall is weak across sizes, not only for large PRs: `≥500` lines = 4 PRs / 6.9% recall;
 `50–199` lines = 20 PRs / 8.7% recall. OCR injects the changed-file list and requires a pass per
@@ -274,9 +274,9 @@ point (D1) and must not ride along. Do not force a read of every file; allow a s
 
 - [x] A1 Prompt tests.
 - [x] A2 Dogfood notes.
-- [ ] A3 If M1 is run: protocol-compliant comparison with the subset digest and both CLI shas; otherwise the item
-      is closed as "not measured" or ✗, not "done". **Not measured:** no M1 round was run, so the item is parked
-      as **not measured** (per this criterion), not marked done.
+- [x] A3 If M1 is run: protocol-compliant comparison with the subset digest and both CLI shas; otherwise the item
+      is closed as "not measured" or ✗, not "done". **Not measured:** no M1 round was run, so the item is closed
+      as **not measured** on 2026-10-23 (per this criterion), not marked done.
 
 **Decision rule.** Do not treat a large-bucket-only improvement as success; the 50–199 bucket and Code Defect
 recall must be read.
@@ -288,8 +288,8 @@ unread files an error. Zero extra calls, no new state, no new manifest field, an
 change set is empty. Three dogfood rounds on the rebased branch changed the implementation before merge: the
 accounting request now names `finish_round`'s 40-entry `coverage` cap (F-3), repository-controlled paths are
 flattened to one line and length-capped (F-2), and the flattener preserves legal path whitespace (F-4) — see
-ADR 0017 decisions 4 and 7. The M1 baseline is untouched; the item stays ⏸ until a protocol-compliant round
-measures it.
+ADR 0017 decisions 4 and 7. The M1 baseline is untouched. The item closed ✗ on 2026-10-23; re-opening needs a protocol-compliant
+M1 round, a separate decision.
 
 ---
 
@@ -442,9 +442,9 @@ nothing. One matcher backs both the reviewer prompt and the answer: `applyProjec
 
 | ID | Topic | Trigger | Action when triggered | Status |
 | --- | --- | --- | --- | --- |
-| D1 | Plan phase for large changes | S3 dogfood or a protocol-compliant M1 round still shows weak coverage/recall after the changed-file/per-file prompt, and the budget allows one extra call per PR | Write an ADR; one plan call gated by OCR's 50/100-line thresholds; inject as advisory text in round 1 only; strip on round 2+ because a plan can become a coverage ceiling; fall back to no plan on failure | ➜ waiting on S3 |
+| D1 | Plan phase for large changes | S3 dogfood or a protocol-compliant M1 round still shows weak coverage/recall after the changed-file/per-file prompt, and the budget allows one extra call per PR | Write an ADR; one plan call gated by OCR's 50/100-line thresholds; inject as advisory text in round 1 only; strip on round 2+ because a plan can become a coverage ceiling; fall back to no plan on failure | ✗ not triggered - S3 closed as not measured; the trigger cannot fire without a measured baseline |
 | D2 | Audit resume implementation | S4 T0–T2 show real demand and an agreed identity/state protocol | Separate ADR and implementation PR; reuse completed units only under exact identity; never mix models or prompt versions | ✗ not triggered — S4 found one interruption (2026-09-30, a pre-#38 run whose ledger was never written, most likely terminal-bound) and no request; the protocol is written ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)) |
-| D3 | `record_candidate` field reorder | S1 shows a real, replicated effect and a second experiment is affordable | Separate ADR; move category/severity after anchors/evidence; measure on M1, not M0 | ➜ waiting on S1 |
+| D3 | `record_candidate` field reorder | S1 shows a real, replicated effect and a second experiment is affordable | Separate ADR; move category/severity after anchors/evidence; measure on M1, not M0 | ✗ not triggered - S1 closed as ✗ (no replicated effect) |
 | D4 | Reflection filter as a pre-verifier funnel | New cost data shows the filter is much cheaper per candidate than the verifier and the removal surface remains small | Do not reopen on the current M0 percentages alone; if reopened, measure filter cost and verifier cost per candidate, not percentages | ✗ not triggered |
 | D5 | Semantic grouping / large-PR slicing | A protocol-compliant full-corpus or 50-PR run shows a large-PR-specific coverage/cost failure that the attention prompt does not fix | ADR 0011's conditions still apply; grouping must fail back to per-file and never gate correctness | ✗ rejected (ADR 0011) |
 | D6 | Cross-file relocation | A measured anchor-error class shows findings uniquely located in another changed file | ADR 0005 §4 still governs; a unique-hit relocation may retarget a finding the model never analysed | ✗ rejected (ADR 0005 §4) |
@@ -509,6 +509,7 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 | 2026-10-22 | S1 | Iteration 2 ran and closed: two M0 repeats per side on the fixed sample ([r1](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r1.md) / [r2](../tests/eval/aacr/results/M0-2026-10-22-s1-field-order-r2.md)); the expected `falseKillRate` direction did not replicate and every cross-build delta sat inside same-build repeat noise, so the reorder was **not adopted** and S1 closes ✗ | The pre-registered stop rule; ADR 0015 §Iteration 2 records both builds, both repeats and the decision |
 | 2026-10-23 | S6 | Shipped `--format sarif` on `find` and `audit` (ADR 0020): one SARIF 2.1.0 log per run with category rule ids, severity levels, anchor locations, canonical partial fingerprints and an invocation that records completeness; `--json` and text are unchanged; A1–A3 done | Track B, second item; SARIF consumers can ingest findings without a custom mapper |
 | 2026-10-23 | S7 | Shipped `pir rules check <path>` (ADR 0019): client-side, no run/database/session, text + `rules.check` JSON with the rendered PROJECT RULES section; the winning-rule matcher is now shared with `applyProjectRules`; A1–A3 done | Track B, first item; rules could be listed but not resolved for one path |
+| 2026-10-23 | S3, D1, D3 | S3 closed ✗ not measured: the per-file attention prompt shipped under ADR 0017 and no M1 round was run, so no recall claim is made; D1 closed ✗ not triggered because its trigger needs a measured S3 baseline; D3 closed ✗ not triggered because S1 closed ✗ with no replicated effect | A3's own rule: an unmeasured item is not done. Both dependent decision points are data-triggered and their data never arrived |
 | 2026-10-23 | S4 | Iteration 4 closed as discovery only: the record holds one interrupted ~6.5-hour audit (a pre-#38 run with no ledger, most likely killed with its terminal) and no request for resume; identity/state protocol and cost estimate written, **no-go** for implementation ([ADR 0018](adr/0018-audit-resume-identity-protocol.md)); D2 not triggered | The series' rule is measured gaps, not parity: the one loss on record predates the ledger a resume needs, and local durability is the cheaper remedy for its cause |
 
 ---
@@ -524,9 +525,9 @@ S6 / S7 ── Track B, demand-driven, no dependency on S1–S4
 
 ## 10. Deletion checklist
 
-- [ ] Every item is ☑ or ✗; no ☐/◐ remains.
+- [x] Every item is ☑ or ✗; no ☐/◐ remains.
 - [ ] Every executed item's ADR is merged; the `ADR:` field in its header names the number.
-- [ ] Any measurement result lives in `tests/eval/aacr/results/` or the ADR that cites it.
+- [x] Any measurement result lives in `tests/eval/aacr/results/` or the ADR that cites it.
 - [ ] §6 non-borrows are absorbed into the relevant ADR(s) or a successor decision document.
 - [ ] No code comment, doc, test, or commit message links to this file.
 - [ ] Delete this file; remove branch-level tracking references; keep the ADRs as the surviving record.
