@@ -64,4 +64,3 @@ Three constraints decide the design. First, `--json` is a documented contract (t
 - Tests: [`tests/unit/sarif.test.js`](../../tests/unit/sarif.test.js), [`tests/unit/output-format.test.js`](../../tests/unit/output-format.test.js), [`tests/integration/sarif-cli.test.js`](../../tests/integration/sarif-cli.test.js).
 - Related decisions: [ADR 0007](0007-aacr-verifier-offline-benchmark.md) and [ADR 0009](0009-m1-end-to-end-benchmark.md) (the identity/provenance discipline the fingerprint follows), [ADR 0013](0013-change-coverage-manifest-decision.md) (the coverage vocabulary an audit invocation carries).
 - External mechanism: OCR `alibaba/open-code-review` @ `375f64c` (Apache-2.0), `cmd/opencodereview/sarif.go` — the mapping precedent, not a parity target.
-- Roadmap: `docs/roadmap-ocr-second-pass.md` §3, item S6.
