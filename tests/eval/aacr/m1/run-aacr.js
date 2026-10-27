@@ -642,7 +642,13 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
       // --judge off preserves a resumed round's prior judge results; an
       // active judge mode re-judges from scratch (the result dirs are the
       // current run's, so stale scores would not describe them).
-      judge: options.judge === "off" ? (previousSummary?.judge ?? []) : [],
+      // Resumable judging: a view whose real 3-round average already
+      // succeeded is preserved and skipped on the next invocation. Without
+      // this, a quota window that fits only one view would redo the finished
+      // view on every retry and could never accumulate both.
+      judge: options.judge === "off"
+        ? (previousSummary?.judge ?? [])
+        : (previousSummary?.judge ?? []).filter((entry) => entry.ok === true),
     };
     // finishedAt is absent while the round runs: a summary without it came
     // from an interrupted (partial) round.
@@ -858,6 +864,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     if (options.judge !== "off") {
       for (let repeat = 1; repeat <= options.repeats; repeat += 1) {
         for (const view of options.views) {
+          const prior = summary.judge.find((entry) => entry.view === view && (entry.repeat ?? 1) === repeat && entry.ok === true);
+          if (prior) {
+            console.error(`JUDGE SKIP ${view} repeat ${repeat} (previous 3-round average preserved)`);
+            continue;
+          }
           const runId = judgeRunId({ round: roundName, view, repeat });
           console.error(`JUDGE ${options.judge} ${view} repeat ${repeat} -> ${runId}`);
           try {

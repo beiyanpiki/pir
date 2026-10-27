@@ -21,9 +21,10 @@ change are three different claims about three different things, and they
 degrade the same way.
 
 M0's first `--limit 100` round measured what that costs
-(`tests/eval/aacr/results/M0-2026-10-19-limit100.md`, ADR-0007
-Consequences): `falseKillRate` 80.0% with `killRate` 72.0% and
-`interceptPrecision` 24.3%. The rationales, read one by one, split into
+(historical 100-comment sample, retired in favour of the full-corpus
+baseline — see
+[`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md)):
+`falseKillRate` 80.0% with `killRate` 72.0% and `interceptPrecision` 24.3%. The rationales, read one by one, split into
 recurring shapes — "a stylistic refactoring preference with no concrete
 failure" (speculative), "pre-existing, not introduced" (not attributable),
 "a guard already prevents it" (guarded). Those are *grounds*, and the
