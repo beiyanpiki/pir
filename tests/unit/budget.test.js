@@ -12,15 +12,15 @@ const usage = (over = {}) => ({
   cost: 0, durationMs: 1, toolCalls: 0, repeatedToolCalls: 0, ...over,
 });
 
-test("B3: the documented find ceilings are 1.2M reviewer + 0.8M verifier input tokens", () => {
+test("Default budget: the documented find ceilings are 1.2M reviewer + 0.8M verifier input tokens", () => {
   // Pinned on purpose: these constants may only be tightened after checking
-  // the M1 per-PR token distribution, recorded as an ADR 0006
+  // the end-to-end benchmark's per-PR token distribution, recorded as an ADR 0006
   // amendment — not by an incidental edit.
   assert.equal(DEFAULT_FIND_REVIEWER_INPUT_TOKENS, 1_200_000);
   assert.equal(DEFAULT_FIND_VERIFIER_INPUT_TOKENS, 800_000);
 });
 
-test("B3 accounting: prompt-side spend sums uncached input + cache reads + cache writes, per role", () => {
+test("Default budget accounting: prompt-side spend sums uncached input + cache reads + cache writes, per role", () => {
   assert.equal(inputTokensOf(usage({ inputTokens: 10, cacheReadTokens: 20, cacheWriteTokens: 30 })), 60);
   assert.equal(inputTokensOf(usage({ inputTokens: 5 })), 5, "partial usage must not poison the sum with NaN");
 
@@ -32,7 +32,7 @@ test("B3 accounting: prompt-side spend sums uncached input + cache reads + cache
   assert.equal(budget.tokenEstimate, 560, "the whole-run counter keeps the measured-total semantics");
 });
 
-test("B3: the reviewer ceiling is graceful — exhausted() names it, hardExhausted() ignores it", () => {
+test("Default budget: the reviewer ceiling is graceful — exhausted() names it, hardExhausted() ignores it", () => {
   const budget = new Budget({ maxRounds: 3, reviewerTokens: DEFAULT_FIND_REVIEWER_INPUT_TOKENS, verifierTokens: DEFAULT_FIND_VERIFIER_INPUT_TOKENS });
   budget.chargeSession(usage({ inputTokens: DEFAULT_FIND_REVIEWER_INPUT_TOKENS + 50_000, totalTokens: DEFAULT_FIND_REVIEWER_INPUT_TOKENS + 50_000 }), "reviewer");
 
@@ -43,7 +43,7 @@ test("B3: the reviewer ceiling is graceful — exhausted() names it, hardExhaust
   assert.equal(budget.hardExhausted(), null, "the pending verification drain must not stop on a default ceiling");
 });
 
-test("B3: the verifier ceiling is named distinctly and is equally graceful", () => {
+test("Default budget: the verifier ceiling is named distinctly and is equally graceful", () => {
   const budget = new Budget({ maxRounds: 3, reviewerTokens: DEFAULT_FIND_REVIEWER_INPUT_TOKENS, verifierTokens: DEFAULT_FIND_VERIFIER_INPUT_TOKENS });
   budget.chargeSession(usage({ inputTokens: DEFAULT_FIND_VERIFIER_INPUT_TOKENS + 1, totalTokens: DEFAULT_FIND_VERIFIER_INPUT_TOKENS + 1 }), "verifier");
 
@@ -52,7 +52,7 @@ test("B3: the verifier ceiling is named distinctly and is equally graceful", () 
   assert.equal(budget.hardExhausted(), null);
 });
 
-test("B3: gracefulExhausted() reports the default ceilings only, never a hard one", () => {
+test("Default budget: gracefulExhausted() reports the default ceilings only, never a hard one", () => {
   const grace = new Budget({ maxRounds: 3, reviewerTokens: 100 });
   grace.chargeSession(usage({ inputTokens: 120, totalTokens: 120 }), "reviewer");
   assert.match(grace.gracefulExhausted(), /reviewer token budget exhausted/);
@@ -67,7 +67,7 @@ test("B3: gracefulExhausted() reports the default ceilings only, never a hard on
   assert.equal(none.gracefulExhausted(), null, "configured but unreached is not exhausted");
 });
 
-test("B3: an explicit maxTokens ceiling stays hard and keeps the measured-total accounting", () => {
+test("Default budget: an explicit maxTokens ceiling stays hard and keeps the measured-total accounting", () => {
   const budget = new Budget({ maxRounds: 3, maxTokens: 100 });
   budget.chargeSession(usage({ inputTokens: 90, outputTokens: 20, totalTokens: 110 }), "verifier");
 
@@ -76,7 +76,7 @@ test("B3: an explicit maxTokens ceiling stays hard and keeps the measured-total 
   assert.match(budget.hardExhausted(), /token budget exhausted \(110 tokens\)/, "an explicit ceiling still refuses new verifier admissions");
 });
 
-test("B3: a budget with no ceilings is unlimited — spend alone never exhausts it (audit's shape)", () => {
+test("Default budget: a budget with no ceilings is unlimited — spend alone never exhausts it (audit's shape)", () => {
   const budget = new Budget({ maxRounds: Number.MAX_SAFE_INTEGER });
   budget.chargeSession(usage({ inputTokens: 50_000_000, totalTokens: 50_000_000 }), "reviewer");
   budget.chargeSession(usage({ inputTokens: 50_000_000, totalTokens: 50_000_000 }), "verifier");
@@ -84,7 +84,7 @@ test("B3: a budget with no ceilings is unlimited — spend alone never exhausts 
   assert.equal(budget.hardExhausted(), null);
 });
 
-test("B3: role-less charges count toward the whole-run totals only", () => {
+test("Default budget: role-less charges count toward the whole-run totals only", () => {
   const budget = new Budget({ maxRounds: 2, reviewerTokens: 100, verifierTokens: 100 });
   budget.chargeSession(usage({ inputTokens: 200, totalTokens: 200 }));
   assert.equal(budget.reviewerInputTokens, 0);
@@ -93,7 +93,7 @@ test("B3: role-less charges count toward the whole-run totals only", () => {
   assert.equal(budget.exhausted(), null);
 });
 
-test("B3: estimated fallback spend is attributed to the charging role and marks usage incomplete", () => {
+test("Default budget: estimated fallback spend is attributed to the charging role and marks usage incomplete", () => {
   const budget = new Budget({ maxRounds: 2, reviewerTokens: 100 });
   budget.chargeSession(undefined, "reviewer", "x".repeat(400)); // 4 chars/token -> 100 estimated tokens
   assert.equal(budget.reviewerInputTokens, 100);
@@ -101,7 +101,7 @@ test("B3: estimated fallback spend is attributed to the charging role and marks 
   assert.equal(budget.ceilingHit().kind, "reviewer-tokens");
 });
 
-test("B3: the wall clock stays a hard ceiling (the grace covers token ceilings only)", async () => {
+test("Default budget: the wall clock stays a hard ceiling (the grace covers token ceilings only)", async () => {
   const budget = new Budget({ maxRounds: 3, maxWallClockMs: 1 });
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(budget.ceilingHit().kind, "wall-clock");

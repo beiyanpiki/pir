@@ -55,7 +55,7 @@ const record = (over = {}) => ({
   pr_category: "Bug Fix", pr_change_line_count: 3, ...over,
 });
 
-test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
+test("verifier-benchmark dogfood F-185: --resume refuses to mix models or CLI builds", () => {
   const summary = { model: "m-a", cli: { sha256: "a".repeat(64) } };
   assert.doesNotThrow(() => assertResumeCompatible(summary, { model: "m-a", cliSha256: "a".repeat(64) }));
   assert.doesNotThrow(() => assertResumeCompatible(undefined, { model: "m-a", cliSha256: "b".repeat(64) }));
@@ -65,7 +65,7 @@ test("M0 dogfood F-185: --resume refuses to mix models or CLI builds", () => {
   assert.doesNotThrow(() => assertResumeCompatible({}, { model: "m-b", cliSha256: "b".repeat(64) }));
 });
 
-test("M0 dogfood F-182/F-189: a resume reuses only ok rows and keeps seen errors visible", () => {
+test("verifier-benchmark dogfood F-182/F-189: a resume reuses only ok rows and keeps seen errors visible", () => {
   temporary((root) => {
     const roundDir = path.join(root, "round");
     const verifierDir = path.join(roundDir, "verifier");
@@ -94,7 +94,7 @@ test("M0 dogfood F-182/F-189: a resume reuses only ok rows and keeps seen errors
   });
 });
 
-test("B4: buildDigest distinguishes builds that share the CLI entry file", () => {
+test("Rejection grounds: buildDigest distinguishes builds that share the CLI entry file", () => {
   temporary((root) => {
     const dist = path.join(root, "dist");
     const cliDir = path.join(dist, "cli");
@@ -106,7 +106,7 @@ test("B4: buildDigest distinguishes builds that share the CLI entry file", () =>
     const entryBefore = sha256(readFileSync(path.join(cliDir, "cli.js")));
     const before = buildDigest(dist);
     assert.match(before, /^[0-9a-f]{64}$/);
-    // The dispatcher does not change; the behavior does (B4's real shape).
+    // The dispatcher does not change; the behavior does (the rejection-grounds shape).
     writeFileSync(path.join(agentDir, "verifier.js"), "export const prompt = 'v2';\n");
     const after = buildDigest(dist);
     assert.notEqual(after, before);
@@ -119,7 +119,7 @@ test("B4: buildDigest distinguishes builds that share the CLI entry file", () =>
   });
 });
 
-test("M0 dogfood F-181: a failed merge-base lookup is never cached, so later runs retry", () => {
+test("verifier-benchmark dogfood F-181: a failed merge-base lookup is never cached, so later runs retry", () => {
   const cache = {};
   const key = "example/repo|" + "a".repeat(40) + "|" + "b".repeat(40);
   assert.equal(cachedMergeBase(cache, key), undefined, "no entry means resolve, not reuse");
@@ -138,7 +138,7 @@ test("M0 dogfood F-181: a failed merge-base lookup is never cached, so later run
   assert.equal(cachedMergeBase(cache, "example/repo|x|y"), undefined);
 });
 
-test("M0 dogfood F-181: degraded base-tip rows are recognizable for counting", () => {
+test("verifier-benchmark dogfood F-181: degraded base-tip rows are recognizable for counting", () => {
   assert.equal(isDegradedDiffBase({ material: { diffBaseKind: "base-tip" } }), true);
   assert.equal(isDegradedDiffBase({ material: { diffBaseKind: "merge-base" } }), false);
   assert.equal(isDegradedDiffBase({ material: {} }), false);
@@ -246,7 +246,7 @@ test("materialized JSONL round-trips header plus rows", () => {
   });
 });
 
-test("M0 dogfood F-190: a torn trailing line is dropped and the parseable prefix resumes", () => {
+test("verifier-benchmark dogfood F-190: a torn trailing line is dropped and the parseable prefix resumes", () => {
   temporary((dir) => {
     const file = path.join(dir, "materialized.jsonl");
     const header = { __meta__: "aacr-bench/m0-materialized/v1", dataset: { sha256: "d".repeat(64) } };
@@ -264,7 +264,7 @@ test("M0 dogfood F-190: a torn trailing line is dropped and the parseable prefix
   });
 });
 
-test("M0 dogfood F-190: an interrupted rewrite leaves the previous JSONL intact", () => {
+test("verifier-benchmark dogfood F-190: an interrupted rewrite leaves the previous JSONL intact", () => {
   temporary((dir) => {
     const file = path.join(dir, "materialized.jsonl");
     const header = { __meta__: "aacr-bench/m0-materialized/v1" };

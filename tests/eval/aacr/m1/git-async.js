@@ -1,8 +1,8 @@
 /**
- * Non-blocking git plumbing for the M1 driver's worker pool.
+ * Non-blocking git plumbing for the end-to-end driver's worker pool.
  *
- * The M0 driver's async fetch/worktree helpers live in ../run-m0.js (M1
- * imports them from there); this module holds the M1-specific plumbing a
+ * The verifier-benchmark driver's async fetch/worktree helpers live in ../run-m0.js (the end-to-end benchmark
+ * imports them from there); this module holds the end-to-end-specific plumbing a
  * depth-1 cache needs — ancestry probes and the deterministic synthetic head
  * that gives `pir find` a reviewable range without rewriting history.
  *

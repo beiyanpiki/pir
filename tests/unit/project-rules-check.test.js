@@ -11,7 +11,7 @@ import {
 } from "../../dist/rules/project-rules.js";
 
 /**
- * Track B S7: the rules-check query shares the reviewer prompt's matcher, so
+ * Rule introspection: the rules-check query shares the reviewer prompt's matcher, so
  * the debug answer and the prompt cannot disagree. Model-free; no CLI.
  */
 

@@ -6,7 +6,7 @@
 //
 // Views:
 //   reported       confirmed + uncertain  (the uncertain=keep calibration,
-//                  the same primary policy ADR-0007 fixed for M0)
+//                  the same primary policy ADR-0007 fixed for the verifier benchmark)
 //   confirmedOnly  confirmed only          (the strict precision view)
 //
 // The upstream judge only counts comments with non-empty `content`; every
@@ -165,7 +165,7 @@ export function toUpstreamResult(normalized, { view } = {}) {
 }
 
 /**
- * Upstream `config.safe_id`: `<instance_id>.replace("/", "__")`. The M1
+ * Upstream `config.safe_id`: `<instance_id>.replace("/", "__")`. The end-to-end benchmark
  * instance convention already encodes `/` as `__`, and `@` is deliberately
  * preserved — this mirrors upstream exactly instead of inventing a new rule.
  */

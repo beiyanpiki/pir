@@ -597,7 +597,7 @@ test("verifier confidence round-trips through insert/get/updateVerified (Q4)", a
   }
 });
 
-test("verifier rejection ground round-trips through insert/get/updateVerified (B4)", async () => {
+test("verifier rejection ground round-trips through insert/get/updateVerified (rejection grounds)", async () => {
   const repo = createTempGitRepo();
   const memory = await openMemory(repo);
   try {
@@ -615,7 +615,7 @@ test("verifier rejection ground round-trips through insert/get/updateVerified (B
       status: "rejected", verifierRationale: "re-checked", rejectionGround: "pre-existing", memoryMatches: [], confidence: 0.5,
     });
     assert.equal(updated.rejectionGround, "pre-existing");
-    // Kept rows and rows written before B4 carry no ground.
+    // Kept rows and rows written before Rejection grounds carry no ground.
     const kept = memory.findings.insert({ ...base, claim: "kept claim", status: "confirmed", identity: buildIdentity({
       featureKey: "ground-flow", entityKey: "E.kept", category: "correctness", claim: "kept claim", trigger: "t",
     }) }, "run-b4");
@@ -626,7 +626,7 @@ test("verifier rejection ground round-trips through insert/get/updateVerified (B
   }
 });
 
-test("migration v8: an existing (pre-ground) db upgrades in place (B4)", async () => {
+test("migration v8: an existing (pre-ground) db upgrades in place (rejection grounds)", async () => {
   const repo = createTempGitRepo("pir-ground-mig-");
   const dbPath = `${repo.dir}/.pir/memory.sqlite`;
   const memory = await Memory.open(repo.dir, { dbPath });

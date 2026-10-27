@@ -862,7 +862,7 @@ test("--detach (#53): rejected for non-review commands", async (t) => {
   assert.equal(wrongCommand.code, 2);
   assert.match(wrongCommand.stderr, /--detach applies to/);
   assert.equal(seen.length, 0, "validation failures never reach the network");
-  // Local mode is a supported detach lane since ADR 0022; its acceptance, its
+  // Local mode is a supported detach lane since ADR 0016 Part IV; its acceptance, its
   // receipt settlement, its refusals and the executor's server-lane rejection
   // are covered end to end in tests/integration/cli-detach-local.test.js.
 });

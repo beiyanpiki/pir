@@ -125,7 +125,7 @@ test("evidence gate: a search alone gathers evidence but stage 2 still demands a
   try {
     const result = await runVerifier({ factory, ctx: fx.ctx, candidate, priorDecisions: [] });
     assert.equal(result.verdict, "rejected");
-    assert.equal(result.rejectionGround, "contradicted-by-code", "B4: the ground survives into the verifier result");
+    assert.equal(result.rejectionGround, "contradicted-by-code", "the rejection ground survives into the verifier result");
   } finally {
     fx.cleanup();
   }

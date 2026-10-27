@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — results renderer (renders the first M0 results document). Pure renderer plus a thin CLI.
+ * AACR-Bench verifier benchmark — results renderer (renders the first verifier-benchmark results document). Pure renderer plus a thin CLI.
  *
  * The protocol section is copied from tests/eval/reviewbench/RESULTS.md (the
- * RB variance rules) and extended with the M0-specific rules from ADR-0007:
+ * RB variance rules) and extended with the verifier-benchmark rules from ADR-0007:
  * both scoring policies, kill-rate plus its cost side, the exact model id and
  * thinking level, the sample seed/limit/digest, and the dataset pin with the
  * arXiv citation. A results file that cannot be traced back to those inputs is
@@ -101,7 +101,7 @@ function bucketTable(bucketRows) {
  * Render one results document. `run` is a run-m0.js summary.json object and
  * `scores` is scoreRun()'s scorecard; missing provenance fields throw rather
  * than rendering a table nobody can reproduce. An optional `baseline`
- * (`{ run, scores }`) adds the controlled before/after section ADR-0008's B4
+ * (`{ run, scores }`) adds the controlled before/after section ADR-0008's rejection-grounds
  * gate is read from; it must share the after-run's dataset, sample, model and
  * arms, and is rejected otherwise.
  */
@@ -112,7 +112,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   if (!scores?.arms || Object.keys(scores.arms).length === 0) throw new Error("scores.arms is empty — nothing to report");
   const date = (run.finishedAt ?? run.startedAt ?? new Date().toISOString()).slice(0, 10);
   const lines = [];
-  lines.push("# " + (title ?? ("M0 — AACR-Bench verifier offline benchmark (" + date + ")")));
+  lines.push("# " + (title ?? ("AACR-Bench verifier offline benchmark (" + date + ")")));
   lines.push("");
   lines.push("> Dataset: [Alibaba-Aone/aacr-bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) " + code("dataset.json") +
     " revision " + code(run.dataset.revision) + ", sha256 " + code(run.dataset.sha256) + " (" + run.dataset.records + " records), Apache-2.0.",
@@ -132,14 +132,14 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   lines.push("");
   lines.push("- Primary policy **uncertain = keep**: " + code("confirmed") + " and " + code("uncertain") + " both count as keeps, only " + code("rejected") + " kills." +
     " The strict policy **uncertain = miss** is reported beside it: an uncertain verdict earns no credit in either direction (neither a keep nor a kill).");
-  lines.push("- **killRate** = share of label-0 comments intercepted (north-star metric; higher is better). **falseKillRate** = share of label-1 comments destroyed (cost side, and the B4 merge gate; lower is better).",
-    " **interceptPrecision** = share of kills that were label 0. ADR-0007 §5 explains why the three are always read together; the roadmap's B4 acceptance text uses \"kill-rate\" for what this file calls falseKillRate, so this file names all three explicitly and none can be misread.");
+  lines.push("- **killRate** = share of label-0 comments intercepted (north-star metric; higher is better). **falseKillRate** = share of label-1 comments destroyed (cost side, and the rejection-grounds merge gate; lower is better).",
+    " **interceptPrecision** = share of kills that were label 0. ADR-0007 §5 explains why the three are always read together; the rejection-grounds acceptance text uses \"kill-rate\" for what this file calls falseKillRate, so this file names all three explicitly and none can be misread.");
   lines.push("- Accuracy/precision/recall/F1 are over the keep decision (positives = label 1).",
     " AUC ranks rows by the verifier's keep-score: confirmed = 0.5 + c/2, rejected = 0.5 − c/2, uncertain = 0.5 (OCR arm: approve = 1, remove = 0).",
     " Rows with no decision (error, invalid, or strict-policy uncertain) count as misses, never as silent exclusions.");
   lines.push("- Sample variance rules copied from " + code("tests/eval/reviewbench/RESULTS.md") + ": a \"no regression\" claim needs both comparison runs no worse than the comparison's worse run; a model or prompt change voids comparability.",
-    " Every M0 round publishes one run per arm — these are one sample's numbers, not a variance floor; repeats are a separate round's job.");
-  lines.push("- No judge is involved (ADR-0007 §9): the dependent variable is the dataset's expert label, so these numbers are judge-drift-free by construction and are **not** comparable to M1's " + code("balanced_score") + ".");
+    " Every verifier-benchmark round publishes one run per arm — these are one sample's numbers, not a variance floor; repeats are a separate round's job.");
+  lines.push("- No judge is involved (ADR-0007 §9): the dependent variable is the dataset's expert label, so these numbers are judge-drift-free by construction and are **not** comparable to the end-to-end benchmark's " + code("balanced_score") + ".");
   lines.push("");
   lines.push("## Run configuration");
   lines.push("");
@@ -206,7 +206,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
     for (const shoulder of [["−", baseline.run, baseline.scores], ["+", run, scores]]) {
       const [mark, sideRun, sideScores] = shoulder;
       // The build digest, not the entry-file sha256: cli.js is a thin
-      // dispatcher and the two builds can share it byte for byte (B4 did).
+      // dispatcher and the two builds can share it byte for byte.
       const buildId = sideRun.cli?.buildSha256 ?? sideRun.cli?.sha256 ?? "?";
       for (const arm of Object.keys(sideScores.arms).sort()) {
         const armScore = sideScores.arms[arm];
@@ -230,9 +230,9 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
       const after = scores.arms[arm].policies[PRIMARY_POLICY].overall;
       if (!before) continue;
       const gate = after.falseKillRate !== null && before.falseKillRate !== null && after.falseKillRate <= before.falseKillRate;
-      lines.push("- **" + arm + " — B4 gate**: falseKillRate " + deltaText(before.falseKillRate, after.falseKillRate) + " ⇒ **" + (gate ? "no regression" : "REGRESSION") + "**;" +
+      lines.push("- **" + arm + " — rejection-grounds gate**: falseKillRate " + deltaText(before.falseKillRate, after.falseKillRate) + " ⇒ **" + (gate ? "no regression" : "REGRESSION") + "**;" +
         " killRate " + deltaText(before.killRate, after.killRate) + "; interceptPrecision " + deltaText(before.interceptPrecision, after.interceptPrecision) + "." +
-        " The three are read together (roadmap R9): a falseKillRate that fell by rejecting fewer comments overall is not automatically an improvement.");
+        " The three are read together: a falseKillRate that fell by rejecting fewer comments overall is not automatically an improvement.");
     }
     lines.push("");
     const comparedUsageArms = Object.keys(scores.arms).sort().filter((arm) =>
@@ -267,13 +267,13 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
     }
     const grounds = armScore.rejectionGrounds ?? [];
     if (grounds.some((entry) => entry.ground !== "unknown")) {
-      lines.push("### Rejection grounds (B4)");
+      lines.push("### Rejection grounds");
       lines.push("");
       lines.push("| ground | kills | label0 | label1 | false-kill share of ground |");
       lines.push("| --- | --- | --- | --- | --- |");
       for (const entry of grounds) lines.push(["", entry.ground, String(entry.killed), String(entry.label0), String(entry.label1), pct(entry.killed === 0 ? null : entry.label1 / entry.killed), ""].join(" | "));
       lines.push("");
-      lines.push("A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date B4 or belong to the OCR arm, which has no ground vocabulary; they are counted as " + code("unknown") + " rather than dropped.");
+      lines.push("A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date the rejection-grounds change or belong to the OCR arm, which has no ground vocabulary; they are counted as " + code("unknown") + " rather than dropped.");
       lines.push("");
     }
   }
@@ -281,7 +281,7 @@ export function renderResultsMd({ run, scores, baseline = null, title, notes = [
   lines.push("");
   if (notes.length === 0) lines.push("- (none recorded)");
   for (const note of notes) lines.push("- " + note);
-  lines.push("- Caliber (roadmap R2): the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for M0.");
+  lines.push("- Caliber: the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for verifier benchmark.");
   const degraded = Object.entries(scores.arms)
     .map(([arm, score]) => [arm, score.diffBaseKinds?.["base-tip"] ?? 0])
     .filter(([, count]) => count > 0);
@@ -324,7 +324,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
     console.log("node tests/eval/aacr/report.js --run <out-root>/<round> --out <results file> [--baseline <pre-change round dir>] [--title <title>] [--note <text>]... [--json]\n" +
-      "Scores a finished M0 round and renders the results document (per-bucket metrics, sample sizes, model versions, variance notes, arXiv citation).\n" +
+      "Scores a finished verifier-benchmark round and renders the results document (per-bucket metrics, sample sizes, model versions, variance notes, arXiv citation).\n" +
       "--baseline adds the controlled before/after section (ADR-0008): the two rounds must share dataset, sample digest, model and arms, so only the CLI build differs.\n" +
       "--note <text> appends one bullet to the report's Notes and limits section (repeatable).");
     return 0;

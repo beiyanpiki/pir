@@ -14,7 +14,7 @@ import {
  * audits. Enumerated from the git tree itself — never the working filesystem
  * or the structural index, neither of which is pinned to the reviewed commit.
  *
- * The exclusion/classification policy itself lives in `./filter.js` (B1) and is
+ * The exclusion/classification policy itself lives in `./filter.js` (change-mode filter) and is
  * re-exported here for the callers that predate the split.
  */
 

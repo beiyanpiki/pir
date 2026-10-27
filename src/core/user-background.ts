@@ -4,7 +4,7 @@ import path from "node:path";
 import { USER_BACKGROUND_CLOSE, USER_BACKGROUND_OPEN, USER_BACKGROUND_TAG } from "../agents/prompts.js";
 
 /**
- * S2 (ADR-0016): explicit user background for `find` — the user's stated goal
+ * ADR 0016 Part I: explicit user background for `find` — the user's stated goal
  * for the change, injected as untrusted context into the reviewer prompt only.
  *
  * The text is user-supplied and reaches a model, so it carries three bounds:
@@ -134,11 +134,11 @@ export function resolveUserBackground(input: UserBackgroundInput): UserBackgroun
   };
 }
 
-/** What bookkeeping surfaces show instead of the text (ADR-0016). */
+/** What bookkeeping surfaces show instead of the text (ADR 0016 Part I). */
 export const USER_BACKGROUND_REDACTED = "<background redacted>";
 
 /**
- * S2 (ADR-0016, dogfood F-2): the background reaches the model, but it must not
+ * ADR 0016 Part I (dogfood F-2): the background reaches the model, but it must not
  * reach any bookkeeping surface. Server error logs, the job registry and local
  * receipts echo argv, so they pass it through here first: the flag stays
  * visible (an operator can see it was used) and its value never does.
@@ -161,7 +161,7 @@ export function redactUserBackgroundArgv(argv: readonly string[]): string[] {
   return out;
 }
 
-/** The persisted projection: hash and sizes only, never the text (ADR-0016). */
+/** The persisted projection: hash and sizes only, never the text (ADR 0016 Part I). */
 export function userBackgroundRecord(background: UserBackground): UserBackgroundRecord {
   return {
     source: background.source,

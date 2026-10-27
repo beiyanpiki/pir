@@ -32,7 +32,7 @@ export interface ToolContext {
    */
   hunkObserver?: (path: string, hunkIndex: number) => void;
   /**
-   * Change-mode secret-path guard (B1): when true, the pinned read channels
+   * Change-mode secret-path guard (change-mode filter): when true, the pinned read channels
    * (`read_code`, `search_text`, collector evidence reads) refuse paths the
    * non-overridable secret gate excludes, so an excluded file's content
    * cannot reach a session through anything but the SDK's builtin filesystem

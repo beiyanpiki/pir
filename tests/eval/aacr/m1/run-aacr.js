@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M1 — end-to-end eval driver (clone, checkout, spawn find, normalize).
+ * AACR-Bench end-to-end benchmark — eval driver (clone, checkout, spawn find, normalize).
  *
- * One M1 task = one positive_samples PR. For each task:
+ * One end-to-end task = one positive_samples PR. For each task:
  *   1. reuse the shared depth-1 clone cache,
  *   2. fetch the PR head and the GitHub-reported merge base (no full clone),
  *   3. make the review range explainable to `pir find` (see synthetic head
@@ -17,7 +17,7 @@
  *   5. normalize the envelope into two upstream-shaped result views and write
  *      per-instance rows + upstream result files incrementally.
  *
- * Materialization (ADR-0009, consistent with ADR-0007 §7): the shared cache
+ * Materialization (ADR 0007 Part II, consistent with ADR-0007 §7): the shared cache
  * holds depth-1 fetches of the head and the merge base, never a full clone.
  * A shallow cache has no ancestry relation, so `git diff base...head` inside
  * `pir find` would fail ("no merge base"). The driver therefore checks
@@ -75,10 +75,10 @@ export const resultFileFor = (repeatDir, view, id) => path.join(repeatDir, view,
 export const rowFileFor = (repeatDir, id) => path.join(repeatDir, "rows", `${id}.json`);
 
 /**
- * Seeded order for a row list, sharing M0's PRNG and Fisher-Yates loop.
+ * Seeded order for a row list, sharing the verifier benchmark's PRNG and Fisher-Yates loop.
  *
- * M2's change protocol runs before/after on a fixed PR subset, so the subset
- * has to be reproducible from (seed, limit) alone — the same contract M0's
+ * the change protocol runs before/after on a fixed PR subset, so the subset
+ * has to be reproducible from (seed, limit) alone — the same contract the verifier benchmark's
  * comment sample follows. Reusing `mulberry32` and the same backwards
  * Fisher-Yates means "seed 42" shuffles consistently across both benchmarks
  * and does not drift with a Node version or a different PRNG.
@@ -101,7 +101,7 @@ export function seededOrder(rows, seed) {
  * --only filters, --seed shuffles, --limit truncates — in that order, so the
  * recorded (limits.only, limits.limit, limits.seed) triple reproduces exactly
  * the instance set the round ran on. Without --seed the fixture order is kept
- * (pre-M2 rounds behave identically).
+ * (pre-change-protocol rounds behave identically).
  */
 export function selectFixtureRows(rows, { only = [], limit, seed } = {}) {
   if (!Array.isArray(rows)) throw new TypeError("rows must be an array");
@@ -189,7 +189,7 @@ export function effectiveJudgeLimits(options, previousSummary = null, judgePin =
 /**
  * Judge drift is a refusal, not a footnote: a round already judged by the real
  * judge only accepts a re-judge with the same model, round count and framework
- * commit, and never a downgrade to mock/off (ADR-0009 §11). Mock rounds are
+ * commit, and never a downgrade to mock/off (ADR 0007 Part II §11). Mock rounds are
  * pipeline checks and may be upgraded to a real judge; unjudged rounds accept
  * their first identity. Recorded values that older rounds did not carry are
  * unknown, not a mismatch.
@@ -213,7 +213,7 @@ export function assertJudgeCompatible(previousSummary, { judge, judgeModel, eval
 }
 
 /**
- * M2 provenance: the subset (and therefore every before/after comparison on
+ * change-protocol provenance: the subset (and therefore every before/after comparison on
  * it) is a pin, not an implementation detail. A different seed or a different
  * selected instance set is a different round, never a resumable one; a
  * judge-only run replays the recorded subset and must land on it exactly.
@@ -309,7 +309,7 @@ export function parseOptions(argv = [], env = process.env) {
   return values;
 }
 
-/** Shared merge-base resolution cache (same file M0 uses; failures are never cached). */
+/** Shared merge-base resolution cache (same file the verifier benchmark uses; failures are never cached). */
 export function loadMergeBaseCache(file) {
   if (!existsSync(file)) return {};
   try {
@@ -369,7 +369,7 @@ export function runCliOnce({ cli, checkout, base, head, maxRounds, model, runDir
   const args = [
     "find", "--base", base, "--head", head,
     "--max-rounds", String(maxRounds),
-    // Explicit unlimited: B3 (ADR-0006) applies default token ceilings when
+    // Explicit unlimited: the default budget (ADR-0006) applies token ceilings when
     // the flag is absent, which would measure the ceiling instead of the run.
     "--max-tokens", MAX_TOKENS,
     "--max-findings", MAX_FINDINGS,
@@ -481,7 +481,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     console.log("PIR_EVAL=1 node tests/eval/aacr/m1/run-aacr.js [--fixture fixtures/test-set.json] [--limit N] [--only <instance-id>]... [--repeats N] [--resume] [--round name] [--out-root out] [--cache ~/.cache/pir-aacr] [--cli dist/cli/cli.js] [--model provider/model] [--concurrency N] [--max-rounds N] [--timeout ms] [--view reported|confirmedOnly|both] [--judge off|mock|real] [--eval-rounds N] [--json]\n" +
       "Runs pir find once per positive_samples PR (same-repo serial, cross-repo concurrent) with rb-grade isolation, writing upstream-shaped results per view and per-instance rows incrementally.\n" +
       "Smoke: --limit 20 --concurrency 4 --model opencode-go/deepseek-v4.1-flash:medium (costs 20 model runs; never a CI gate).\n" +
-      "M2 change protocol subset: --limit 50 --seed 42 (deterministic, recorded as limits.seed + fixture.instanceSetDigest; --resume refuses a different subset).\n" +
+      "Change-protocol subset: --limit 50 --seed 42 (deterministic, recorded as limits.seed + fixture.instanceSetDigest; --resume refuses a different subset).\n" +
       "Exit status 3 with a valid envelope is recorded as an incomplete row, not an error; unexpected statuses, signal kills and unparseable stdout are errors.\n" +
       "--judge mock uses upstream's local similarity (zero cost); --judge real needs JUDGE_BASE_URL/JUDGE_API_KEY/JUDGE_MODEL.\n" +
       "--judge-only --resume judges an existing round's completed result files without re-running reviewers (sampled rounds).");
@@ -515,12 +515,12 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
   }
 
   if (options.judgeOnly) {
-    // ADR-0009 Iteration 3: a sampled round is judged from the completed
+    // ADR 0007 Part II Iteration 3: a sampled round is judged from the completed
     // result files without re-running reviewers; the judged population is the
     // round's recorded selection, so unrun instances stay visible in
     // upstream's missing_instances instead of shrinking the sample silently.
     // The recorded triple is replayed through the same selection rule, which
-    // is what keeps a seeded (M2) subset stable here.
+    // is what keeps a seeded change-protocol subset stable here.
     const recorded = previousSummary?.limits;
     if (!recorded) throw new Error(`--judge-only needs the round's summary.json: ${summaryPath}`);
     selected = selectFixtureRows(fixtureRows, {
@@ -547,11 +547,11 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
     configRoot = mkdtempSync(path.join(tmpdir(), "pir-aacr-m1-config-"));
     const config = snapshotConfig(configRoot, env);
     const model = options.model ?? config.model;
-    if (!model) throw new Error("set --model or PIR_MODEL, or configure a default pi model (M1 results must name the exact model id)");
+    if (!model) throw new Error("set --model or PIR_MODEL, or configure a default pi model (end-to-end results must name the exact model id)");
 
     // Provenance guards: one round = one model, one CLI build, one fixture,
     // one view/repeat configuration. A silent mix publishes numbers under a
-    // stamp that describes only half of them (M0 dogfood F-185, extended here).
+    // stamp that describes only half of them (verifier-benchmark dogfood F-185, extended here).
     if (previousSummary) {
       assertResumeCompatible(previousSummary, { model, cliSha256 });
       if (previousSummary.fixture?.sha256 && previousSummary.fixture.sha256 !== fixtureSha256) {
@@ -625,7 +625,7 @@ export async function main(argv = process.argv.slice(2), env = process.env, deps
         concurrency: runLimits.concurrency, maxRounds: runLimits.maxRounds,
         maxTokens: runLimits.maxTokens, maxFindings: runLimits.maxFindings,
         timeoutMs: runLimits.timeoutMs, cache: runLimits.cache,
-        // ADR-0009 §10/§11: only a real-judge run with the exact judge model
+        // ADR 0007 Part II §10/§11: only a real-judge run with the exact judge model
         // and framework commit recorded qualifies for comparison, so the
         // identity is recorded and enforced by assertJudgeCompatible.
         judge: judgeLimits.judge, judgeModel: judgeLimits.judgeModel,

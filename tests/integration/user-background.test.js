@@ -11,7 +11,7 @@ import { findIssues } from "../../dist/core/supervisor.js";
 import { resolveUserBackground } from "../../dist/core/user-background.js";
 
 /**
- * S2 (ADR-0016) acceptance at the real boundaries: the background reaches the
+ * ADR 0016 Part I acceptance at the real boundaries: the background reaches the
  * reviewer prompt (and only the reviewer prompt), its canonical hash lands in
  * run.json without the text, the manifest omits it when there is none, and the
  * CLI turns every guard failure into a usage error before any session exists.

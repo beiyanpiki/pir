@@ -70,7 +70,7 @@ export class JobRegistry {
       command: input.command,
       // The registry is readable through GET /v1/jobs and printed by
       // `pir jobs`; an inline user background is model input, not job
-      // metadata (ADR-0016, dogfood F-2).
+      // metadata (ADR 0016 Part I, dogfood F-2).
       argv: redactUserBackgroundArgv(input.argv),
       status: "queued",
       createdAt: Date.now(),

@@ -5,14 +5,14 @@ import { changedFileSummary } from "../../dist/changes/change-set.js";
 import { envelope } from "../../dist/app/output.js";
 
 /**
- * B1 acceptance A2: the change-mode filter's envelope change is purely
- * additive — a consumer written before B1 sees byte-identical fields, and the
+ * Change-mode filter acceptance: the change-mode filter's envelope change is purely
+ * additive — a consumer written before Change-mode filter sees byte-identical fields, and the
  * new record is the same projection the run manifest writes.
  */
 
 const HUNK = { newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: "@@ -1,1 +1,1 @@", lines: ["+const a = 1;"] };
 
-test("B1 envelope: files[] gains excluded/excludedReason without touching pre-B1 fields", () => {
+test("Change-mode filter envelope: files[] gains excluded/excludedReason without touching pre-filter fields", () => {
   const changeSet = {
     repoRoot: "/repo", base: "base", head: "head", mergeBase: "merge", patch: "", churn: 4,
     files: [
@@ -25,7 +25,7 @@ test("B1 envelope: files[] gains excluded/excludedReason without touching pre-B1
   assert.equal(parsed.schemaVersion, 1);
   assert.equal(parsed.command, "find");
   const [app, env] = parsed.data.run.files;
-  // A pre-B1 consumer reads exactly the same four keys with the same values.
+  // A pre-filter consumer reads exactly the same four keys with the same values.
   assert.deepEqual(
     { path: app.path, status: app.status, additions: app.additions, deletions: app.deletions },
     { path: "src/app.ts", status: "modified", additions: 3, deletions: 1 },

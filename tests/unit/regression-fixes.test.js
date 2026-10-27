@@ -95,12 +95,12 @@ test("F-14: applyFeedback validates decision before writing anything", async () 
   }
 });
 
-test("B3: find applies the documented default token ceilings; audit keeps the unlimited default", async () => {
-  // B3 (ADR 0006) deliberately supersedes 82505f9's "no default token budget"
+test("Default budget: find applies the documented default token ceilings; audit keeps the unlimited default", async () => {
+  // Default budget (ADR 0006) deliberately supersedes 82505f9's "no default token budget"
   // policy for find: unbounded runaway cost on large change sets outweighed
   // "different problems need different amounts", and `--max-tokens unlimited`
   // restores that policy explicitly (risk R8's escape hatch). Audit keeps the
-  // pre-B3 semantics by construction — its Budget is built without role
+  // pre-budget semantics by construction — its Budget is built without role
   // ceilings — so a future refactor cannot silently cap a multi-day sweep.
   // The behavioral halves of this pin live in tests/unit/budget.test.js and
   // tests/integration/token-budget.test.js.
@@ -111,7 +111,7 @@ test("B3: find applies the documented default token ceilings; audit keeps the un
   assert.doesNotMatch(source, /DEFAULT_MAX_TOKENS/);
   const audit = source.slice(source.indexOf("export async function auditIssues"));
   assert.ok(audit.length > 0, "the audit section is present");
-  assert.doesNotMatch(audit, /reviewerTokens|verifierTokens/, "audit must not gain B3's default ceilings");
+  assert.doesNotMatch(audit, /reviewerTokens|verifierTokens/, "audit must not gain the default ceilings");
 });
 
 // --- batch-1 dogfood (issue #42): F-38 retry pacing, F-39 page consistency ---

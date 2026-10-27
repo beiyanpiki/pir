@@ -19,7 +19,7 @@ import {
 } from "../../tests/eval/aacr/m1/report-m1.js";
 
 /**
- * M1 A1 renderer: the bucket math mirrors upstream's formulas (micro per
+ * end-to-end report renderer: the bucket math mirrors upstream's formulas (micro per
  * bucket per judge round, averaged across rounds), missing instances stay out
  * of denominators, and a partial round cannot be published by accident.
  * Model-free; synthetic eval_res only.
@@ -167,9 +167,9 @@ test("rendered document carries the headline, buckets, missing count and health 
   const markdown = renderM1Report({
     summary, fixtureRows, metricsByView,
     meta: { framework: { repo: "https://github.com/alibaba/aacr-bench", commit: "e".repeat(40) }, citation: { arxiv: "2601.19494", bibtex: "@misc{test}" } },
-    title: "M1 test report", renderedAt: "2026-10-20T05:00:00.000Z",
+    title: "End-to-end test report", renderedAt: "2026-10-20T05:00:00.000Z",
   });
-  assert.match(markdown, /# M1 test report/);
+  assert.match(markdown, /# End-to-end test report/);
   assert.match(markdown, /arXiv:2601\.19494/);
   assert.match(markdown, /judge-model/);
   assert.match(markdown, /\*\*57\.1%\*\*/, "balanced_score headline");
@@ -208,7 +208,7 @@ test("a round without finishedAt is refused unless explicitly partial", () => {
   assert.match(markdown, /PARTIAL ROUND/);
 });
 
-test("M0 dogfood F-3: matched counts are averaged with the rates they pair with", () => {
+test("verifier-benchmark dogfood F-3: matched counts are averaged with the rates they pair with", () => {
   const byId = new Map(fixtureRows.map((row) => [row.instance_id, row]));
   const round1 = bucketMetricsForRound(evalRes, byId, (row) => row.project_main_language);
   const round2 = bucketMetricsForRound(evalResRound2, byId, (row) => row.project_main_language);
@@ -226,7 +226,7 @@ test("M0 dogfood F-3: matched counts are averaged with the rates they pair with"
   assert.match(markdown, /Matched counts are the mean of the per-round micro counts/);
 });
 
-test("M0 dogfood F-5: a two-repeat summary renders the selected repeat and names it", () => {
+test("verifier-benchmark dogfood F-5: a two-repeat summary renders the selected repeat and names it", () => {
   const judge = [
     { view: "reported", repeat: 1, ok: true, metricsPath: "/rounds/repeat-1/reported/metrics_1_average.json" },
     { view: "reported", repeat: 2, ok: true, metricsPath: "/rounds/repeat-2/reported/metrics_2_average.json" },
@@ -245,7 +245,7 @@ test("M0 dogfood F-5: a two-repeat summary renders the selected repeat and names
   assert.match(markdown, /--repeat <n>/);
 });
 
-test("M0 dogfood F-6: the renderer refuses a fixture that is not the round's pinned bytes", () => {
+test("verifier-benchmark dogfood F-6: the renderer refuses a fixture that is not the round's pinned bytes", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "pir-m1-fixture-"));
   try {
     const fixturePath = path.join(dir, "fixture.json");
@@ -266,7 +266,7 @@ test("M0 dogfood F-6: the renderer refuses a fixture that is not the round's pin
   }
 });
 
-test("M0 dogfood F-1: the Reproduce block carries the recorded --max-rounds and --timeout", () => {
+test("verifier-benchmark dogfood F-1: the Reproduce block carries the recorded --max-rounds and --timeout", () => {
   const markdown = renderM1Report({ summary, fixtureRows, metricsByView, meta: null, renderedAt: "2026-10-20T05:00:00.000Z" });
   assert.match(markdown, /--max-rounds 2/);
   assert.match(markdown, /--timeout 7200000/);

@@ -40,7 +40,7 @@ reviewers use `list_snapshot_files` to navigate the pinned tree.
 
 A change-mode reviewer also receives the change's file list up front — path,
 status, churn, and the change-mode filter's exclusion reason for a withheld
-file, capped at 60 entries with an explicit remainder line (ADR 0017). The list
+file, capped at 60 entries with an explicit remainder line (ADR 0004 Part IV). The list
 is the projection `data.run.files[]` records, so the prompt cannot disagree with
 the run record. The reviewer is asked to account for every listed file before
 `finish_round` — investigated, or explicitly skipped with a stated reason in
@@ -159,7 +159,7 @@ are also stored as the run progresses, so stored findings and coverage can be
 examined before a long audit ends. There is no automatic restart/resume of an
 interrupted audit.
 
-A long local audit can outlive its terminal with `pir audit --detach` (ADR 0022): the run continues as a detached background process, its log is `~/.pir/logs/<jobId>.log`, and its receipt records the final exit code once it settles. That is durability, not resume — a killed detach is not restarted or continued (ADR 0018's no-go stands), and an unsettled receipt whose log stopped growing is how a killed detach is told apart from a running one; there is no watchdog. Two concurrent detaches are distinguished by their receipts and logs, not by `pir audit coverage --latest`.
+A long local audit can outlive its terminal with `pir audit --detach` (ADR 0016 Part IV): the run continues as a detached background process, its log is `~/.pir/logs/<jobId>.log`, and its receipt records the final exit code once it settles. That is durability, not resume — a killed detach is not restarted or continued (ADR 0016 Part II's no-go stands), and an unsettled receipt whose log stopped growing is how a killed detach is told apart from a running one; there is no watchdog. Two concurrent detaches are distinguished by their receipts and logs, not by `pir audit coverage --latest`.
 
 Coverage records the work that was completed:
 
@@ -227,7 +227,7 @@ structurally as `budgetStop: {kind, reason}` in the run manifest) while
 `incomplete` is computed exactly as before. An explicit `--max-tokens N`
 replaces those defaults with one hard whole-run ceiling measured on total
 tokens: it also refuses new verifier admissions mid-drain, so pending
-candidates stay unverified exactly as they did before B3. Audit keeps the
+candidates stay unverified exactly as they did before the default budget. Audit keeps the
 unlimited-until-set semantics.
 
 `data.incomplete` covers pending candidates, verification execution errors,

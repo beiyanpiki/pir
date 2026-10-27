@@ -438,7 +438,7 @@ test("find_* descriptions lead with the use case, keep provenance caveats, and c
   }
 });
 
-test("coverage observers: read_code fires with the clamped window; get_change fires only on raw hunk pages (C1)", async () => {
+test("coverage observers: read_code fires with the clamped window; get_change fires only on raw hunk pages (coverage ledger)", async () => {
   const repo = createTempGitRepo();
   try {
     repo.write("source.ts", "one\nthree\nfive\nseven\n");
@@ -513,7 +513,7 @@ test("coverage observers: read_code credits only the lines actually returned (do
   }
 });
 
-test("B1 dogfood F-177: the change-mode secret guard covers read_code and search_text", async () => {
+test("Change-mode filter dogfood F-177: the change-mode secret guard covers read_code and search_text", async () => {
   const repo = createTempGitRepo("pir-secret-guard-");
   try {
     repo.write("src/app.ts", "const token = readEnv();\n");
@@ -557,7 +557,7 @@ test("B1 dogfood F-177: the change-mode secret guard covers read_code and search
     repo.cleanup();
   }
 });
-test("B1 dogfood F-183: a secret renamed away stays unreadable at its new name", async () => {
+test("Change-mode filter dogfood F-183: a secret renamed away stays unreadable at its new name", async () => {
   const repo = createTempGitRepo("pir-secret-rename-");
   try {
     repo.write("src/app.ts", "const token = readEnv();\n");

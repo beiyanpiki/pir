@@ -180,7 +180,7 @@ test("writeRunManifest writes run.json next to transcripts and is a no-op withou
   }
 });
 
-test("session events carry the finder angle (F1, dogfood F-129)", () => {
+test("session events carry the finder angle (angle fan-out, dogfood F-129)", () => {
   const received = [];
   const sink = createRunEventSink("run-a", "proj-1");
   const unsubscribe = onRunEvent((event) => received.push(event));
@@ -210,7 +210,7 @@ test("session starts expose only the transcript basename, including factory fail
   }
 });
 
-test("line-corrected events carry both ranges on the emitting session (B2)", () => {
+test("line-corrected events carry both ranges on the emitting session (snippet anchoring)", () => {
   const received = [];
   const sink = createRunEventSink("run-b2", "project-1");
   const unsubscribe = onRunEvent((event) => received.push(event));

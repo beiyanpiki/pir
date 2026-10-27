@@ -7,7 +7,7 @@ import { CHANGED_FILES_LIMIT } from "../../dist/agents/prompts.js";
 import { findIssues } from "../../dist/core/supervisor.js";
 
 /**
- * S3 (ADR-0017) at the supervisor boundary: the reviewer prompt carries the
+ * ADR 0004 Part IV at the supervisor boundary: the reviewer prompt carries the
  * complete changed-file map (path, status, churn, exclusion reason), capped at
  * 60 entries with an explicit remainder line, and asks for per-file accounting
  * without making it a hard error. Prompt-only: no extra call, no new ask.
@@ -56,7 +56,7 @@ test("the changed-file map reaches the reviewer prompt with status, churn and ex
     assert.match(prompt, /- src\/app\.ts \(added, \+1\/-0\)/);
     assert.match(prompt, /- \.env \(added, \+1\/-0\) — excluded: secret path \(dotenv file\); never sent to a model/);
     // The map is the change set, not the diff: the excluded file's body never
-    // enters the prompt (B1 stays intact).
+    // enters the prompt (the change-mode filter stays intact).
     assert.equal(prompt.includes("SUPER_SECRET_TOKEN"), false);
     // Placement: after the change line, before the process rules and the
     // evidence block.
@@ -93,7 +93,7 @@ test("an unchanged change set renders no section, so the prompt stays byte-ident
     const prompts = [];
     const first = await findIssues({ ...f.ctx, factory: capturingFactory(prompts), options: { maxRounds: 1 } });
     assert.ok(prompts[0].includes("CHANGED FILES"));
-    // Replaying the same prompt input without the list is the pre-S3 prompt.
+    // Replaying the same prompt input without the list is the pre-change prompt.
     const { reviewerPrompt } = await import("../../dist/agents/prompts.js");
     const base = { base: "b", head: "h", round: 1, maxRounds: 2, maxFindings: 10, findingsRemaining: 10, focus: [], memoryPack: "", structuralQueries: false };
     assert.equal(reviewerPrompt({ ...base, changedFiles: [] }), reviewerPrompt(base));

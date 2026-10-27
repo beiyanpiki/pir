@@ -5,7 +5,7 @@ export interface ChangedFile extends FileDiff {
   /** File extension derived language hint, e.g. "ts". */
   language: string;
   /**
-   * Change-mode filter (B1): the file was excluded from diff review. Its
+   * Change-mode filter: the file was excluded from diff review. Its
    * metadata (path/status/churn) stays visible to previews, the reviewer and
    * the run record, while `hunks` is emptied so the diff body cannot reach a
    * model.
@@ -33,8 +33,8 @@ export interface ChangeSet {
 
 /**
  * The path/status/churn projection the CLI envelope and the run manifest both
- * record. B1 adds the exclusion record here, once, so the two surfaces cannot
- * drift — and so every pre-B1 field keeps its name and value.
+ * record. The change-mode filter adds the exclusion record here, once, so the two surfaces cannot
+ * drift — and so every pre-filter field keeps its name and value.
  */
 export interface ChangedFileSummary {
   path: string;

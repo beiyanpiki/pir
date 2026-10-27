@@ -119,7 +119,7 @@ index 1111111..2222222 100644
   assert.equal(summary.files.length, 200);
 });
 
-test("unreadHunks enumerates uncovered hunks in file order up to the limit (C1 stage 2)", () => {
+test("unreadHunks enumerates uncovered hunks in file order up to the limit (coverage follow-up)", () => {
   const c = coverage();
   c.recordHunk("gone.ts", 0);
   c.recordRead("src/a.ts", { startLine: 1, endLine: 4 });

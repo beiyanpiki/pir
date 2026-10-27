@@ -4,7 +4,7 @@ import { UsageError, resolveOutputFormat } from "../../dist/cli/executor.js";
 import { machineOutputFromArgv } from "../../dist/cli/machine-output.js";
 
 /**
- * Roadmap S6 / ADR 0020: `--format` is the one output selector for find and
+ * ADR 0016 Part III: `--format` is the one output selector for find and
  * audit, and legacy `--json` is the same choice spelled differently. The
  * resolver is pure, so the precedence (and the refusal to guess) is testable
  * without a repository or a session.

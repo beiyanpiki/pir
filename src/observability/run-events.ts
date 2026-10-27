@@ -118,7 +118,7 @@ export type RunEvent =
     }
   | {
       /**
-       * Roadmap B2: a record_candidate anchor carried an excerpt whose unique
+       * Snippet anchoring: a record_candidate anchor carried an excerpt whose unique
        * local match decided its lines. Carries both ranges so consumers can
        * tell an actual displacement from a no-op confirmation. Observational
        * only — consumers that do not know the kind must ignore it.
@@ -251,7 +251,7 @@ export interface SessionMeta {
   unitId?: string;
   attempt?: number;
   displayId?: string;
-  /** F1: the specialized finder angle this reviewer session runs as. */
+  /** Angle fan-out: the specialized finder angle this reviewer session runs as. */
   angle?: string;
   /** Basename only; never expose the server's transcript directory. */
   transcriptFile?: string;
@@ -264,7 +264,7 @@ export interface SessionEventEmitter {
   /** Raw SDK session event; irrelevant kinds are dropped, nothing is thrown. */
   sdkEvent(event: unknown): void;
   sessionEnded(error?: string, usage?: SessionUsage): void;
-  /** B2: one anchor's excerpt located locally and overrode the model's range. */
+  /** Snippet anchoring: one anchor's excerpt located locally and overrode the model's range. */
   lineCorrected(correction: AnchorLineCorrection): void;
 }
 
@@ -456,10 +456,10 @@ export interface RunSessionRef {
   unitId?: string;
   attempt?: number;
   displayId?: string;
-  /** F1: the angle this reviewer session ran as. */
+  /** Angle fan-out: the angle this reviewer session ran as. */
   angle?: string;
   /**
-   * F1: collector-assigned displayIds inside this session's transcript → the
+   * Angle fan-out: collector-assigned displayIds inside this session's transcript → the
    * supervisor-reassigned unique ids (parallel angle sessions collide on
    * F-<round><seq> by construction).
    */
@@ -482,12 +482,12 @@ export interface RunManifest {
   startedAt: number;
   finishedAt: number;
   stoppedBecause: string;
-  /** B3 (ADR 0006): the token/wall-clock ceiling that ended the run, when one did. */
+  /** ADR 0006 (default budget): the token/wall-clock ceiling that ended the run, when one did. */
   budgetStop?: { kind: import("../core/budget.js").BudgetCeilingKind; reason: string } | null;
   incomplete: boolean;
   /** Deterministic run-level verdict from the verified findings (Q4). */
   runVerdict: "incorrect" | "correct-with-findings" | "needs-review" | "correct";
-  /** Change mode (C1): diff coverage ledger — which hunks the reviewer read. */
+  /** Change mode (coverage ledger): diff coverage ledger — which hunks the reviewer read. */
   changeCoverage?: import("../core/change-coverage.js").ChangeCoverageSummary;
   /** Null = the run reported without a findings cap (#57). */
   maxFindings: number | null;
@@ -499,16 +499,16 @@ export interface RunManifest {
   usage?: SessionUsage;
   durationMs: number;
   estimatedTokens: number;
-  /** Change mode: the reviewed file list (B1 adds the exclusion record). */
+  /** Change mode: the reviewed file list (change-mode filter adds the exclusion record). */
   files?: Array<{ path: string; status: string; additions: number; deletions: number; excluded?: boolean; excludedReason?: string }>;
   /**
-   * B5 (ADR-0010): applied project rules, their canonical hash and the
+   * ADR 0010 Part I: applied project rules, their canonical hash and the
    * reviewer built-in-guidance suppression flag; absent when no rule file was
    * loaded.
    */
   projectRules?: import("../rules/project-rules.js").ProjectRulesSummary;
   /**
-   * S2 (ADR-0016): provenance for an explicit user background — where it came
+   * ADR 0016 Part I: provenance for an explicit user background — where it came
    * from, its canonical sha256 and its sizes. The text itself is never
    * persisted; absent when the run had no background (the default).
    */

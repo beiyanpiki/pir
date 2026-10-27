@@ -16,7 +16,7 @@ at RB `aec7b37`. **The baseline era is open**: behavior PRs append delta
 rows here, and a "no regression" claim requires both comparison runs no
 worse than the baseline's worse run — **GP ≥ 91.0%, GR ≥ 16.6%,
 AP ≥ 95.2%, AR ≥ 24.3%** (macro, the worse of run1/run2 per metric).
-Per-PR rows for slices merged before the baseline (Q1–M1) remain
+Per-PR rows for slices merged before the baseline remain
 **waived** (not isolable after the fact); their gate was the scenario
 harness. Recording history and the protocol revision are in the round's
 Notes below; the full trail (capped attempt → zero findings, discarded;

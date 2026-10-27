@@ -69,7 +69,7 @@ preserved. For a review limited to uncommitted work, an explicit `--base HEAD`
 also makes the intended comparison consistent across local and remote runs.
 
 A change-mode reviewer also receives the change's file list before its first
-read (ADR 0017): path, status, churn, and the filter's exclusion reason for a
+read (ADR 0004 Part IV): path, status, churn, and the filter's exclusion reason for a
 withheld file, capped at 60 entries with an explicit remainder line. It is the
 same projection `data.run.files[]` records, so the prompt cannot disagree with
 the run. The prompt asks the reviewer to account for every listed file before
@@ -136,7 +136,7 @@ review guidance. Agents have structured submission tools but no source-edit,
 shell-execution, or decision-memory-write tools.
 
 The reviewer prompt can additionally carry one explicit, user-supplied
-background block (`--background` / `--background-file`, ADR 0016). It is
+background block (`--background` / `--background-file`, ADR 0016 Part I). It is
 sanitised, hard-capped, delimited, and labelled as context rather than
 instruction; it is injected after every process rule and immediately before
 the evidence block, and every verifier session keeps its prompt unchanged.
@@ -272,7 +272,7 @@ result. A synchronous client's disconnect also leaves the job running and its
 result available. Bundled remote audits use asynchronous submission by default.
 In remote mode, `--detach` makes any find/audit submission asynchronous and returns right after acceptance (#53): stdout carries a submission envelope with the full job id; exit 0 attests acceptance, never review success. Wait paths render a poll-liveness line on state changes and about once a minute (#55) — connection alive and log growth, explicitly not review progress.
 
-In local mode the same flag keeps the run alive without a server (ADR 0022). The CLI re-executes itself with `detached: true` and `stdio: ["ignore", logFd, logFd]` bound to `~/.pir/logs/<jobId>.log` (0600, directory 0700), writes a schemaVersion-1 receipt before the spawn, and the child settles that receipt from its exit hook (`settledAt`, `exitCode`). A signal death runs no exit hook, so an unsettled receipt plus a log that stopped growing is exactly how a killed detach is identified; there is no watchdog and nothing resumes it. The local receipt reuses the #52 layer instead of introducing a second record: `mode: "local"` carries `logPath`, no origin and no run id, and `pir receipts show` prints local follow-up commands instead of the remote jobs lane.
+In local mode the same flag keeps the run alive without a server (ADR 0016 Part IV). The CLI re-executes itself with `detached: true` and `stdio: ["ignore", logFd, logFd]` bound to `~/.pir/logs/<jobId>.log` (0600, directory 0700), writes a schemaVersion-1 receipt before the spawn, and the child settles that receipt from its exit hook (`settledAt`, `exitCode`). A signal death runs no exit hook, so an unsettled receipt plus a log that stopped growing is exactly how a killed detach is identified; there is no watchdog and nothing resumes it. The local receipt reuses the #52 layer instead of introducing a second record: `mode: "local"` carries `logPath`, no origin and no run id, and `pir receipts show` prints local follow-up commands instead of the remote jobs lane.
 
 Jobs are process-local delivery records. They keep 2,000 recent log lines,
 cap retained output at 32 MiB, and retain the latest 100 settled jobs. A restart
@@ -410,7 +410,7 @@ hash of the effective rules (canonicalized text, globs, include/exclude and
 glob, `mergeBuiltin`, canonical guidance and rules hash, or the gate that
 stopped each layer — from the same matcher the prompt uses
 (`matchProjectRule`); it opens no project database and starts no session
-(ADR 0019). Rules are allowed in change-mode `find` only: audit has no diff to
+(ADR 0010 Part II). Rules are allowed in change-mode `find` only: audit has no diff to
 scope them, and `--rule` is a local path, so remote mode rejects it while the
 repository and global layers keep working from the bundle.
 
@@ -418,6 +418,15 @@ repository and global layers keep working from the bundle.
 
 - [Shared review machinery for change and audit targets](adr/0001-shared-review-executor.md)
 - [Web payloads for long runs](adr/0002-web-ui-long-run-payloads.md)
+- [Findings-quality roadmap](adr/0003-findings-quality-roadmap.md)
+- [Change-mode review pipeline](adr/0004-change-mode-review-pipeline.md)
+- [Snippet-anchored location correction](adr/0005-snippet-anchored-location-correction.md)
+- [Default token budget with graceful truncation](adr/0006-default-token-budget-with-grace.md)
+- [AACR benchmarks and verifier calibration](adr/0007-aacr-benchmarks-and-verifier-calibration.md)
+- [Structured verifier rejection grounds](adr/0008-structured-verifier-rejection-grounds.md)
+- [Layered project rule file and rule introspection](adr/0010-project-rules-and-introspection.md)
+- [Deferred and rejected directions](adr/0011-deferred-and-rejected-directions.md)
+- [Invocation inputs, outputs and long-running execution](adr/0016-invocation-inputs-outputs-and-long-runs.md)
 
 The ADRs record decisions at the time they were made. Current module behavior
 is described above and in the source files.

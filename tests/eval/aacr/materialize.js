@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — materialization (shared clone cache to per-comment JSONL).
+ * AACR-Bench verifier benchmark — materialization (shared clone cache to per-comment JSONL).
  *
  * Turns sampled dataset comments into intermediate JSONL rows: the per-comment
  * diff (merge-base..capture-time-head, narrowed to the comment's path) and the

@@ -5,7 +5,7 @@ import { createTempGitRepo } from "../fixtures/helpers.js";
 import { executePirCommand, UsageError } from "../../dist/cli/executor.js";
 
 /**
- * B1/T4: `pir find --preview` is the pure readout of the change-mode filter —
+ * preview: `pir find --preview` is the pure readout of the change-mode filter —
  * the same buildChangeSet + selectChangeFiles calls a real find makes, with no
  * run row, no model session and no writes.
  */
@@ -21,7 +21,7 @@ function seedRepo() {
   return repo;
 }
 
-test("B1: find --preview prints the selection in text without a run or a model", async () => {
+test("Change-mode filter: find --preview prints the selection in text without a run or a model", async () => {
   const repo = seedRepo();
   try {
     const result = await executePirCommand(["find", "--preview", "--no-sync-index", "--cwd", repo.dir], {
@@ -42,7 +42,7 @@ test("B1: find --preview prints the selection in text without a run or a model",
   }
 });
 
-test("B1: find --preview --json carries the same decision per file, plus the policy", async () => {
+test("Change-mode filter: find --preview --json carries the same decision per file, plus the policy", async () => {
   const repo = seedRepo();
   const dbPath = path.join(repo.dir, "memory.sqlite");
   try {
@@ -95,7 +95,7 @@ test("B1: find --preview --json carries the same decision per file, plus the pol
   }
 });
 
-test("B1: find --preview rejects run-shaping flags instead of ignoring them", async () => {
+test("Change-mode filter: find --preview rejects run-shaping flags instead of ignoring them", async () => {
   const repo = seedRepo();
   const dbPath = path.join(repo.dir, "memory.sqlite");
   try {

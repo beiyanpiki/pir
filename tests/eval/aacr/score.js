@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — scoring (kill-family and accuracy/precision/recall metrics). Pure functions plus a thin CLI.
+ * AACR-Bench verifier benchmark — scoring (kill-family and accuracy/precision/recall metrics). Pure functions plus a thin CLI.
  *
  * Label semantics: label = 1 means the comment is correct (it should survive),
  * label = 0 means it is incorrect (it should be intercepted). "keep" is the
@@ -15,7 +15,7 @@
  *
  * Metrics: accuracy / precision / recall / F1 over keeps, killRate (north star:
  * share of incorrect comments intercepted), falseKillRate (share of correct
- * comments destroyed — the B4 gate) and interceptPrecision (share of kills that
+ * comments destroyed — the rejection-grounds gate) and interceptPrecision (share of kills that
  * were actually noise), plus confidence AUC. ADR-0007 §5 explains why all three
  * kill-family numbers are reported together — a rate read alone can look like an improvement.
  */
@@ -170,10 +170,10 @@ export function bucketize(rows, key) {
 export const BUCKET_KEYS = ["source_model", "category", "context", "is_ai_comment"];
 
 /**
- * B4: rejection grounds, counted per arm. A ground is the auditable reason a
+ * Rejection grounds, counted per arm. A ground is the auditable reason a
  * comment died, so a false-kill cluster can be attributed to "guarded" or
  * "pre-existing" instead of a rationale archive. Rows from builds that
- * predate B4 carry no ground and are counted as `unknown` rather than
+ * predate the rejection-grounds change carry no ground and are counted as `unknown` rather than
  * dropped — a mixed round must not look clean.
  */
 export function rejectionGroundCounts(rows) {
@@ -190,8 +190,8 @@ export function rejectionGroundCounts(rows) {
 }
 
 /**
- * Token usage per arm, summed from the rows the CLI result reported. The M0
- * S1 experiment (ADR 0015) pre-registers output tokens as the cost side of a
+ * Token usage per arm, summed from the rows the CLI result reported. The verifier benchmark
+ * The field-order experiment (ADR 0007 Part III) pre-registers output tokens as the cost side of a
  * field-order comparison, so the number has to be part of the scorecard and of
  * the rendered results document, not a side note typed by hand. Rows that
  * reported no usage (error rows, older builds) are counted, never assumed to
@@ -248,7 +248,7 @@ export function scoreRun(rows, { bucketKeys = BUCKET_KEYS } = {}) {
       const kind = row?.diffBaseKind ?? "unknown";
       diffBaseKinds[kind] = (diffBaseKinds[kind] ?? 0) + 1;
     }
-    // B4 grounds describe kills, which both policies agree on (a kill is a
+    // Rejection grounds describe kills, which both policies agree on (a kill is a
     // rejected verdict either way), so the distribution is policy-independent.
     arms[arm] = { rows: armRows.length, diffBaseKinds, usage: usageSummary(armRows), rejectionGrounds: rejectionGroundCounts(armRows.filter((row) => classify(row, PRIMARY_POLICY) === "kill")), policies };
   }
@@ -291,7 +291,7 @@ export function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
     console.log("node tests/eval/aacr/score.js --run <out-root>/<round> [--arms verifier,ocr] [--out scores.json] [--json]\n" +
-      "Scores a finished M0 round directory (its <arm>/<id>.json rows) under both policies and prints the scorecard. Pure input/output: no model, no network.");
+      "Scores a finished verifier-benchmark round directory (its <arm>/<id>.json rows) under both policies and prints the scorecard. Pure input/output: no model, no network.");
     return 0;
   }
   if (!existsSync(options.run)) throw new Error(`run directory not found: ${options.run}`);

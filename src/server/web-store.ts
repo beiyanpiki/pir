@@ -95,9 +95,9 @@ export interface SessionRef {
   unitId?: string;
   attempt?: number;
   displayId?: string;
-  /** F1: the specialized finder angle this reviewer session ran as. */
+  /** Angle fan-out: the specialized finder angle this reviewer session ran as. */
   angle?: string;
-  /** F1: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
+  /** Angle fan-out: collector-id → supervisor-reassigned runtime id, for parallel angle sessions. */
   idMap?: Array<{ from: string; to: string }>;
   findingIdMap?: Array<{ from: string; to: string }>;
 }

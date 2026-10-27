@@ -126,7 +126,7 @@ test("/review-feedback usage errors notify instead of throwing", async () => {
   }
 });
 
-test("B3: --max-tokens uses the shared unlimited-aware contract on both review lanes", async () => {
+test("Default budget: --max-tokens uses the shared unlimited-aware contract on both review lanes", async () => {
   const { extractMaxTokens } = await import("../../dist/extension/commands.js");
   assert.equal(extractMaxTokens([]), undefined);
   assert.equal(extractMaxTokens(["--max-tokens", "250000"]), 250000);

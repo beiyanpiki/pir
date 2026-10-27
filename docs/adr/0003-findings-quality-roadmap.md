@@ -3,24 +3,26 @@
 ## Status
 
 **Accepted (2026-10-14).** Proposed 2026-10-09; the implementation series
-(D1–F1) completed as ordinary PRs against `dev`, tracked in issue #73:
-D1 #74, B1 #76, Q1 #78, Q2 #80, Q3 #81, Q4 #83, Q5 #84, C1 #86+#88,
-M1 #87, F1 #90; the B1-baseline recorded via #103. Each item of the
+completed as ordinary PRs against `dev`, tracked in issue #73: the plan
+phase (#74), the change-mode filter (#76), the quality items (#78, #80, #81,
+#83, #84), the coverage ledger (#86, #88), the verifier benchmark (#87), the
+angle fan-out (#90), and the filter baseline (#103). Each item of the
 decision was binding for that series; items may be individually reverted
 with evidence from the benchmark, in which case this ADR is amended.
 
-Acceptance (amended twice — the B1-baseline deferral, and the F1 A/B
-waiver of 2026-10-14, both maintainer decisions recorded in #73):
-Q1–Q3 landed under the scenario-harness variance gate; the ReviewBench
-baseline era opened with the 2× test-25 recording of 2026-10-13/14
-(50/50 runs OK; macro run1 GP=95.0% GR=16.6% AP=97.2% AR=24.3%, run2
-GP=91.0% GR=21.5% AP=95.2% AR=28.7%; variance floor GP≥91.0 GR≥16.6
-AP≥95.2 AR≥24.3 — see `tests/eval/reviewbench/RESULTS.md`). F1 merged
-ahead of its A/B rows (#90), and the F1 subset-10 A/B itself was
-**waived by maintainer decision** after the provider's weekly usage
-limit exhausted mid-recording; F1 therefore remains default-off and
-experimental, and a future A/B against the recorded baseline variance
-floor is the standing entry condition for promoting it.
+Acceptance (amended twice — the filter-baseline deferral and the angle
+fan-out A/B waiver of 2026-10-14, both maintainer decisions recorded in
+#73): the first three quality items landed under the scenario-harness
+variance gate; the ReviewBench baseline era opened with the 2× test-25
+recording of 2026-10-13/14 (50/50 runs OK; macro run1 GP=95.0% GR=16.6%
+AP=97.2% AR=24.3%, run2 GP=91.0% GR=21.5% AP=95.2% AR=28.7%; variance floor
+GP≥91.0 GR≥16.6 AP≥95.2 AR≥24.3 — see
+`tests/eval/reviewbench/RESULTS.md`). The angle fan-out merged ahead of its
+A/B rows (#90), and its subset-10 A/B was **waived by maintainer decision**
+after the provider's weekly usage limit exhausted mid-recording; it
+therefore remains default-off and experimental, and a future A/B against
+the recorded baseline variance floor is the standing entry condition for
+promoting it.
 
 ## Context
 
@@ -113,7 +115,7 @@ production review agents are judged on.
    Changes that cannot beat their regression risk on both surfaces are
    reverted or stay default-off.
    *(Amended 2026-10-10, maintainer decision in #73: the ReviewBench
-   baseline is deferred until before F1 — pre-baseline behavioral slices
+   baseline is deferred until before the angle fan-out — pre-baseline behavioral slices
    merge on the scenario-harness gate alone and their per-PR ReviewBench
    rows are waived; the delta-row regime resumes from the baseline
    onward. The amended acceptance clause in Status states the gate.)*

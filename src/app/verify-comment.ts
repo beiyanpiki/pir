@@ -1,5 +1,5 @@
 /**
- * `pir _verify-comment` — internal AACR-Bench M0 evaluation command.
+ * `pir _verify-comment` — internal AACR-Bench verifier-benchmark evaluation command.
  *
  * NOT part of the stable contract: underscore-prefixed, absent from help,
  * skills and docs, local-only (a remote server must never execute it), and
@@ -91,7 +91,7 @@ export interface VerifyCommentResult {
   verdict?: VerifierResult["verdict"];
   confidence?: number | null;
   uncertaintyReason?: string | null;
-  /** B4: the ground a rejected verdict named (change-mode only). */
+  /** Rejection grounds: the ground a rejected verdict named (change-mode only). */
   rejectionGround?: string | null;
   rationale?: string | null;
   ocrDecision?: string;
@@ -118,7 +118,7 @@ export function parseTask(json: unknown): VerifyCommentTask {
   // F-187: anchors are head-file lines. A LEFT-side comment's numbers refer to
   // the old file, so the sampler never emits one; refuse it loudly if it
   // arrives anyway rather than scoring a mis-anchored row.
-  if (comment.side !== "right") fail('comment.side must be "right" (LEFT-side comments anchor to old-file lines and are excluded from M0)');
+  if (comment.side !== "right") fail('comment.side must be "right" (LEFT-side comments anchor to old-file lines and are excluded from the verifier benchmark)');
   const material = task.material;
   if (!material || typeof material !== "object") fail("material is required");
   if (!/^[0-9a-f]{40}$/.test(String(material.head ?? ""))) fail("material.head must be a 40-char hex sha");
@@ -277,7 +277,7 @@ export async function runOcrArm(ctx: AppContext, task: VerifyCommentTask, model?
   try {
     session = await ctx.factory.createSession({
       cwd: ctx.repoRoot,
-      systemRole: "ocr comment reflection (AACR-Bench M0 comparison arm)",
+      systemRole: "ocr comment reflection (AACR-Bench verifier-benchmark comparison arm)",
       tools: [],
       builtinTools: [],
       model,

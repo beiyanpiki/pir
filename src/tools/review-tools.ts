@@ -90,7 +90,7 @@ export function createReadCodeTool(ctx: ToolContext): ReviewTool {
         const end = Math.min(requestedEnd, lines.length);
         if (start > Math.max(1, lines.length)) throw new Error("startLine is beyond the file");
         const page = pageLines(lines, start - 1, Math.min(MAX_WINDOW, Math.max(0, end - start + 1)), charOffset, (i) => `${String(i + 1).padStart(5)}| `);
-        // Coverage observation (C1): fire with the window actually returned —
+        // Coverage observation (coverage ledger): fire with the window actually returned —
         // read_code pages at MAX_WINDOW, so only lines the session could see
         // count, and a call that threw returned nothing. The range-less fire
         // inside readReviewFile keeps the audit path-count contract
@@ -142,7 +142,7 @@ export function createSearchTextTool(ctx: ToolContext): ReviewTool {
         const commit = await resolveReviewRevision(ctx, revision);
         const result = await searchCommit(ctx.repoRoot, commit, params.pattern, {
           isRegex, pathspec, limit, offset,
-          // B1: in change mode the non-overridable secret paths are invisible
+          // File filter: in change mode the non-overridable secret paths are invisible
           // to every pinned channel, including grep results.
           ...(ctx.blockSecretPaths ? { skipPath: (file: string) => renameAwareSecretReason(ctx.changeSet, file) !== undefined } : {}),
         });
@@ -281,7 +281,7 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
         const file = files[0]!;
         const fileLabel = (f: typeof file) => `## ${JSON.stringify(f.path)} [${f.status}] (+${f.additions}/-${f.deletions}); hunks: ${f.hunks.length}${f.oldPath ? `; renamed from ${JSON.stringify(f.oldPath)}` : ""}${f.excluded ? `; excluded from diff review: ${f.excludedReason ?? "policy"}` : ""}`;
         if (hunkIndex !== undefined) {
-          // B1: an excluded file's diff body is not reachable — say so at the
+          // File filter: an excluded file's diff body is not reachable — say so at the
           // tool boundary instead of "hunkIndex is beyond the available hunks".
           if (file.excluded) {
             throw new Error(`${JSON.stringify(file.path)} was excluded from diff review (${file.excludedReason ?? "policy"}); only its path/status/churn metadata is available`);
@@ -290,7 +290,7 @@ export function createGetChangeTool(ctx: ToolContext): ReviewTool {
           if (!hunk) throw new Error("hunkIndex is beyond the available hunks");
           const page = pageLines(hunk.lines, offset, limit, charOffset);
           // Raw hunk lines were returned to the session — a deliberate read
-          // (C1). Overview and hunk-index listings never fire the observer.
+          // (coverage ledger). Overview and hunk-index listings never fire the observer.
           if (page.lines.length > 0) ctx.hunkObserver?.(file.path, hunkIndex);
           const more = page.nextOffset < hunk.lines.length;
           const continuation = more ? { path: file.path, hunkIndex, offset: page.nextOffset, limit, ...(page.charOffset ? { charOffset: page.charOffset } : {}) } : null;

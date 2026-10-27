@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — eval driver (spawns _verify-comment with rb-grade isolation).
+ * AACR-Bench verifier benchmark — eval driver (spawns _verify-comment with rb-grade isolation).
  *
  * Spawns `pir _verify-comment` once per materialized comment with the same
  * environment isolation ReviewBench uses (tests/eval/reviewbench/run-rb.js):
@@ -37,8 +37,8 @@ export const sha256 = (value) => createHash("sha256").update(value).digest("hex"
 
 /**
  * Build identity for provenance. `dist/cli/cli.js` is a thin dispatcher, so
- * hashing that one file cannot tell two engines apart — B4's before/after
- * rounds proved it: the pre- and post-B4 builds share cli.js byte for byte
+ * hashing that one file cannot tell two engines apart — the rejection-grounds before/after
+ * rounds proved it: the pre- and post-change builds share cli.js byte for byte
  * while behaving differently. The digest therefore covers every built module
  * under dist/ (sorted path + content), which changes whenever any behavior
  * does.
@@ -304,7 +304,7 @@ export function scoreRow(task, arm, run) {
     verdict: data.verdict ?? null,
     confidence: data.confidence ?? null,
     uncertaintyReason: data.uncertaintyReason ?? null,
-    // B4: the ground a rejection named, so score.js can bucket kills by reason.
+    // Rejection grounds: the ground a rejection named, so score.js can bucket kills by reason.
     rejectionGround: data.rejectionGround ?? null,
     rationale: data.rationale ?? null,
     ocrDecision: data.ocrDecision ?? null,
@@ -357,7 +357,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   if (!header) throw new Error(`materialized file has no provenance header: ${options.materialized} (run materialize.js)`);
   const meta = loadMeta(options.meta);
   if (header.dataset?.sha256 !== meta.dataset.sha256) throw new Error("materialized JSONL was built from a different dataset revision than meta.json pins");
-  if (!options.model) throw new Error("set --model or PIR_MODEL (M0 results must name the exact model id)");
+  if (!options.model) throw new Error("set --model or PIR_MODEL (verifier-benchmark results must name the exact model id)");
 
   const usable = rows.filter((row) => !row.error);
   const materializationErrors = rows.filter((row) => row.error);

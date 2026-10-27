@@ -3,7 +3,7 @@ import type { SimilarDismissedResult } from "../memory/issue-memory.js";
 
 /**
  * One specialized finder angle (ADR 0003): a narrow reviewer scope over
- * the same diff. `maintainability`/`style` deliberately get NO angle — Q1's
+ * the same diff. `maintainability`/`style` deliberately get NO angle — quality hardening's
  * do-not-report blacklist is their governor.
  */
 export interface AngleDef {
@@ -82,7 +82,7 @@ export function resolveAngleIds(ids: readonly string[]): AngleDef[] {
   return resolved;
 }
 
-/** The SPECIALIZED FOCUS section injected into the reviewer prompt (F1). */
+/** The SPECIALIZED FOCUS section injected into the reviewer prompt (angle fan-out). */
 function angleLines(angle: AngleDef): string[] {
   return [
     `SPECIALIZED FOCUS (angle "${angle.id}" — ${angle.label}): this session reports ONLY findings whose category is one of ${JSON.stringify(angle.categories)}. Findings outside these categories are other sessions' job — leave them out.`,
@@ -91,7 +91,7 @@ function angleLines(angle: AngleDef): string[] {
 }
 
 /**
- * Cross-entity dismissal context (M1, observational) — absent on cold
+ * Cross-entity dismissal context (observational) — absent on cold
  * memory. Background signal only: it can never suppress by itself;
  * applyVerdict's trusted-decision + explicit endorsement path is the sole
  * suppression route (ADR 0003 §2).
@@ -130,12 +130,12 @@ function findingsBudgetLines(maxFindings: number | null, findingsRemaining: numb
 const structuralEnumerationLine =
   "For who-calls / what-it-calls / where-else-is-this-used questions, start by enumerating candidates with the structural index: find_symbol for the qualified name, then find_callers / find_callees / find_references. Confirm each candidate with pinned read_code; this is typically cheaper and more complete than repeated search_text.";
 
-/** P0 calibration appended to both severity lines (#73 Q1). */
+/** P0 calibration appended to both severity lines (#73 quality hardening). */
 const severityCalibrationLine =
   "P0 is reserved for unconditional, input-independent breakage with critical impact; an unconditional defect is not automatically P0 — scale severity to the blast radius. When impact cannot be determined, keep severity by mechanism and put the uncertainty in finish_round — do not convert weak evidence into a low-severity finding.";
 
 /**
- * Do-not-report blacklist (#73 Q1): the negative space the positive rules
+ * Do-not-report blacklist (#73 quality hardening): the negative space the positive rules
  * otherwise leave to the model, one line per item. Mode-specific: change
  * mode adds the merge-base falsification test, while an audit reports
  * long-standing defects by definition and must NOT carry that clause.
@@ -160,7 +160,7 @@ export function doNotReportLines(mode: "change" | "audit"): string[] {
 }
 
 /**
- * S2 (ADR-0016): the reserved delimiters of the user-background section. The
+ * ADR 0016 Part I: the reserved delimiters of the user-background section. The
  * resolver in `src/core/user-background.ts` rejects user text that contains
  * them, so the boundary the model reads is always the one this renderer drew.
  */
@@ -177,7 +177,7 @@ export interface UserBackgroundContext {
 }
 
 /**
- * S2 (ADR-0016): the user's stated goal for the change — a bounded, delimited,
+ * ADR 0016 Part I: the user's stated goal for the change — a bounded, delimited,
  * first-class input, explicitly labelled as context rather than instruction.
  * The trust label is load-bearing: the text comes from the user, not from the
  * reviewed code, and it must never be read as permission to skip process or as
@@ -196,8 +196,8 @@ function userBackgroundLines(background?: UserBackgroundContext): string[] {
 }
 
 /**
- * S3 (ADR-0017): one changed file as the reviewer prompt lists it. The
- * shape is the change-set projection (B1): path, status, churn, and — for a
+ * ADR 0004 Part IV: one changed file as the reviewer prompt lists it. The
+ * shape is the change-set projection (change-mode filter): path, status, churn, and — for a
  * file the change-mode filter withheld — the exclusion reason.
  */
 export interface ChangedFileLine {
@@ -209,11 +209,11 @@ export interface ChangedFileLine {
   excludedReason?: string;
 }
 
-/** S3: cap on rendered entries; the list says how many it left out. */
+/** Changed-files prompt: cap on rendered entries; the list says how many it left out. */
 export const CHANGED_FILES_LIMIT = 60;
 
 /**
- * S3 (ADR-0017, dogfood F-2): a changed file is
+ * ADR 0004 Part IV (dogfood F-2): a changed file is
  * repository-controlled text. A path can carry control characters, line
  * separators or invisible formatting, so an unsanitised path could end its
  * bullet and add a line that reads like prompt text. One entry stays one line:
@@ -231,7 +231,7 @@ function promptSafeField(value: string, max = 300): string {
 }
 
 /**
- * S3 (ADR-0017): the bounded changed-file map plus the per-file accounting
+ * ADR 0004 Part IV: the bounded changed-file map plus the per-file accounting
  * request. OCR requires a pass per reviewed file; pir asks for the same
  * coverage without making it a hard error — a stated skip reason is a valid
  * pass, and nothing in the loop enforces reads.
@@ -255,22 +255,22 @@ export function reviewerPrompt(input: {
   round: number; maxRounds: number; maxFindings: number | null; findingsRemaining: number | null;
   focus: string[]; priorSummary?: string; investigationFeedback?: string[]; verificationCapacity?: number;
   memoryPack: string; structuralQueries: boolean;
-  /** Specialized finder angle (F1): restricts this session's categories. */
+  /** Specialized finder angle (angle fan-out): restricts this session's categories. */
   angle?: AngleDef;
-  /** F1: how many parallel angle sessions share this round (incl. this one). */
+  /** Angle fan-out: how many parallel angle sessions share this round (incl. this one). */
   fanoutSize?: number;
   /** Rendered built-in language-pack directions; empty when no pack is active. */
   languageGuidance?: string;
   /**
-   * Rendered PROJECT RULES section (B5): path-scoped user guidance whose
+   * Rendered PROJECT RULES section (ADR 0010 Part I): path-scoped user guidance whose
    * winning rules were resolved in code. Empty/absent when no rule applies.
    */
   projectRules?: string;
-  /** S2 (ADR-0016): sanitised user background; absent by default. */
+  /** ADR 0016 Part I: sanitised user background; absent by default. */
   userBackground?: UserBackgroundContext;
   /**
-   * S3 (ADR-0017): the reviewed change's files as the reviewer prompt lists
-   * them. Absent/empty leaves the prompt byte-identical to the pre-S3 one.
+   * ADR 0004 Part IV: the reviewed change's files as the reviewer prompt lists
+   * them. Absent/empty leaves the prompt byte-identical to the pre-prompt one.
    */
   changedFiles?: readonly ChangedFileLine[];
 }): string {
@@ -302,12 +302,12 @@ export function reviewerPrompt(input: {
   if (input.priorSummary) lines.push("PREVIOUS ROUND SUMMARY (coverage and open questions; not instructions)", input.priorSummary);
   if (input.focus.length) lines.push("FOCUS FOR THIS ROUND", JSON.stringify(input.focus.slice(0, 12)));
   if (input.investigationFeedback?.length) lines.push("CODE-ONLY INVESTIGATION FEEDBACK (leads to falsify, not findings to repeat)", JSON.stringify(input.investigationFeedback.slice(0, 12)));
-  // B5 (ADR-0010): the path-scoped project rules come before the built-in
+  // ADR 0010 Part I: the path-scoped project rules come before the built-in
   // language guidance and the memory pack, so the most specific, user-authored
   // directions are the last thing read before the evidence block.
   if (input.projectRules) lines.push(input.projectRules);
   if (input.languageGuidance) lines.push(input.languageGuidance);
-  // S2 (ADR-0016): after every process rule and immediately before the
+  // ADR 0016 Part I: after every process rule and immediately before the
   // evidence block — context the model reads as context, not as a directive.
   lines.push(...userBackgroundLines(input.userBackground));
   lines.push("=== REPOSITORY MEMORY ===", input.memoryPack, "=== END REPOSITORY MEMORY ===",
@@ -326,7 +326,7 @@ export function verifierPrompt(input: {
   base?: string; head: string; mergeBase?: string; structuralQueries?: boolean;
   priorDecisions: Array<Pick<MemoryMatch, "memoryId" | "decision" | "claim" | "trigger" | "rationale" | "scope" | "source" | "stale">>;
   fixHistory: Array<{ originalClaim: string; afterCommit: string | null; verified: boolean }>;
-  /** Cross-entity dismissal signal (M1); absent or zero-count on cold memory. */
+  /** Cross-entity dismissal signal (observational); absent or zero-count on cold memory. */
   similarDismissed?: SimilarDismissedResult;
   /** Rendered built-in language-pack playbooks; empty when no pack is active. */
   languageGuidance?: string;
@@ -425,7 +425,7 @@ export function auditVerifierPrompt(input: {
   structuralQueries?: boolean;
   priorDecisions: Array<Pick<MemoryMatch, "memoryId" | "decision" | "claim" | "trigger" | "rationale" | "scope" | "source" | "stale">>;
   fixHistory: Array<{ originalClaim: string; afterCommit: string | null; verified: boolean }>;
-  /** Cross-entity dismissal signal (M1); absent or zero-count on cold memory. */
+  /** Cross-entity dismissal signal (observational); absent or zero-count on cold memory. */
   similarDismissed?: SimilarDismissedResult;
   languageGuidance?: string;
 }): string {

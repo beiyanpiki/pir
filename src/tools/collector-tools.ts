@@ -39,7 +39,7 @@ const MAX_ANCHOR_EXCERPT = 4000;
 export interface CandidateCollector {
   candidates: CandidateFinding[];
   /**
-   * Prior-round knowledge the duplicate hint compares against (ADR-0014).
+   * Prior-round knowledge the duplicate hint compares against (ADR 0004 Part III).
    * Read-only by contract: the tool never mutates it, never adds this round's
    * output to it, and never runs dedup against it. Absent means "no earlier
    * rounds", which is also the case for every angle session of round 1.
@@ -60,7 +60,7 @@ interface DuplicateOverlap {
 
 /**
  * Read-only overlap lookup for the `record_candidate` duplicate hint
- * (ADR-0014). The baseline is prior-round knowledge plus this session's own
+ * (ADR 0004 Part III). The baseline is prior-round knowledge plus this session's own
  * earlier candidates, in that order — the same order dedup scans. A parallel
  * angle session's same-round candidates are deliberately invisible here: the
  * supervisor's cross-angle pass stays the only place those collapse.
@@ -81,7 +81,7 @@ function findOverlap(candidate: CandidateFinding, collector: CandidateCollector)
 }
 
 /**
- * Visibility-only wording (ADR-0014): the candidate was already accepted and
+ * Visibility-only wording (ADR 0004 Part III): the candidate was already accepted and
  * stored, and the sentence says exactly that. It never claims the finding will
  * not count, never asks for fewer findings, and never blocks the submission —
  * a materially different defect is still welcome as long as the difference is
@@ -166,7 +166,7 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
               throw new Error("Line ranges require positive integer startLine and endLine >= startLine.");
             }
             if (excerpt !== undefined) {
-              // B2: the excerpt decides the range. The model's numbers are a
+              // Snippet anchoring: the excerpt decides the range. The model's numbers are a
               // hint (kept as original*), so they are deliberately NOT
               // bounds-checked against the file: drift may push them past EOF.
               const match = locateSnippetExcerpt(snapshot.content!, excerpt);
@@ -232,7 +232,7 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           displayId, title, claim, trigger, category, severity, featureKey, entityKey, anchors, evidence, round,
           identity: buildIdentity({ featureKey, entityKey, category, claim, trigger }),
         };
-        // ADR-0014: looked up before the push so the candidate never matches
+        // ADR 0004 Part III: looked up before the push so the candidate never matches
         // itself, and only after full validation so a rejected submission
         // reports no hint and leaves the collector untouched.
         const overlap = findOverlap(candidate, collector);
@@ -378,7 +378,7 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         const codeFeedback = params.codeFeedback === undefined ? undefined : text(params.codeFeedback, "codeFeedback", 2000);
         const uncertaintyReason = params.uncertaintyReason === undefined ? undefined : member(params.uncertaintyReason, UNCERTAINTY_REASONS, "uncertaintyReason");
         if (uncertaintyReason && verdict !== "uncertain") throw new Error("uncertaintyReason requires an uncertain verdict.");
-        // Roadmap B4: a rejection is only useful if its reason survives the
+        // Rejection grounds: a rejection is only useful if its reason survives the
         // session. Required in change mode, normalized (never rejected) on
         // vocabulary drift, ignored for non-rejected verdicts.
         if (params.rejectionGround !== undefined && typeof params.rejectionGround !== "string") throw new Error("rejectionGround must be a string.");

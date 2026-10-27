@@ -13,7 +13,7 @@ import {
 } from "../../dist/app/sarif.js";
 
 /**
- * Roadmap S6 / ADR 0020: the SARIF 2.1.0 document `--format sarif` emits.
+ * ADR 0016 Part III: the SARIF 2.1.0 document `--format sarif` emits.
  * Model-free and offline: the builder is a pure function of the reported
  * findings plus the run's completion flag, and `assertValidSarif` checks the
  * subset of the schema this output actually uses (required fields, level and

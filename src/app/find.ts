@@ -44,7 +44,7 @@ export interface FindingView {
   memoryMatches: MemoryMatch[];
   verifierRationale: string | null;
   /**
-   * B4: the ground a change-mode rejection named, null for kept/uncertain
+   * Rejection grounds: the ground a change-mode rejection named, null for kept/uncertain
    * rows and for rows persisted before the ground was recorded.
    */
   rejectionGround: string | null;
@@ -53,7 +53,7 @@ export interface FindingView {
   round: number;
   createdAt: number;
   /**
-   * B2: at least one anchor's lines were decided locally from its excerpt
+   * Snippet anchoring: at least one anchor's lines were decided locally from its excerpt
    * (never present without a correction on the stored anchors).
    */
   lineCorrected: boolean;

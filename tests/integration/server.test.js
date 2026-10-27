@@ -253,7 +253,7 @@ test("/v1/review rejects an argv that is not an array of strings", async (t) => 
 
 test("/v1/review refuses a client-side --rule path instead of reading it on the server", async (t) => {
   const { base } = await withServer(t);
-  // B5 dogfood F-1: the local CLI never forwards --rule, but a direct API
+  // Project rules dogfood F-1: the local CLI never forwards --rule, but a direct API
   // caller can send argv verbatim; executing it here would read an arbitrary
   // server file and feed it to a model prompt.
   for (const argv of [["find", "--rule", "/etc/passwd"], ["find", "--rule=/etc/passwd"], ["find", "--cwd", "/tmp", "--rule", "/etc/passwd"]]) {

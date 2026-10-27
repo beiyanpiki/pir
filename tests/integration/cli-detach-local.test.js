@@ -9,7 +9,7 @@ import { createTempGitRepo } from "../fixtures/helpers.js";
 import { UsageError, executePirCommand } from "../../dist/cli/executor.js";
 
 /**
- * ADR 0022 end to end over the real CLI: a local --detach re-executes
+ * ADR 0016 Part IV end to end over the real CLI: a local --detach re-executes
  * dist/cli/cli.js as a detached child, returns exit 0 once the child is
  * accepted (never after the review), and leaves a log plus a receipt whose
  * settlement carries the child's exit code. A SIGKILLed child runs no exit

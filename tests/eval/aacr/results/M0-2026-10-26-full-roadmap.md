@@ -1,4 +1,4 @@
-# M0 — AACR-Bench verifier offline benchmark (2026-10-27)
+# AACR-Bench verifier offline benchmark (2026-10-27)
 
 > Dataset: [Alibaba-Aone/aacr-bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) `dataset.json` revision `47be1d6df1e7faf222cf531587772d92f79fe6b2`, sha256 `0804505f0a474765ce2840c832cfeaa6c4f0250dd6ccb169fe73c6758b245a86` (2145 records), Apache-2.0.
  The OCR comparison arm ports `review_filter_task_system.md` / `review_filter_task_user.md` from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) @ `8eb83340a487b1150af00701b94f01af97e4b4d6` (Apache-2.0), strictly as evaluation apparatus.
@@ -10,14 +10,14 @@ Comment-level binary classification: label 1 = the comment is correct (should su
  The pir arm runs the shipped verifier (`pir _verify-comment --arm verifier`, production `runVerifier` with the full repository checkout at the comment's capture-time head commit); the OCR arm runs the ported open-code-review reflection prompt on the same material (diff only, no tools), same model id, same scoring code. Per ADR-0007:
 
 - Primary policy **uncertain = keep**: `confirmed` and `uncertain` both count as keeps, only `rejected` kills. The strict policy **uncertain = miss** is reported beside it: an uncertain verdict earns no credit in either direction (neither a keep nor a kill).
-- **killRate** = share of label-0 comments intercepted (north-star metric; higher is better). **falseKillRate** = share of label-1 comments destroyed (cost side, and the B4 merge gate; lower is better).
- **interceptPrecision** = share of kills that were label 0. ADR-0007 §5 explains why the three are always read together; the roadmap's B4 acceptance text uses "kill-rate" for what this file calls falseKillRate, so this file names all three explicitly and none can be misread.
+- **killRate** = share of label-0 comments intercepted (north-star metric; higher is better). **falseKillRate** = share of label-1 comments destroyed (cost side, and the rejection grounds merge gate; lower is better).
+ **interceptPrecision** = share of kills that were label 0. ADR-0007 §5 explains why the three are always read together; the rejection-grounds acceptance text uses "kill-rate" for what this file calls falseKillRate, so this file names all three explicitly and none can be misread.
 - Accuracy/precision/recall/F1 are over the keep decision (positives = label 1).
  AUC ranks rows by the verifier's keep-score: confirmed = 0.5 + c/2, rejected = 0.5 − c/2, uncertain = 0.5 (OCR arm: approve = 1, remove = 0).
  Rows with no decision (error, invalid, or strict-policy uncertain) count as misses, never as silent exclusions.
 - Sample variance rules copied from `tests/eval/reviewbench/RESULTS.md`: a "no regression" claim needs both comparison runs no worse than the comparison's worse run; a model or prompt change voids comparability.
- Every M0 round publishes one run per arm — these are one sample's numbers, not a variance floor; repeats are a separate round's job.
-- No judge is involved (ADR-0007 §9): the dependent variable is the dataset's expert label, so these numbers are judge-drift-free by construction and are **not** comparable to M1's `balanced_score`.
+ Every verifier-benchmark round publishes one run per arm — these are one sample's numbers, not a variance floor; repeats are a separate round's job.
+- No judge is involved (ADR-0007 §9): the dependent variable is the dataset's expert label, so these numbers are judge-drift-free by construction and are **not** comparable to the end-to-end benchmark's `balanced_score`.
 
 ## Run configuration
 
@@ -216,7 +216,7 @@ Tokens as reported by each run's CLI result, summed over the rows that reported 
  | true | 1515 | 1057 | 458 | 43.8% | 78.1% | 27.1% | 40.2% | 82.3% | 72.8% | 32.9% | 0.610 | 
  | false | 497 | 353 | 144 | 46.3% | 79.5% | 32.9% | 46.5% | 79.2% | 66.6% | 32.7% | 0.614 | 
 
-### Rejection grounds (B4)
+### Rejection grounds
 
 | ground | kills | label0 | label1 | false-kill share of ground |
 | --- | --- | --- | --- | --- |
@@ -227,14 +227,14 @@ Tokens as reported by each run's CLI result, summed over the rows that reported 
  | no-such-code | 14 | 7 | 7 | 50.0% | 
  | not-introduced-by-change | 3 | 2 | 1 | 33.3% | 
 
-A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date B4 or belong to the OCR arm, which has no ground vocabulary; they are counted as `unknown` rather than dropped.
+A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date the rejection grounds or belong to the OCR arm, which has no ground vocabulary; they are counted as `unknown` rather than dropped.
 
 ## Notes and limits
 
 - Full corpus: 2,134 selected comment rows; 122 upstream materialization errors excluded; 2,012 usable comments scored per arm.
 - Provider-rate handling: rows with no decision (status error, decision invalid, provider-error, missing-verdict) were removed and re-run on resume; the committed round contains zero provider-error rows.
-- Review model and OCR comparison arm both use zai-coding-cn/glm-5.3:max; no judge is involved in M0.
-- Caliber (roadmap R2): the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for M0.
+- Review model and OCR comparison arm both use zai-coding-cn/glm-5.3:max; no judge is involved in the verifier benchmark.
+- Caliber: the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for the verifier benchmark.
 - Diff base: every scored row used the GitHub merge base (ADR-0007 §7); no degraded base-tip rows.
 - **Target question (measured limitation, ADR-0007 Consequences):** the dataset's label asks whether the comment is *correct review feedback*; `runVerifier` answers whether a *concrete, change-attributable defect* exists. The first run's rationales show valid comments rejected precisely because they are a style preference or a pre-existing observation, which the shipped do-not-report contract requires. `falseKillRate` is therefore still `rejected(label=1)/label=1` operationally, but it must not be read as "the verifier destroys real findings", and it is not the same quantity as the OCR arm's false-kill. Read `killRate` (label-0 interception) and the per-category table jointly; Maintainability concentrates the mismatch.
 - Ground truth is 3/4 AI-authored comments verified by domain experts (roadmap R3); read the `is_ai_comment` and `source_model` buckets before extrapolating to human-review taste.

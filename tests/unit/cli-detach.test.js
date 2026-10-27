@@ -9,7 +9,7 @@ import { UsageError } from "../../dist/cli/executor.js";
 import { buildLocalReceipt, receiptRecoveryCommands, settleLocalReceipt } from "../../dist/cli/receipts.js";
 
 /**
- * ADR 0022: local --detach is opt-in for find/audit, re-executes this CLI with
+ * ADR 0016 Part IV: local --detach is opt-in for find/audit, re-executes this CLI with
  * one --detach removed, writes an owner-only log and a receipt before the
  * spawn, and reports acceptance (exit 0) rather than review success. The child
  * settles the receipt from its exit hook; a killed child runs no hook and

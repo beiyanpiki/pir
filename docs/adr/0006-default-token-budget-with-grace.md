@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted (2026-10-19).** Item B3 of the 2026-10 OCR-borrow series (P0):
+**Accepted (2026-10-19).** The default token budget decision of the 2026-10 OCR-borrow series (P0):
 `pir find` gets default per-role token ceilings and a controlled
 truncation path, without changing the incompleteness or exit-code
 contract. This ADR supersedes the "no default token budget" policy that
@@ -37,7 +37,7 @@ to manage structurally does not exist here. OCR citations in this ADR are
 against `alibaba/open-code-review` @ `8eb8334` (Apache-2.0).
 
 A budget checked between sessions can only refuse new work or finish work
-already started, and the pre-B3 drain did neither cleanly: it refused
+already started, and the pre-budget drain did neither cleanly: it refused
 further admissions the moment `Budget.exhausted()` was true, so a run
 crossing a ceiling mid-drain abandoned candidates it had already paid
 discovery for — the worst of both worlds, and what "controlled
@@ -50,7 +50,7 @@ constants in `src/core/budget.ts`:
 `DEFAULT_FIND_REVIEWER_INPUT_TOKENS = 1_200_000` and
 `DEFAULT_FIND_VERIFIER_INPUT_TOKENS = 800_000`. They are ceilings, not
 targets (the `--max-findings` doctrine): nothing is padded to reach them.
-Audit keeps the pre-B3 semantics with **no** default ceiling — its
+Audit keeps its pre-budget semantics with **no** default ceiling — its
 `Budget` is built without role ceilings, and a regression test pins that
 a future refactor cannot silently cap a multi-day sweep. The split is
 deliberate: `find` reviews one change range with a bounded candidate
@@ -107,8 +107,8 @@ round-limit string, and the manifest and outcome carry the same fact
 structurally as `budgetStop: { kind, reason }` (schema version stays 1;
 additive field).
 
-**Tightening the constants (A2).** The values may only be *tightened*
-after checking them against M1's per-PR token distribution, recorded as
+**Tightening the constants.** The values may only be *tightened*
+after checking them against the end-to-end benchmark's per-PR token distribution, recorded as
 an amendment to this ADR — not a knob to tune by feel.
 
 ## Consequences
@@ -122,7 +122,7 @@ an amendment to this ADR — not a knob to tune by feel.
   can still overshoot in a single step — the pre-existing "checked between
   sessions" contract, and why the defaults sit well above a typical
   two-round run. The round-1 angle fan-out keeps its explicit-budget-only
-  shrink guard; making the defaults shrink it is future work if M1 shows
+  shrink guard; making the defaults shrink it is future work if the end-to-end benchmark shows
   it matters.
 - The Pi extension lane parses `--max-tokens` with the same contractual
   parser as the CLI (`extractMaxTokens`), so the opt-out is reachable from
@@ -130,6 +130,6 @@ an amendment to this ADR — not a knob to tune by feel.
 - Users who want 82505f9's policy back pass `--max-tokens unlimited`
   (scriptable, per run); a different bounded budget is an explicit
   `--max-tokens N`. The defaults are a product decision under revision,
-  not a measured optimum: until M1's per-PR token distribution lands,
+  not a measured optimum: until the end-to-end benchmark's per-PR token distribution lands,
   1.2M/0.8M are informed guesses with a tightening protocol and an
   escape hatch.

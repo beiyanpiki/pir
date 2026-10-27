@@ -193,7 +193,7 @@ test("receipts (#52): credential-looking argv tokens are scrubbed even if they s
   }
 });
 
-test("receipts: the inline user background is redacted (ADR 0016, dogfood F-2)", () => {
+test("receipts: the inline user background is redacted (ADR 0016 Part I, dogfood F-2)", () => {
   const restore = isolatedReceiptsEnv();
   try {
     const file = writeSubmissionReceipt({

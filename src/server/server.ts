@@ -314,14 +314,14 @@ export async function startServer(input: {
         if (argv[i]!.startsWith("--cwd=")) continue;
         cleanedArgv.push(argv[i]!);
       }
-      // B5 (ADR-0010): --rule names a file on the CLIENT's machine. The local
+      // ADR 0010 Part I: --rule names a file on the CLIENT's machine. The local
       // CLI already refuses to forward it, but a direct API caller can send
       // argv verbatim; executing it here would read an arbitrary server path
       // and feed its contents into a model prompt. Refuse it server-side too.
       if (cleanedArgv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
         throw new Error("--rule names a client-side file and is not accepted on /v1/review; commit .pir/rule.json in the repository or use the server's global rule.json");
       }
-      // S2 (ADR-0016, dogfood F-1): --background-file names a file on the
+      // ADR 0016 Part I (dogfood F-1): --background-file names a file on the
       // CLIENT's machine for the same reason --rule does. The local CLI never
       // forwards it, but a direct API caller can send argv verbatim; executing
       // it here would read an arbitrary server path into a model prompt. The
@@ -329,7 +329,7 @@ export async function startServer(input: {
       if (cleanedArgv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
         throw new Error("--background-file names a client-side file and is not accepted on /v1/review; pass the text inline with --background, or run with --local");
       }
-      // ADR-0016 (dogfood F-3): this argv is echoed into the serve log and the
+      // ADR 0016 Part I (dogfood F-3): this argv is echoed into the serve log and the
       // job record. An inline user background is model input, so every echo
       // uses the redacted form — the executor itself still gets the real argv.
       const redactedArgvLabel = redactUserBackgroundArgv(cleanedArgv).join(" ");
@@ -631,14 +631,14 @@ export async function startServer(input: {
       if (argv.includes("serve")) {
         throw new Error("refusing to execute serve recursively");
       }
-      // B5 (ADR-0010, dogfood F-4): --rule names a file on the CLIENT's
+      // project rules (ADR 0010 Part I, dogfood F-4): --rule names a file on the CLIENT's
       // machine. /v1/exec forwards argv verbatim, so without this guard a
       // direct API caller could read an arbitrary server path through find's
       // rule layer and feed it into a model prompt.
       if (argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
         throw new Error("--rule names a client-side file and is not accepted on a server; commit .pir/rule.json in the repository or use the server's global rule.json");
       }
-      // S2 (ADR-0016, dogfood F-1): /v1/exec forwards argv verbatim, so without
+      // ADR 0016 Part I (dogfood F-1): /v1/exec forwards argv verbatim, so without
       // this guard a direct API caller could read an arbitrary server path
       // through find's background reader and feed it into a model prompt.
       if (argv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
@@ -706,7 +706,7 @@ export async function startServer(input: {
       }
       // Failures log their argv too — the request is otherwise unrecoverable
       // from the server log alone (body already consumed).
-      // ADR-0016 (dogfood F-2): the background text is model input, not log
+      // ADR 0016 Part I (dogfood F-2): the background text is model input, not log
       // material — keep the flag visible, redact its value.
       log(`error: ${argv ? `${redactUserBackgroundArgv(argv).join(" ")} :: ` : ""}${message}`);
       res.writeHead(400, { "content-type": "application/json" });

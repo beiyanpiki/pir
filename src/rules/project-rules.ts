@@ -1,5 +1,5 @@
 /**
- * Layered project rule files (ADR-0010).
+ * Layered project rule files (ADR 0010 Part I).
  *
  * A rule file pairs a path glob with review guidance. Three layers are
  * loaded independently — `--rule` > repo `<root>/.pir/rule.json` > global
@@ -37,7 +37,7 @@ export const GUIDANCE_FILE_EXTENSIONS = new Set([".md", ".markdown", ".txt"]);
 export type RuleLayerName = "flag" | "repo" | "global";
 
 export interface RuleDefinition {
-  /** POSIX-flavored glob matched with B1's `pathMatchesGlob`. */
+  /** POSIX-flavored glob matched with change-mode filter's `pathMatchesGlob`. */
   path: string;
   /** Canonicalized guidance text (inline or read from `guidanceFile`). */
   guidance: string;
@@ -46,7 +46,7 @@ export interface RuleDefinition {
   /** Repo-relative reference, present exactly when `guidanceSource` is "file". */
   guidanceFile?: string;
   /**
-   * ADR-0010: false withholds the built-in language-pack guidance for the run
+   * ADR 0010 Part I: false withholds the built-in language-pack guidance for the run
    * (the pack is rendered once for the whole session, so suppression is
    * per-run, stated in the section and recorded in the manifest).
    */

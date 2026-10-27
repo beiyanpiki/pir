@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 
 /**
- * Roadmap S6 / ADR 0020 at the CLI boundary: `--format` is validated before
+ * ADR 0016 Part III at the CLI boundary: `--format` is validated before
  * any transport, bundle or session work, and the preview/readout lanes that
  * cannot express findings refuse SARIF instead of silently ignoring it.
  * Model-free: every case here fails before a model call.

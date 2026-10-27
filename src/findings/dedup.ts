@@ -16,12 +16,12 @@ export type DuplicateMatch = "fingerprint" | "claim";
 
 /**
  * The overlap rule itself, read-only and pure, shared by the dedup pass and the
- * `record_candidate` duplicate hint (ADR-0014) so the two can never drift:
+ * `record_candidate` duplicate hint (ADR 0004 Part III) so the two can never drift:
  * an exact fingerprint wins first; otherwise the candidates must share the same
  * entityKey, pass the category gate, and have claims at or above
  * `NEAR_DUP_THRESHOLD` similarity.
  *
- * `dropCategoryGate` is the cross-angle relaxation F1 applies to candidates of
+ * `dropCategoryGate` is the cross-angle relaxation angle fan-out applies to candidates of
  * the same batch (parallel specialized sessions label one defect with their own
  * category). Prior-round knowledge is never relaxed, and the hint never uses it.
  */
@@ -42,7 +42,7 @@ export function duplicateMatch(
  * previous rounds. Exact fingerprint match first; then near-duplicate check on
  * (category, entity, claim similarity) so trivially reworded findings collapse.
  *
- * Cross-angle fan-out (F1) relaxes two rules between candidates of the same
+ * Cross-angle fan-out relaxes two rules between candidates of the same
  * batch: the category gate is dropped (parallel specialized sessions label the
  * same defect with their own category), and a more severe occurrence displaces
  * an already-accepted duplicate (a dropped P0 filed by a later angle must not
