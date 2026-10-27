@@ -20,7 +20,7 @@ export interface FindingRow {
   anchors: string;
   memoryMatches: string;
   verifierRationale: string | null;
-  /** B4: why a change-mode rejection happened; null for kept/uncertain/legacy rows. */
+  /** Rejection grounds: why a change-mode rejection happened; null for kept/uncertain/legacy rows. */
   rejectionGround: string | null;
   /** Verifier 0–1 self-assessment; null for rows persisted before Q4. */
   confidence: number | null;

@@ -309,7 +309,7 @@ async function mirrorRunToState(runDir, runId, env) {
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
     "--max-rounds", String(options.maxRounds),
-    // "unlimited" must be passed explicitly: with B3 (ADR 0006) find applies
+    // "unlimited" must be passed explicitly: with the default budget (ADR 0006), find applies
     // default token ceilings when the flag is absent, so omitting it would
     // silently cap a benchmark run.
     ...(options.maxTokens === "unlimited" ? ["--max-tokens", "unlimited"] : ["--max-tokens", String(options.maxTokens)]),

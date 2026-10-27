@@ -150,7 +150,7 @@ test("single-ID legacy boolean is compatible but cannot conflict or suppress unk
   }
 });
 
-test("B4: a change-mode rejection must name its ground, and unknown wording normalizes to other", async () => {
+test("Rejection grounds: a change-mode rejection must name its ground, and unknown wording normalizes to other", async () => {
   const rejected = { verdict: "rejected", rationale: "The caller guards this path at src/next.ts:2", confidence: 0.8 };
   const required = createSubmitVerdictTool({}, undefined, undefined, { requireRejectionGround: true });
   const missing = await required.execute(rejected);
@@ -200,7 +200,7 @@ test("issue-memory lookup uses claim matching and preserves IDs, triggers and st
   assert.match((await tool.execute({})).text, /^ERROR:/);
 });
 // ---------------------------------------------------------------------------
-// B2: snippet-anchored location correction
+// Snippet anchoring: snippet-anchored location correction
 // ---------------------------------------------------------------------------
 
 /**
@@ -241,7 +241,7 @@ function driftCandidate(drift, excerpt) {
   };
 }
 
-test("excerpt locate corrects ±5-line drift on every fixture and keeps the original range (B2)", async () => {
+test("excerpt locate corrects ±5-line drift on every fixture and keeps the original range (snippet anchoring)", async () => {
   const f = driftFixture();
   try {
     const corrections = [];
@@ -261,7 +261,7 @@ test("excerpt locate corrects ±5-line drift on every fixture and keeps the orig
       assert.equal(anchor.excerpt, f.excerpt, `drift ${drift}`);
       if (anchor.lineCorrected) corrected += 1;
     }
-    // A1: correction success rate over the ±5-line drift fixtures (11/11).
+    // Correction success rate over the ±5-line drift fixtures (11/11).
     assert.equal(`${corrected}/${drifts.length}`, "11/11");
     assert.equal(corrections.length, drifts.length);
     assert.deepEqual(corrections[0], {
@@ -286,7 +286,7 @@ test("excerpt locate corrects ±5-line drift on every fixture and keeps the orig
   } finally { f.cleanup(); }
 });
 
-test("an unlocatable excerpt is a tool-boundary error: zero hits, multiple hits, no partial record (B2)", async () => {
+test("an unlocatable excerpt is a tool-boundary error: zero hits, multiple hits, no partial record (snippet anchoring)", async () => {
   const f = driftFixture();
   try {
     const corrections = [];
@@ -312,7 +312,7 @@ test("an unlocatable excerpt is a tool-boundary error: zero hits, multiple hits,
   } finally { f.cleanup(); }
 });
 
-test("no-excerpt anchors are byte-identical: output, anchor keys and events (B2)", async () => {
+test("no-excerpt anchors are byte-identical: output, anchor keys and events (snippet anchoring)", async () => {
   const f = driftFixture();
   try {
     const corrections = [];
@@ -322,14 +322,14 @@ test("no-excerpt anchors are byte-identical: output, anchor keys and events (B2)
     assert.equal(output.text, "Recorded candidate F-301: Rate applied too late");
     assert.equal(output.terminate, undefined);
     const candidate = collector.candidates[0];
-    // Pre-B2 anchor shape: same keys, same order, same JSON.
+    // Pre-change anchor shape: same keys, same order, same JSON.
     assert.deepEqual(Object.keys(candidate.anchors[0]), ["path", "startLine", "endLine"]);
     assert.equal(JSON.stringify(candidate.anchors), '[{"path":"src/total.ts","startLine":10,"endLine":12}]');
     assert.deepEqual(corrections, []);
   } finally { f.cleanup(); }
 });
 
-test("record_candidate flags an exact duplicate of prior-round knowledge without suppressing it (S5/ADR-0014)", async () => {
+test("record_candidate flags an exact duplicate of prior-round knowledge without suppressing it (ADR 0004 Part III)", async () => {
   const f = fixture();
   try {
     const first = { candidates: [] };
@@ -353,7 +353,7 @@ test("record_candidate flags an exact duplicate of prior-round knowledge without
     assert.equal(second.candidates[0].displayId, "F-201");
     assert.deepEqual(known.map((entry) => entry.displayId), ["F-101"]);
 
-    // A distinct defect still gets the pre-S5 result, byte for byte.
+    // A distinct defect still gets the pre-hint result, byte for byte.
     const distinct = await tool.execute({ ...validCandidate(), title: "Guard is inverted", claim: "The guard rejects valid input", trigger: "Calling next with a zero" });
     assert.equal(distinct.text, "Recorded candidate F-202: Guard is inverted");
     assert.equal(distinct.duplicateOf, undefined);
@@ -367,7 +367,7 @@ test("record_candidate flags an exact duplicate of prior-round knowledge without
   } finally { f.cleanup(); }
 });
 
-test("the duplicate hint covers entity+claim near-duplicates and honors the strict prior-round gates (S5/ADR-0014)", async () => {
+test("the duplicate hint covers entity+claim near-duplicates and honors the strict prior-round gates (ADR 0004 Part III)", async () => {
   const f = fixture();
   const entityKey = "src/next.ts::next";
   const claim = "the running total ignores the per item rate in the shared compute path";
@@ -398,7 +398,7 @@ test("the duplicate hint covers entity+claim near-duplicates and honors the stri
   } finally { f.cleanup(); }
 });
 
-test("parallel angle sessions never see each other's same-round candidates (S5/ADR-0014)", async () => {
+test("parallel angle sessions never see each other's same-round candidates (ADR 0004 Part III)", async () => {
   const f = fixture();
   try {
     const known = [];

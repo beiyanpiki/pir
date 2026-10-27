@@ -14,7 +14,7 @@ import {
 import { reviewerPrompt } from "../../dist/agents/prompts.js";
 
 /**
- * B5 acceptance A1: layer precedence, first-match-wins, include/exclude,
+ * Project rules acceptance: layer precedence, first-match-wins, include/exclude,
  * guidance-file containment, merge semantics, canonical hash and byte-stable
  * rendering — all model-free.
  */

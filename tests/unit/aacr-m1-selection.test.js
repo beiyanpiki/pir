@@ -11,7 +11,7 @@ const row = (id) => ({ instance_id: id, repo: "example/repo", reference_comments
 const rows = Array.from({ length: 12 }, (_, index) => row("example__repo@" + String(index).padStart(7, "0")));
 const ids = (selected) => selected.map((entry) => entry.instance_id);
 
-test("seededOrder is the M0 sample's PRNG and Fisher-Yates loop", () => {
+test("seededOrder is the verifier-benchmark sample's PRNG and Fisher-Yates loop", () => {
   assert.deepEqual(ids(seededOrder(rows, 42)), ids(seededOrder(rows, 42)), "same seed, same order");
   assert.deepEqual(seededOrder(rows, undefined), rows, "no seed keeps the fixture order");
   assert.notDeepEqual(ids(seededOrder(rows, 42)), ids(seededOrder(rows, 43)), "a different seed selects a different order");
@@ -25,7 +25,7 @@ test("selectFixtureRows: filter, seeded shuffle, then limit", () => {
   const limited = selectFixtureRows(rows, { limit: 50, seed: 42 });
   assert.equal(limited.length, 12, "a limit above the population selects the whole permutation");
   assert.deepEqual(ids(selectFixtureRows(rows, { limit: 5, seed: 42 })), ids(seededOrder(rows, 42)).slice(0, 5));
-  assert.deepEqual(ids(selectFixtureRows(rows, { limit: 5 })), ids(rows).slice(0, 5), "no seed keeps the pre-M2 fixture-order limit");
+  assert.deepEqual(ids(selectFixtureRows(rows, { limit: 5 })), ids(rows).slice(0, 5), "no seed keeps the pre-change-protocol fixture-order limit");
   assert.deepEqual(
     ids(selectFixtureRows(rows, { only: ids(rows).slice(2, 8), limit: 3, seed: 7 })),
     ids(seededOrder(rows.slice(2, 8), 7)).slice(0, 3),
@@ -53,7 +53,7 @@ test("assertSelectionCompatible: seeds and instance sets are provenance pins", (
     () => assertSelectionCompatible(recorded, { selected: selectFixtureRows(rows, { limit: 6, seed: 42 }), seed: 42 }),
     /refuses to change the selected instance set/,
   );
-  assert.doesNotThrow(() => assertSelectionCompatible({ limits: {} }, { selected }), "a pre-M2 round (no recorded seed) resumes without one");
+  assert.doesNotThrow(() => assertSelectionCompatible({ limits: {} }, { selected }), "a pre-change-protocol round (no recorded seed) resumes without one");
   assert.throws(() => assertSelectionCompatible({ limits: {} }, { selected, seed: 42 }), /round was recorded with no seed/);
 });
 

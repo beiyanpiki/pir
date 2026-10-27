@@ -22,7 +22,7 @@ function finding(overrides) {
   };
 }
 
-test("FindingView exposes the B2 correction flag and it survives the findings store (B2)", async () => {
+test("FindingView exposes the snippet-anchoring correction flag and it survives the findings store", async () => {
   const repo = createTempGitRepo("pir-finding-view-");
   const memory = await Memory.open(repo.dir, { dbPath: path.join(repo.dir, ".pir-finding-view.sqlite") });
   try {

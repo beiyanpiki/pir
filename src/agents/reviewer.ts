@@ -39,7 +39,7 @@ export interface ReviewerRoundResult {
   /** Audit mode: pinned head paths read during this session (coverage evidence). */
   readPaths?: string[];
   /**
-   * Change mode (C1): per-session coverage evidence — raw hunks paged from
+   * Change mode (coverage ledger): per-session coverage evidence — raw hunks paged from
    * get_change and ranged head read_code windows. findIssues replays both
    * into the run's shared ChangeCoverage; reads accumulate across rounds.
    */
@@ -53,9 +53,9 @@ export interface ReviewerRoundResult {
 export class ReviewerRoundError extends Error {
   readonly candidates: CandidateFinding[];
   readonly usage?: SessionUsage;
-  /** C1: the failed session's coverage evidence, so its reads still land. */
+  /** coverage ledger: the failed session's coverage evidence, so its reads still land. */
   readonly coverageEvidence?: { hunks: Array<{ path: string; hunkIndex: number }>; reads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> };
-  /** F1: candidates were merged across parallel angles, so recovery must dedup with the same cross-angle relaxation (dogfood F-140). */
+  /** Angle fan-out: candidates were merged across parallel angles, so recovery must dedup with the same cross-angle relaxation (dogfood F-140). */
   readonly crossAngle: boolean;
 
   constructor(
@@ -100,23 +100,23 @@ export interface ReviewerDeps {
   mergeBase?: string;
   verificationCapacity?: number;
   model?: string;
-  /** F1: specialized finder angle — restricts this session's categories. */
+  /** Angle fan-out: specialized finder angle — restricts this session's categories. */
   angle?: AngleDef;
-  /** F1: parallel angle sessions sharing this round (prompt budget honesty). */
+  /** Angle fan-out: parallel angle sessions sharing this round (prompt budget honesty). */
   fanoutSize?: number;
   /** Opt-in transcript dump location for this round's session. */
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
   languageGuidance?: string;
-  /** Rendered PROJECT RULES section (B5/ADR-0010); absent when no rule applies. */
+  /** Rendered PROJECT RULES section (ADR 0010 Part I); absent when no rule applies. */
   projectRules?: string;
   /**
-   * S2 (ADR-0016): the user's stated background for this change. Reviewer
+   * ADR 0016 Part I: the user's stated background for this change. Reviewer
    * sessions only — the audit prompt and every verifier session ignore it.
    */
   userBackground?: UserBackgroundContext;
   /**
-   * ADR-0014: prior-round candidates this session's duplicate hint compares
+   * ADR 0004 Part III: prior-round candidates this session's duplicate hint compares
    * against. A snapshot is taken here, so knowledge accumulated later in the
    * run (including this round's own output) can never leak into the hint.
    */
@@ -135,10 +135,10 @@ export interface ReviewerDeps {
 export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoundResult> {
   const collector: CandidateCollector = {
     candidates: [],
-    // ADR-0014: the hint baseline is prior-round knowledge as of round start,
+    // ADR 0004 Part III: the hint baseline is prior-round knowledge as of round start,
     // read-only; the collector's own candidates are added by the tool itself.
     ...(deps.known && deps.known.length > 0 ? { known: [...deps.known] } : {}),
-    // B2: surface excerpt-driven anchor overrides on the live event channel.
+    // Snippet anchoring: surface excerpt-driven anchor overrides on the live event channel.
     ...(deps.onSessionEvent ? { onLineCorrected: (correction) => deps.onSessionEvent!.lineCorrected(correction) } : {}),
   };
   const outcome: RoundOutcome = { summary: "", nextFocus: [], needsMoreRounds: false, submitted: false };
@@ -146,7 +146,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
   const hunkReads: Array<{ path: string; hunkIndex: number }> = [];
   const headReads: Array<{ path: string; range: { startLine: number; endLine: number | null } }> = [];
   // The observer is per-session: only this session's pinned head reads count
-  // toward this unit's coverage evidence. Change mode (C1) additionally
+  // toward this unit's coverage evidence. Change mode (coverage ledger) additionally
   // records raw hunk pages and ranged head reads; the range-less observer
   // calls (readReviewFile availability, collector evidence snapshots) are
   // not reads for the change ledger.
@@ -228,7 +228,7 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           languageGuidance: deps.languageGuidance,
           projectRules: deps.projectRules,
           ...(deps.userBackground ? { userBackground: deps.userBackground } : {}),
-          // S3 (ADR-0017): the same change-set projection the envelope and the
+          // ADR 0004 Part IV: the same change-set projection the envelope and the
           // manifest carry — the reviewer gets the map, not just the diff.
           ...(sessionCtx.changeSet ? { changedFiles: sessionCtx.changeSet.files.map(changedFileSummary) } : {}),
         });

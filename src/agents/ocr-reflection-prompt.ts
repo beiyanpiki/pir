@@ -1,5 +1,5 @@
 /**
- * OCR comment-reflection prompt — the AACR-Bench M0 comparison arm.
+ * OCR comment-reflection prompt — the AACR-Bench verifier-benchmark comparison arm.
  *
  * Evaluation apparatus, NOT product prompt text. Ported from
  * alibaba/open-code-review @ 8eb83340a487b1150af00701b94f01af97e4b4d6 (Apache-2.0):
@@ -32,7 +32,7 @@ export const OCR_REFLECTION_USER_TEMPLATE = "### Task\n\nBelow are the diffs of 
 
 /** One comment in upstream's filter payload shape. */
 export interface OcrReflectionComment {
-  /** Upstream ids are c-<index>; M0 always sends exactly one comment. */
+  /** Upstream ids are c-<index>; the verifier benchmark always sends exactly one comment. */
   id: string;
   path: string;
   content: string;

@@ -3,7 +3,7 @@ import type { FindingView } from "./find.js";
 import { isReported } from "./output.js";
 
 /**
- * SARIF 2.1.0 output for `find` and `audit` (ADR 0020).
+ * SARIF 2.1.0 output for `find` and `audit` (ADR 0016 Part III).
  *
  * One log, one run: the tool driver describes pir and the finding categories
  * it reports, the invocation records whether the run completed (the same

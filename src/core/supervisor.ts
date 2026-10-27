@@ -44,7 +44,7 @@ export interface FindOptions {
   /**
    * Explicit whole-run token ceiling (`--max-tokens`), measured on total
    * tokens. `null` is the explicit "unlimited" opt-out: it disables every
-   * token ceiling, including B3's default ones. When unset, find applies its
+   * token ceiling, including the budget's default ones. When unset, find applies its
    * default reviewer/verifier prompt-side input ceilings (ADR 0006).
    */
   maxTokens?: number | null;
@@ -84,14 +84,14 @@ export interface FindOptions {
   /** Pack names for pluginMode "manual". */
   manualPlugins?: string[];
   /**
-   * B5 (ADR-0010): explicit `--rule` layer. The repo and global layers are
+   * ADR 0010 Part I: explicit `--rule` layer. The repo and global layers are
    * discovered from the repository root and the client config dir.
    */
   ruleFile?: string;
   /**
-   * S2 (ADR-0016): the user's stated background for this change, already
+   * ADR 0016 Part I: the user's stated background for this change, already
    * sanitised and capped by `resolveUserBackground`. Absent by default — the
-   * reviewer prompt is then byte-identical to the pre-S2 one. Reviewer-only:
+   * reviewer prompt is then byte-identical to the pre-background one. Reviewer-only:
    * verifier and audit sessions never see it.
    */
   background?: UserBackground;
@@ -121,7 +121,7 @@ export interface FindOutcome {
   pendingFindings: FindingRow[];
   pendingCandidates: number;
   incomplete: boolean;
-  /** B3 (ADR 0006): the ceiling that ended the run, when a budget stop did (null otherwise). */
+  /** ADR 0006 (default budget): the ceiling that ended the run, when a budget stop did (null otherwise). */
   budgetStop: { kind: BudgetCeilingKind; reason: string } | null;
   verificationErrors: number;
   uncertaintyReasons: Partial<Record<UncertaintyReason, number>>;
@@ -166,9 +166,9 @@ function verifyConcurrencyOption(value: number | undefined, name: string): numbe
   return concurrency;
 }
 
-/** F1: cap on concurrent finder angle sessions — the plan's 4-way parallelism (a scheduling cap, not a selection cap: every budgeted angle runs, at most 4 at a time). */
+/** Angle fan-out: cap on concurrent finder angle sessions — the plan's 4-way parallelism (a scheduling cap, not a selection cap: every budgeted angle runs, at most 4 at a time). */
 const MAX_FANOUT_CONCURRENCY = 4;
-/** F1 budget guard: per-angle token/time allowance before the fan-out shrinks. */
+/** angle fan-out budget guard: per-angle token/time allowance before the fan-out shrinks. */
 const ANGLE_TOKEN_ALLOWANCE = 150_000;
 const ANGLE_WALL_CLOCK_ALLOWANCE_MS = 15 * 60_000;
 
@@ -325,7 +325,7 @@ async function verifyOne(deps: DrainDeps, candidate: CandidateFinding): Promise<
     memoryId: m.id, decision: m.decision, scope: m.scope, source: m.source, claim: m.claim,
     rationale: m.rationale, trigger: m.trigger, stale: m.stale,
   }));
-  // Cross-entity dismissal signal (M1, observational): computed once per
+  // Cross-entity dismissal signal (observational): computed once per
   // candidate before dispatch; background context for the verifier prompt,
   // never a suppression input.
   const similarDismissed = deps.memory.issues.similarDismissed({
@@ -436,7 +436,7 @@ async function drainVerifications(
     if (state.pending.length <= inFlight) return null;
     if (admitted >= limits.maxVerifications) return null;
     if (limits.maxFindings !== null && reportedCount(state) >= limits.maxFindings) return null;
-    // B3 grace (ADR 0006): only the hard ceilings (explicit --max-tokens,
+    // budget grace (ADR 0006): only the hard ceilings (explicit --max-tokens,
     // wall clock) refuse a pending verification. The default role ceilings do
     // not — finishing what was already found is the point of the grace.
     if (budget.hardExhausted()) return null;
@@ -487,9 +487,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const maxVerifications = positiveInteger(options.maxVerificationsPerRound ?? DEFAULT_MAX_VERIFICATIONS, "maxVerificationsPerRound");
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
-  // Unknown angle ids are a hard error, never a silent drop (F1).
+  // Unknown angle ids are a hard error, never a silent drop (angle fan-out).
   const angles = options.angles === undefined ? [] : resolveAngleIds(options.angles);
-  // B3 (ADR 0006): find defaults to per-role prompt-side input-token
+  // ADR 0006 (default budget): find defaults to per-role prompt-side input-token
   // ceilings. An explicit --max-tokens replaces them — a positive integer
   // keeps that ceiling's hard, whole-run semantics, while "unlimited" (null)
   // is the explicit opt-out from every token ceiling.
@@ -505,14 +505,14 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   });
 
   const requestedHead = options.head ?? (await getHeadCommit(deps.repoRoot));
-  // B1: the change-mode gate runs once, before any session exists — binary,
+  // File filter: the change-mode gate runs once, before any session exists — binary,
   // secret paths (non-overridable), skip patterns, oversized single-file diff.
   // Excluded files keep their path/status/churn metadata but arrive with no
   // hunks, so no reviewer/verifier tool can put their diff body in a prompt.
   const changeSet = applyChangeFilter(
     await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead),
   );
-  // B5 (ADR-0010): project rules are resolved and rendered before any run row
+  // ADR 0010 Part I: project rules are resolved and rendered before any run row
   // or session exists, so a malformed rule file or an unusable guidance
   // reference fails the invocation instead of producing a silently different
   // review. Only reviewed (non-excluded) files are matched.
@@ -523,7 +523,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const projectRuleApplication = applyProjectRules(projectRuleSet, changeSet.files);
   const manifestProjectRules: ProjectRulesSummary | undefined =
     projectRuleSet.layers.length > 0 ? projectRuleApplication.summary : undefined;
-  // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
+  // Coverage observation: one ledger per run; reviewer reads and hunk
   // pages accumulate across rounds. No behavior change — accounting only.
   const changeCoverage = new ChangeCoverage(changeSet);
   const base = changeSet.baseCommit ?? changeSet.base;
@@ -547,7 +547,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     });
   };
   if (transcriptDir) onProgress({ type: "info", message: `transcripts: ${transcriptDir}` });
-  // S2 (ADR-0016): the background is opt-in. When present it is named once in
+  // ADR 0016 Part I: the background is opt-in. When present it is named once in
   // the progress stream (sizes and hash only — the text is never logged).
   const background = options.background;
   if (background) {
@@ -561,7 +561,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
     featureKeys: [], entityKeys: [], headCommit: head,
   });
-  // B1: change mode also guards the pinned read channels, so the secret gate
+  // File filter: change mode also guards the pinned read channels, so the secret gate
   // is not bypassed by read_code/search_text on a filtered path. Audit builds
   // its own context without the guard — its behavior is unchanged.
   const toolCtx: ToolContext = {
@@ -582,7 +582,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       message: `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`,
     });
   }
-  // ADR-0010: mergeBuiltin=false makes the project rule authoritative for its
+  // ADR 0010 Part I: mergeBuiltin=false makes the project rule authoritative for its
   // paths and withholds the built-in pack guidance for this run (the pack is
   // rendered once for the whole session). The effective guidance is used for
   // both the prompt and the budget estimate, so they never disagree.
@@ -608,7 +608,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       }
       const stop = shouldStop(state, budget);
       if (stop.stop) {
-        // B3 (ADR 0006) grace: a default-ceiling hit ends discovery, not the
+        // ADR 0006 (default budget) grace: a default-ceiling hit ends discovery, not the
         // verification of work discovery already found. The drain has its own
         // per-round cap, so a backlog larger than one drain keeps the loop
         // alive in drain-only rounds (a non-empty queue skips the reviewer
@@ -629,7 +629,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       let freshCount = 0;
       // Drain existing work before paying for another discovery session.
       if (state.pending.length === 0 && needsReview) {
-        // F1: round 1 with --angles fans out one specialized reviewer session
+        // Angle fan-out: round 1 with --angles fans out one specialized reviewer session
         // per angle instead of one general session (every budget-affordable
         // angle runs, at most MAX_FANOUT_CONCURRENCY at a time; later rounds
         // stay general with the merged focus).
@@ -879,7 +879,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       // includes rejections, which are dry by definition.
       calculateInformationGain(state, freshCount, drained.confirmed + drained.uncertain + drained.suppressed);
       onProgress({ type: "round-end", round: state.round, message: `round ${state.round}: ${freshCount} new, ${drained.confirmed} confirmed, ${drained.rejected} rejected, ${drained.uncertain} uncertain, ${state.pending.length} pending` });
-      // C1 stage 2 (interventional, once per run): the reviewer signaled
+      // coverage follow-up (interventional, once per run): the reviewer signaled
       // completion while diff hunks remain unread — spend one forced
       // follow-up round pointing at them. needsReview=false means a reviewer
       // completed somewhere this run, so this also evaluates at the end of
@@ -951,7 +951,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     throw error;
   }
 
-  // B3 (ADR 0006): name the ceiling that ended the run when one did. The
+  // ADR 0006 (default budget): name the ceiling that ended the run when one did. The
   // reason is compared rather than re-derived, so a ceiling that merely
   // happens to be reached on a run that stopped for another reason
   // (completion, max findings) is never misreported as the cause.
@@ -1027,7 +1027,7 @@ export interface AuditOptions {
   skipGlobs?: string[];
   /**
    * Explicit whole-run token ceiling (`--max-tokens`); `null` ("unlimited")
-   * removes it. Audit has no default ceiling — B3's defaults are find-only.
+   * removes it. Audit has no default ceiling — the budget's defaults are find-only.
    */
   maxTokens?: number | null;
   maxWallClockMs?: number;
@@ -1103,7 +1103,7 @@ export interface AuditOutcome {
   verificationErrors: number;
   uncertaintyReasons: Partial<Record<UncertaintyReason, number>>;
   stoppedBecause: string;
-  /** B3 (ADR 0006): the ceiling that ended the run, when a budget stop did (null otherwise). */
+  /** ADR 0006 (default budget): the ceiling that ended the run, when a budget stop did (null otherwise). */
   budgetStop: { kind: BudgetCeilingKind; reason: string } | null;
   estimatedTokens: number;
   usage?: SessionUsage;
@@ -1128,7 +1128,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
-  // B3 scope: audit keeps the pre-B3 semantics — no default ceiling, only an
+  // Budget scope: audit keeps the pre-budget semantics — no default ceiling, only an
   // explicit --max-tokens ("unlimited"/null removes it like an absent flag).
   const budget = new Budget({
     maxRounds: Number.MAX_SAFE_INTEGER,
@@ -1464,7 +1464,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending], runtimeIds);
   const runVerdict = computeRunVerdict(state);
   const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
-  // B3 (ADR 0006): audit has no default ceiling, but an explicit --max-tokens
+  // ADR 0006 (default budget): audit has no default ceiling, but an explicit --max-tokens
   // (or the wall clock) that ends the run is recorded the same way find's is.
   const auditCeiling = budget.ceilingHit();
   const budgetStop = auditCeiling && auditCeiling.reason === stoppedBecause ? { kind: auditCeiling.kind, reason: auditCeiling.reason } : null;

@@ -15,7 +15,7 @@ const FILE = [
   "}",
 ].join("\n");
 
-test("normalization trims, drops one diff marker and skips blank lines (B2)", () => {
+test("normalization trims, drops one diff marker and skips blank lines (snippet anchoring)", () => {
   assert.equal(normalizeSnippetLine("   const value = 1;  "), "const value = 1;");
   assert.equal(normalizeSnippetLine("\t+  const value = 1;"), "const value = 1;");
   assert.equal(normalizeSnippetLine("-const value = 1;"), "const value = 1;");
@@ -26,7 +26,7 @@ test("normalization trims, drops one diff marker and skips blank lines (B2)", ()
   assert.deepEqual(normalizeSnippetLines("\n\n"), []);
 });
 
-test("locateSnippetExcerpt finds a unique window despite whitespace and marker sloppiness (B2)", () => {
+test("locateSnippetExcerpt finds a unique window despite whitespace and marker sloppiness (snippet anchoring)", () => {
   const sloppy = "  +const value = n + 1;\n\t return value;";
   assert.deepEqual(locateSnippetExcerpt(FILE, sloppy), { kind: "unique", startLine: 6, endLine: 7 });
   // Exact copy is trivially unique.
@@ -35,7 +35,7 @@ test("locateSnippetExcerpt finds a unique window despite whitespace and marker s
   assert.deepEqual(locateSnippetExcerpt(FILE, "return null;\n\n  }\n\nconst value = n + 1;"), { kind: "unique", startLine: 3, endLine: 6 });
 });
 
-test("locateSnippetExcerpt rejects zero hits and multiple hits (B2)", () => {
+test("locateSnippetExcerpt rejects zero hits and multiple hits (snippet anchoring)", () => {
   assert.deepEqual(locateSnippetExcerpt(FILE, "const value = n + 1;\nconst missing = true;"), { kind: "none" });
   assert.deepEqual(locateSnippetExcerpt(FILE, "const absent = 1;"), { kind: "none" });
   assert.deepEqual(locateSnippetExcerpt(FILE, "   \n  \n"), { kind: "none" });
@@ -48,7 +48,7 @@ test("locateSnippetExcerpt rejects zero hits and multiple hits (B2)", () => {
   assert.deepEqual(locateSnippetExcerpt(repeated, "same\nblock"), { kind: "ambiguous", occurrences: 2 });
 });
 
-test("locateSnippetExcerpt never matches across the file end (B2)", () => {
+test("locateSnippetExcerpt never matches across the file end (snippet anchoring)", () => {
   assert.deepEqual(locateSnippetExcerpt("},", "},\nmore"), { kind: "none" });
   assert.deepEqual(locateSnippetExcerpt("", "anything"), { kind: "none" });
 });

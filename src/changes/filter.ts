@@ -277,7 +277,7 @@ export interface ChangeFilterOptions {
   /**
    * Literal file or directory prefixes (audit `--path` semantics). A non-empty
    * set selects only matching files; a matching file is an explicit ask and
-   * bypasses the skip/size gates below. B5 wires user rules in here; `find`
+   * bypasses the skip/size gates below. Project rules wire user rules in here; `find`
    * itself passes nothing today.
    */
   includePaths?: string[];

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 
 /**
- * Track B S7 at the CLI boundary: `rules check <path>` answers which project
+ * Rule introspection at the CLI boundary: `rules check <path>` answers which project
  * rule wins for one path from the same layered loader find uses, names the
  * layer and the matched glob, prints the rendered guidance, carries no host
  * path, and opens no review run, database or model session. Model-free.
@@ -344,7 +344,7 @@ test("rules --help prints the command's own section", async (t) => {
   assert.match(out.stdout, /check <path>/);
 });
 
-test("config show still reports the same layers and hash (A3)", async (t) => {
+test("config show still reports the same layers and hash", async (t) => {
   sandbox(t);
   const repo = fixture("pir-s7-config-");
   try {

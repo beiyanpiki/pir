@@ -10,7 +10,7 @@ import { findIssues } from "../../dist/core/supervisor.js";
 import { ProjectRuleError, applyProjectRules, loadProjectRules } from "../../dist/rules/project-rules.js";
 
 /**
- * B5 acceptance A1 at the supervisor boundary: the rendered PROJECT RULES
+ * Project rules acceptance at the supervisor boundary: the rendered PROJECT RULES
  * section reaches the reviewer prompt in its documented position, the
  * repo/--rule layers decide what is injected, mergeBuiltin=false withholds the
  * built-in language-pack guidance, and the canonical hash lands in run.json.

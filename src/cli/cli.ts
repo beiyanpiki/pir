@@ -21,7 +21,7 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
-  // ADR 0022: a detached local run is this same CLI with PIR_LOCAL_JOB_ID set.
+  // ADR 0016 Part IV: a detached local run is this same CLI with PIR_LOCAL_JOB_ID set.
   // Its exit hook is what makes the receipt durable: it records when the child
   // ended and with which code. A signal death runs no exit hook, so a killed
   // detach legitimately stays unsettled — that is how it is told apart from a
@@ -45,7 +45,7 @@ async function main(argv: string[]): Promise<number> {
   const command = firstPositional(argv);
   // find/audit output selection is validated before any transport or bundle
   // work — and therefore before a remote forward — so a typo or a
-  // contradictory --json/--format pair fails fast with exit 2 (S6).
+  // contradictory --json/--format pair fails fast with exit 2 (output formats).
   if (command === "find" || command === "audit") resolveOutputFormat(parseArgs(argv).flags);
   // Machine output (`--json` or `--format json|sarif`) decides two pre-executor
   // behaviours: whether the first-run wizard may prompt, and which detach
@@ -113,14 +113,14 @@ async function main(argv: string[]): Promise<number> {
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
-  // B5 (ADR-0010): --rule names a file on the caller's machine. Forwarding the
+  // ADR 0010 Part I: --rule names a file on the caller's machine. Forwarding the
   // path would read a server-side file (or fail there) under the same spelling;
   // the repository and global layers still apply on the server, so reject the
   // flag rather than resolve it somewhere the user did not mean.
   if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
     throw new UsageError("--rule is a local file path and is not forwarded to a server; commit .pir/rule.json, use the server's global rule.json, or run with --local");
   }
-  // S2 (ADR-0016): `--background` is inline text and may be forwarded (a server
+  // ADR 0016 Part I: `--background` is inline text and may be forwarded (a server
   // running an older build drops it, so remote needs a same-version server),
   // but `--background-file` names a file on the caller's machine — forwarding
   // the path would read a server-side file (or fail there) under the same
@@ -166,7 +166,7 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
-  // ADR 0022: local --detach re-executes this CLI as a detached background
+  // ADR 0016 Part IV: local --detach re-executes this CLI as a detached background
   // process with a log and a receipt, then returns once the child is accepted.
   // Handled AFTER the remote-forward branch so remote detach keeps its
   // semantics, and the executor's server-lane rejections stay untouched. The

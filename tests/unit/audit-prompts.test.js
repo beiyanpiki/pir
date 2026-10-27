@@ -34,8 +34,8 @@ test("audit reviewer prompt: current-state semantics, owned scope, no attributio
   assert.doesNotMatch(prompt, /merge-base/);
 });
 
-// Pre-Q1 dev baseline lengths (captured at eaf454d) bounding prompt
-// dilution from the do-not-report blacklist (#73 Q1).
+// Pre-hardening dev baseline lengths (captured at eaf454d) bounding prompt
+// dilution from the do-not-report blacklist (#73 quality hardening).
 const AUDIT_LENGTH_BASELINES = { minimal: 3085, full: 3471 };
 const auditFullInput = { ...auditReviewerInput, verificationCapacity: 3, priorSummary: "prior session summary", investigationFeedback: ["LEAD-1"], languageGuidance: "LANGUAGE PACK GUIDANCE", focus: ["x.ts"] };
 

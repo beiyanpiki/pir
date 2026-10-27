@@ -44,7 +44,7 @@ export function git(cwd, args) {
  * sessions in the integration suites must model this contract — a bare
  * submit_verdict is rejected as evidence-free.
  *
- * Roadmap B4 is part of that contract too: a change-mode rejection must name
+ * Rejection grounds are part of that contract too: a change-mode rejection must name
  * its ground, so the helper supplies the default a compliant session would use
  * unless the caller states one explicitly.
  */

@@ -18,7 +18,7 @@ export interface LiveSessionState {
   unitId?: string;
   attempt?: number;
   displayId?: string;
-  /** F1: the specialized finder angle this reviewer session runs as. */
+  /** Angle fan-out: the specialized finder angle this reviewer session runs as. */
   angle?: string;
   transcriptFile?: string;
   prompt: string;

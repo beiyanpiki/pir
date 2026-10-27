@@ -41,7 +41,7 @@ test("parseArgs parses --plugins in both forms", () => {
   assert.equal(eq.flags.get("--plugins"), "none");
 });
 
-test("maxTokensFlag (B3): positive integer, literal unlimited -> null, garbage rejected", () => {
+test("maxTokensFlag: positive integer, literal unlimited -> null, garbage rejected", () => {
   assert.equal(maxTokensFlag(new Map()), undefined);
   assert.equal(maxTokensFlag(new Map([["--max-tokens", "500000"]])), 500000);
   assert.equal(maxTokensFlag(new Map([["--max-tokens", "unlimited"]])), null);

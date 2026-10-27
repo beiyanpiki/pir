@@ -58,7 +58,7 @@ test("parseTask validates every field the mapping depends on", () => {
   assert.equal(parseTask({ ...task(), material: { ...task().material, diffBaseKind: undefined } }).material.diffBaseKind, "unknown");
 });
 
-test("M0 dogfood F-188: a session without a verdict is invalid, not a keep", () => {
+test("verifier-benchmark dogfood F-188: a session without a verdict is invalid, not a keep", () => {
   assert.equal(decisionForVerdict({ verdict: "rejected", confidence: 0.8 }), "kill");
   assert.equal(decisionForVerdict({ verdict: "confirmed", confidence: 0.8 }), "keep");
   // An abstention is a decision under uncertain=keep; only a session that

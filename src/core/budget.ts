@@ -1,13 +1,13 @@
 import type { SessionUsage } from "../agents/types.js";
 
 /**
- * B3 (ADR 0006) default ceilings for `find`, measured on prompt-side input
+ * ADR 0006 (default budget) default ceilings for `find`, measured on prompt-side input
  * tokens (uncached input + cache reads + cache writes; see `inputTokensOf`).
- * Audit deliberately has no default ceiling: it keeps the pre-B3 semantics
+ * Audit deliberately has no default ceiling: it keeps the pre-budget semantics
  * (unlimited unless `--max-tokens` is set), so a future refactor cannot
  * silently cap a multi-day sweep.
  *
- * Tightening either constant requires checking the M1 per-PR token
+ * Tightening either constant requires checking the end-to-end-benchmark per-PR token
  * distribution first (ADR 0006) and recording the result as an
  * ADR 0006 amendment here — not a drive-by edit.
  */
@@ -35,12 +35,12 @@ export interface BudgetOptions {
    */
   maxTokens?: number;
   /**
-   * B3 default (`find` only): prompt-side input-token ceiling for reviewer
+   * The default (`find` only): prompt-side input-token ceiling for reviewer
    * sessions. Reaching it starts no new reviewer round but does not cut a
    * pending verification drain short — that is ADR 0006's grace.
    */
   reviewerTokens?: number;
-  /** B3 default (`find` only): prompt-side input-token ceiling for verifier sessions. */
+  /** The default (`find` only): prompt-side input-token ceiling for verifier sessions. */
   verifierTokens?: number;
   maxWallClockMs?: number;
 }
@@ -68,7 +68,7 @@ export class Budget {
   constructor(private readonly options: BudgetOptions) {}
 
   get tokenEstimate(): number { return this.spentTokens; }
-  /** Prompt-side (input) estimate across every role — B3's accounting. */
+  /** Prompt-side (input) estimate across every role — the budget's accounting. */
   get inputTokenEstimate(): number { return this.spentInputTokens; }
   get reviewerInputTokens(): number { return this.spentReviewerInput; }
   get verifierInputTokens(): number { return this.spentVerifierInput; }
@@ -114,7 +114,7 @@ export class Budget {
 
   /**
    * Any ceiling that stops the next session from starting: the explicit
-   * whole-run token ceiling, the wall clock, then the B3 role ceilings.
+   * whole-run token ceiling, the wall clock, then the default budget role ceilings.
    */
   ceilingHit(): BudgetCeilingHit | null {
     return this.hardCeilingHit() ?? this.gracefulCeilingHit();
@@ -131,7 +131,7 @@ export class Budget {
   }
 
   /**
-   * The default role ceilings (B3's grace), which stop new discovery but never
+   * The default role ceilings (the budget's grace), which stop new discovery but never
    * abandon a pending verification backlog. Null when neither is configured or
    * reached, or when a hard ceiling is also hit (the hard one reports first).
    */

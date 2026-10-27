@@ -17,12 +17,12 @@ import {
 import { buildRepoSnapshot } from "../../dist/changes/snapshot.js";
 
 /**
- * B1: the shared filter module. These pin the contract the real run and both
+ * Change-mode filter: the shared filter module. These pin the contract the real run and both
  * previews (`audit --dry-run`, `find --preview`) call — the tables, the
  * classifier and the include normalization.
  */
 
-test("B1 filter policy: one versioned module owns the shared tables", () => {
+test("Change-mode filter policy: one versioned module owns the shared tables", () => {
   assert.equal(FILTER_VERSION, 1);
   assert.equal(MAX_AUDIT_FILE_BYTES, 1_000_000);
   assert.ok(DEFAULT_SKIP_PATTERNS.length >= 15);
@@ -57,7 +57,7 @@ test("normalizeIncludePath: literal file/dir prefixes only", () => {
   }
 });
 
-test("B1: audit selection is unchanged — include narrows, then skip and the default policy apply", async () => {
+test("Change-mode filter: audit selection is unchanged — include narrows, then skip and the default policy apply", async () => {
   const repo = createTempGitRepo("pir-filter-audit-");
   try {
     repo.write("src/app.ts", "const a = 1;\n");
@@ -77,7 +77,7 @@ test("B1: audit selection is unchanged — include narrows, then skip and the de
     assert.match(byPath.get("node_modules/dep/index.js").exclusionReason, /default policy: vendored dependencies/);
     assert.equal(byPath.get("dist/gen.js").selection, "excluded");
     assert.match(byPath.get("dist/gen.js").exclusionReason, /default policy: build output/);
-    // Audit keeps no secret gate (change mode adds it) — untouched by B1.
+    // Audit keeps no secret gate (change mode adds it); the change-mode filter does not touch it.
     assert.equal(byPath.get("config/.env").selection, "selected");
     assert.equal(snap.scopeVersion, FILTER_VERSION);
   } finally {
@@ -103,7 +103,7 @@ function file(path, over = {}) {
   };
 }
 
-test("B1 gate 1 (binary): extension policy, on both sides of a rename, before everything else", () => {
+test("Change-mode filter gate 1 (binary): extension policy, on both sides of a rename, before everything else", () => {
   assert.deepEqual(select(file("assets/logo.png")), {
     path: "assets/logo.png", selected: false, gate: "binary",
     reason: "binary file (diff bodies are not machine-reviewable text)",
@@ -114,7 +114,7 @@ test("B1 gate 1 (binary): extension policy, on both sides of a rename, before ev
   assert.equal(select(file("src/app.ts")).selected, true);
 });
 
-test("B1 gate 2 (secret): dotenv/.ssh/credential paths are excluded and .env examples are exempt", () => {
+test("Change-mode filter gate 2 (secret): dotenv/.ssh/credential paths are excluded and .env examples are exempt", () => {
   for (const path of [
     ".env", "config/.env", "config/.env.production", ".ssh/id_rsa", ".ssh/config",
     "id_rsa", "keys/id_ed25519", ".netrc", "sub/.npmrc", ".pypirc", ".dockercfg",
@@ -131,7 +131,7 @@ test("B1 gate 2 (secret): dotenv/.ssh/credential paths are excluded and .env exa
   assert.equal(select(file("config/example.txt", { oldPath: ".env" })).gate, "secret");
 });
 
-test("B1 gate 3 (skip patterns): explicit --skip first, then the versioned default policy", () => {
+test("Change-mode filter gate 3 (skip patterns): explicit --skip first, then the versioned default policy", () => {
   const skipped = select(file("src/api.gen.ts"), { skipGlobs: ["*.gen.ts"] });
   assert.equal(skipped.gate, "skip-pattern");
   assert.equal(skipped.reason, "--skip *.gen.ts");
@@ -142,7 +142,7 @@ test("B1 gate 3 (skip patterns): explicit --skip first, then the versioned defau
   assert.equal(select(file("src/app.ts")).selected, true);
 });
 
-test("B1 gate 4 (oversized diff): bytes of the pageable diff body, cap boundary exact", () => {
+test("Change-mode filter gate 4 (oversized diff): bytes of the pageable diff body, cap boundary exact", () => {
   const atCap = file("src/exact.ts", { hunks: [{ newStart: 1, newLineCount: 1, oldStart: 1, oldLineCount: 1, header: HEADER, lines: ["x".repeat(MAX_DIFF_FILE_BYTES - HEADER.length - 2)] }] });
   assert.equal(diffBodyBytes(atCap), MAX_DIFF_FILE_BYTES);
   assert.equal(select(atCap).selected, true, "exactly at the cap is still reviewable");
@@ -155,7 +155,7 @@ test("B1 gate 4 (oversized diff): bytes of the pageable diff body, cap boundary 
   assert.ok(diffBodyBytes(multibyte) > MAX_DIFF_FILE_BYTES);
 });
 
-test("B1 include bypass: include rescues skip patterns and oversized diffs, never binary or secret", () => {
+test("Change-mode filter include bypass: include rescues skip patterns and oversized diffs, never binary or secret", () => {
   // Bypass: an explicit include overrides the default policy and the size cap.
   assert.equal(select(file("dist/bundle.js"), { includePaths: ["dist/bundle.js"] }).selected, true);
   assert.equal(select(file("dist"), { includePaths: ["dist"] }).selected, true, "dir prefixes include a subtree");

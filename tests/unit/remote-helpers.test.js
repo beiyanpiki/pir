@@ -596,7 +596,7 @@ test("--detach cannot ride the registered-repo lane (#53, dogfood F-49)", async 
   );
 });
 
-test("anglesFlag: comma ids, all expansion, validation (F1)", () => {
+test("anglesFlag: comma ids, all expansion, validation (angle fan-out)", () => {
   assert.equal(anglesFlag(new Map()), undefined);
   assert.deepEqual(anglesFlag(new Map([["--angles", "correctness,security"]])), ["correctness", "security"]);
   assert.deepEqual(anglesFlag(new Map([["--angles", " correctness , security "]])), ["correctness", "security"]);

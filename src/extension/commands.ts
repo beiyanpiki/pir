@@ -49,7 +49,7 @@ function extractMaxFindings(tokens: string[]): number | null | undefined {
 }
 
 /**
- * --max-tokens (B3, ADR 0006): the same contract as the CLI parser — a
+ * --max-tokens (default budget, ADR 0006): the same contract as the CLI parser — a
  * positive integer, or the literal "unlimited" parsed to null (every token
  * ceiling off). A bare Number() would turn "unlimited" into NaN and die in
  * the supervisor's positiveInteger guard, making the documented opt-out

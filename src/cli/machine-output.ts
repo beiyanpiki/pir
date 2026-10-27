@@ -2,7 +2,7 @@ import { VALUE_FLAGS } from "./executor.js";
 
 /**
  * Machine-output selection for the layers that decide before the executor runs
- * (ADR 0020, dogfood F-17): the first-run wizard and the remote `--detach`
+ * (ADR 0016 Part III, dogfood F-17): the first-run wizard and the remote `--detach`
  * submission envelope. `--json` is the legacy spelling of `--format json`, so
  * `json` and `sarif` are both machine output — testing the literal `--json`
  * token (as those two pre-existing checks did) missed `--format json|sarif`.

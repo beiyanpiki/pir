@@ -17,7 +17,7 @@ export interface VerifierDeps {
   candidate: CandidateFinding;
   /** Only these matched IDs are eligible for decision assessments. */
   priorDecisions: MemoryMatch[];
-  /** Cross-entity dismissal signal (M1, observational); computed once per candidate. */
+  /** Cross-entity dismissal signal (observational); computed once per candidate. */
   similarDismissed?: SimilarDismissedResult;
   model?: string;
   transcriptFile?: string;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M0 — data acquisition (dataset download, sha256 pin, citation notice).
+ * AACR-Bench verifier benchmark — data acquisition (dataset download, sha256 pin, citation notice).
  *
  * Downloads the pinned Hugging Face `dataset.json` into tests/eval/aacr/dataset/
  * (gitignored), verifies it against the sha256 pin in meta.json, and writes a

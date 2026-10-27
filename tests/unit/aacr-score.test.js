@@ -163,7 +163,7 @@ test("scoreRun reports both policies and every bucket per arm", () => {
   }
 });
 
-test("B4: rejection grounds are counted per arm over kills, with unknown kept visible", () => {
+test("Rejection grounds are counted per arm over kills, with unknown kept visible", () => {
   const scores = scoreRun([
     verifierRow({ id: "a", label: 1, verdict: "rejected", decision: "kill", rejectionGround: "pre-existing" }),
     verifierRow({ id: "b", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
@@ -196,7 +196,7 @@ test("renderResultsMd refuses to render without provenance and includes the cita
   assert.throws(() => renderResultsMd({ run: { ...run, sample: {} }, scores }), /run\.sample\.digest/);
   assert.throws(() => renderResultsMd({ run, scores: { arms: {} } }), /nothing to report/);
   const markdown = renderResultsMd({ run, scores, notes: ["fixture note"] });
-  assert.match(markdown, /^# M0 — AACR-Bench verifier offline benchmark \(2026-10-19\)/);
+  assert.match(markdown, /^# AACR-Bench verifier offline benchmark \(2026-10-19\)/);
   assert.match(markdown, /## Protocol/);
   assert.match(markdown, /uncertain = keep/);
   assert.match(markdown, /killRate/);
@@ -208,7 +208,7 @@ test("renderResultsMd refuses to render without provenance and includes the cita
   assert.equal(markdown.endsWith("\n"), true);
 });
 
-test("B4: the results document renders the rejection-ground table when a ground was recorded", () => {
+test("The results document renders the rejection-ground table when a ground was recorded", () => {
   const scores = scoreRun([
     verifierRow({ id: "a", label: 1, verdict: "rejected", decision: "kill", rejectionGround: "pre-existing" }),
     verifierRow({ id: "b", label: 0, verdict: "rejected", decision: "kill", rejectionGround: "guarded" }),
@@ -221,15 +221,15 @@ test("B4: the results document renders the rejection-ground table when a ground 
     config: { model: "m", thinking: "medium" }, startedAt: "2026-10-19T00:00:00.000Z", finishedAt: "2026-10-19T01:00:00.000Z", cacheBytes: 1024,
   };
   const markdown = renderResultsMd({ run, scores });
-  assert.match(markdown, /### Rejection grounds \(B4\)/);
+  assert.match(markdown, /### Rejection grounds/);
   assert.match(markdown, /\| guarded \| 1 \| 1 \| 0 \| 0\.0% \|/);
   assert.match(markdown, /\| pre-existing \| 1 \| 0 \| 1 \| 100\.0% \|/);
-  // An arm with no recorded ground (pre-B4 build / OCR) renders no table.
+  // An arm with no recorded ground (a pre-change build, or OCR) renders no table.
   const ungrounded = renderResultsMd({ run, scores: scoreRun([verifierRow({ id: "a", label: 0, verdict: "rejected", decision: "kill" })]) });
-  assert.ok(!ungrounded.includes("Rejection grounds (B4)"));
+  assert.ok(!ungrounded.includes("Rejection grounds"));
 });
 
-test("B4: a baseline renders the controlled before/after section and refuses a non-comparable pair", () => {
+test("A baseline renders the controlled before/after section and refuses a non-comparable pair", () => {
   const run = {
     round: "after", model: "opencode-go/deepseek-v4.1-flash:medium",
     dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
@@ -248,7 +248,7 @@ test("B4: a baseline renders the controlled before/after section and refuses a n
   ]);
   const markdown = renderResultsMd({ run, scores, baseline: { run: beforeRun, scores: baselineScores } });
   assert.match(markdown, /## Before\/after \(controlled build comparison\)/);
-  assert.match(markdown, /- \*\*verifier — B4 gate\*\*: falseKillRate 100\.0% → 100\.0% \(±0\.0 pp\) ⇒ \*\*no regression\*\*/);
+  assert.match(markdown, /- \*\*verifier — rejection-grounds gate\*\*: falseKillRate 100\.0% → 100\.0% \(±0\.0 pp\) ⇒ \*\*no regression\*\*/);
   assert.match(markdown, /killRate 100\.0% → 100\.0%/);
   // Only the CLI build may differ.
   assert.throws(() => renderResultsMd({ run, scores, baseline: { run: { ...beforeRun, sample: { ...run.sample, digest: "e".repeat(64) } }, scores: baselineScores } }), /differ in sample digest/);
@@ -271,7 +271,7 @@ test("deltaText and report parseOptions handle the baseline flag", () => {
   assert.throws(() => reportOptions(["--baseline"], {}), /missing value/);
 });
 
-test("scoreRun: per-arm diffBaseKinds counts degraded rows (M0 dogfood F-181)", () => {
+test("scoreRun: per-arm diffBaseKinds counts degraded rows (verifier-benchmark dogfood F-181)", () => {
   const rows = [
     verifierRow({ id: "a", diffBaseKind: "merge-base" }),
     verifierRow({ id: "b", diffBaseKind: "base-tip" }),
@@ -281,7 +281,7 @@ test("scoreRun: per-arm diffBaseKinds counts degraded rows (M0 dogfood F-181)", 
   assert.deepEqual(scores.arms.verifier.diffBaseKinds, { "merge-base": 1, "base-tip": 1, unknown: 1 });
 });
 
-test("M0 dogfood F-188: a verifier session without a verdict scores as no decision", () => {
+test("verifier-benchmark dogfood F-188: a verifier session without a verdict scores as no decision", () => {
   const providerError = verifierRow({ decision: "keep", verdict: "uncertain", uncertaintyReason: "provider-error" });
   assert.equal(classify(providerError, PRIMARY_POLICY), "none");
   assert.equal(classify(providerError, STRICT_POLICY), "none");
@@ -300,7 +300,7 @@ test("M0 dogfood F-188: a verifier session without a verdict scores as no decisi
   assert.equal(overall.invalid, 1);
 });
 
-test("renderResultsMd states the degraded diff-base count (M0 dogfood F-181)", () => {
+test("renderResultsMd states the degraded diff-base count (verifier-benchmark dogfood F-181)", () => {
   const run = {
     round: "2026-10-19-m0", model: "opencode-go/deepseek-v4.1-flash:medium",
     dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
@@ -314,7 +314,7 @@ test("renderResultsMd states the degraded diff-base count (M0 dogfood F-181)", (
   assert.match(degraded, /1 verifier row\(s\) used a degraded base-tip diff/);
 });
 
-test("B4: an identical build on both sides is called out, not read as evidence", () => {
+test("An identical build on both sides is called out, not read as evidence", () => {
   const run = {
     round: "after", model: "opencode-go/deepseek-v4.1-flash:medium",
     dataset: { sha256: "0".repeat(64), revision: "abc123", records: 2145 },
@@ -331,7 +331,7 @@ test("B4: an identical build on both sides is called out, not read as evidence",
   assert.ok(!distinct.includes("same build digest"));
   assert.match(distinct, /− `bbbbbbbb`|\| − bbbbbbbb \|/);
 });
-test("M0 S1: usage is summed per arm and a missing usage is counted, never assumed zero-cost", () => {
+test("verifier-benchmark field-order: usage is summed per arm and a missing usage is counted, never assumed zero-cost", () => {
   const rows = [
     verifierRow({ id: "a", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } }),
     verifierRow({ id: "b", usage: { inputTokens: 50, outputTokens: 11, totalTokens: 500 } }),
@@ -366,7 +366,7 @@ const macroRows = [
   verifierRow({ id: "c", label: 0, verdict: "confirmed", decision: "keep", buckets: { source_model: "A", category: "Cat1", context: "Ctx1", is_ai_comment: true } }),
 ];
 
-test("M0 dogfood F-186: the headline carries a macro bucket-mean row beside the micro counts", () => {
+test("verifier-benchmark dogfood F-186: the headline carries a macro bucket-mean row beside the micro counts", () => {
   const scores = scoreRun(macroRows);
   const macro = macroAverage(scores.arms.verifier);
   // Four cells in each of the two bucket families: the A rows and the B row.
@@ -385,7 +385,7 @@ test("M0 dogfood F-186: the headline carries a macro bucket-mean row beside the 
   assert.match(markdown, /unweighted mean of each metric over every bucket cell/);
 });
 
-test("M0 dogfood F-192: strict-unresolved reads the strict bucket, not the primary one", () => {
+test("verifier-benchmark dogfood F-192: strict-unresolved reads the strict bucket, not the primary one", () => {
   const scores = scoreRun([verifierRow({ id: "u", label: 1, verdict: "uncertain", decision: "keep", confidence: 0.4 })]);
   const primary = scores.arms.verifier.policies[PRIMARY_POLICY].overall;
   const strict = scores.arms.verifier.policies[STRICT_POLICY].overall;
@@ -397,7 +397,7 @@ test("M0 dogfood F-192: strict-unresolved reads the strict bucket, not the prima
   assert.match(markdown, /\| verifier \| uncertain=miss \| 1 \| 1 \/ 0 \|/);
 });
 
-test("M0 S1: the results document records session usage and omits the section when no row reports it", () => {
+test("verifier-benchmark field-order: the results document records session usage and omits the section when no row reports it", () => {
   const withUsage = renderResultsMd({ run: usageRun, scores: scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]) });
   assert.match(withUsage, /## Session usage/);
   assert.match(withUsage, /\| verifier \| 1 \| 100 \| 20 \| 1,000 \| 20 \| 1,000 \|/);
@@ -409,7 +409,7 @@ test("M0 S1: the results document records session usage and omits the section wh
   assert.ok(!withoutUsage.includes("## Session usage"));
 });
 
-test("M0 S1: the before/after section compares output tokens per side when both report usage", () => {
+test("verifier-benchmark field-order: the before/after section compares output tokens per side when both report usage", () => {
   const beforeRun = { ...usageRun, round: "before", cli: { sha256: "b".repeat(64), buildSha256: "b".repeat(64) } };
   const scores = scoreRun([verifierRow({ usage: { inputTokens: 200, outputTokens: 40, totalTokens: 2000 } })]);
   const baselineScores = scoreRun([verifierRow({ usage: { inputTokens: 100, outputTokens: 20, totalTokens: 1000 } })]);

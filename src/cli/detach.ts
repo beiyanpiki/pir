@@ -10,7 +10,7 @@ import { buildLocalReceipt, receiptRecoveryCommands, writeLocalReceipt } from ".
 import { getHeadCommit } from "../changes/git.js";
 
 /**
- * Local detached execution (ADR 0022): `find`/`audit --detach` in local mode
+ * Local detached execution (ADR 0016 Part IV): `find`/`audit --detach` in local mode
  * re-executes this CLI as a background process with an owner-only log, writes
  * a receipt before the spawn and returns as soon as the child is accepted.
  * The child settles its own receipt from its exit hook (`PIR_LOCAL_JOB_ID`),
@@ -63,7 +63,7 @@ export function detachChildArgv(argv: string[]): string[] {
  * Validate a local detach invocation before any file is created. Lanes that
  * produce no run — a preview, a dry run, a coverage readout — and commands
  * that are not review commands are usage errors (exit 2), never silently
- * ignored (ADR 0022 decision 9).
+ * ignored (ADR 0016 Part IV decision 9).
  */
 export function resolveDetachInvocation(argv: string[], cwd: string): DetachInvocation {
   const { positional, flags } = parseArgs(argv);

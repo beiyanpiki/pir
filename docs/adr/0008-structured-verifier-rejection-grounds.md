@@ -1,11 +1,11 @@
-# ADR 0008: Structured verifier rejection grounds (B4)
+# ADR 0008: Structured verifier rejection grounds
 
 ## Status
 
-**Accepted (2026-10-19).** Item B4 of the 2026-10 OCR-borrow series (P1)
-in Iteration 2. A rejected verification names *why* it rejected, in a fixed
+**Accepted (2026-10-19).** The structured rejection grounds decision of the 2026-10
+OCR-borrow series (P1) in Iteration 2. A rejected verification names *why* it rejected, in a fixed
 vocabulary, so the reason survives the session and can be audited, bucketed
-and compared. M0's kill-family numbers are the merge gate.
+and compared. The verifier benchmark's kill-family numbers are the merge gate.
 
 ## Context
 
@@ -20,7 +20,7 @@ guard makes the failure unreachable, and because the defect predates the
 change are three different claims about three different things, and they
 degrade the same way.
 
-M0's first `--limit 100` round measured what that costs
+The verifier benchmark's first `--limit 100` round measured what that costs
 (historical 100-comment sample, retired in favour of the full-corpus
 baseline — see
 [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md)):
@@ -39,7 +39,7 @@ veto** before correctness is judged at all (memory safety, concurrency,
 linkage/declaration consistency, behavior or compatibility change, unused
 parameter). Its cost model is explicit: "Removing a correct comment silently
 destroys a real finding. It never reaches anyone, and nobody learns that it
-was dropped." B4 borrows the enumeration and the cost statement, not OCR's
+was dropped." This decision borrows the enumeration and the cost statement, not OCR's
 diff-only evidence base: pir's verifier may read the whole pinned revision,
 so its grounds are naturally richer than A/B.
 
@@ -91,31 +91,31 @@ gate must report `killRate`, `falseKillRate` and
    `VerifiedFinding.rejectionGround` (`applyVerdict`) → `FindingView`
    (`data.findings[].rejectionGround` in the JSON envelope, and the text
    renderer's verifier line) → the `findings.rejection_ground` column
-   (migration v8; nullable, so pre-B4 rows and kept rows carry null) →
+   (migration v8; nullable, so pre-change rows and kept rows carry null) →
    `_verify-comment`'s result and `tests/eval/aacr/run-m0.js`'s score row →
    `score.js`'s `rejectionGrounds` distribution, rendered as a per-arm table
    in the results document. Every hop is additive: no existing consumer
    changes, and a reader that ignores the new field sees exactly today's
    output.
-6. **The merge gate is M0's kill family on a fixed sample.** The pre-B4 and
-   post-B4 builds run the same materialized 100-comment sample (seed 42,
+6. **The merge gate is the verifier benchmark's kill family on a fixed sample.** The pre-change and
+   post-change builds run the same materialized 100-comment sample (seed 42,
    digest `74f43e2f…c07d`, the Iteration 1 sample), the same model id and the
    same scoring code; only the CLI build differs. `falseKillRate` must not
    regress, and `killRate` / `interceptPrecision` are read with it (ADR-0007 §5). The series' wording "kill-rate (rejecting a label=1
    comment)" is ADR-0007's `falseKillRate`; the results file names all three
    so neither wording can be misread. The gate runs on the verifier arm only:
-   B4 touches no OCR prompt or ocr-arm code, so an OCR row would be an
+   this change touches no OCR prompt or ocr-arm code, so an OCR row would be an
    unchanged control, not evidence.
 
 ## Consequences
 
 - Rejections become countable by reason. A future false-kill cluster can be
   attributed ("`guarded` rejections of label-1 comments in Maintainability")
-  instead of re-reading rationales, and M1's end-to-end runs inherit the same
+  instead of re-reading rationales, and its end-to-end runs inherit the same
   field without new plumbing.
 - The verifier pays a small compliance cost: a session that rejects without a
   ground burns one non-terminal tool error and corrects it, and a session that
-  never corrects it degrades to `missing-verdict` (invalid), which the M0
+  never corrects it degrades to `missing-verdict` (invalid), which the verifier benchmark
   scorer counts as a miss — never as a silent keep. The gate's invalid count
   is part of the evidence, not an afterthought.
 - Grounds are **model-reported**, so they are a triage signal, not ground
@@ -126,7 +126,7 @@ gate must report `killRate`, `falseKillRate` and
 - `other` will absorb vocabulary drift and some genuine variety. A rising
   `other` share is the signal to re-examine the enum, not a reason to widen
   it now.
-- The protected-subject clause is a soft control. If M0's after-run shows
+- The protected-subject clause is a soft control. If the verifier benchmark's after-run shows
   protected-subject false kills unchanged, the next step is a targeted
   measurement (e.g. a per-category view of concurrency/security comments),
   not code enforcement inside the verifier.
@@ -135,17 +135,17 @@ gate must report `killRate`, `falseKillRate` and
   "the verifier had no reason"; it is "this mode does not record one yet".
 - **The gate exposed a provenance gap, fixed here.** `dist/cli/cli.js` is a
   thin dispatcher, so `run-m0.js`'s CLI `sha256` was identical for the pre-
-  and post-B4 builds (both reported `2a6ce185…`) even though the verifier
+  and post-change builds (both reported `2a6ce185…`) even though the verifier
   behaved differently: a build identity that cannot see a behavior change
   cannot certify a controlled comparison. `run-m0.js` now records a **build
   digest** over every built module under `dist/` (sorted path + content),
   `--resume` refuses a round recorded with a different digest, and
   `report.js` prints the digest per side and explicitly calls out two sides
-  that share one instead of implying a comparison. The B4 rounds were
+  that share one instead of implying a comparison. The comparison rounds were
   re-recorded with the digest in place; the before/after numbers themselves
   are unchanged by the fix.
 - **Gate result (2026-10-19, fixed 100-comment sample, one run per side).**
-  Pre-B4 build `9fd6ea7` (dist digest `b6214403…`) vs this branch
+  Pre-change build `9fd6ea7` (dist digest `b6214403…`) vs this branch
   (`64734461…`), same model and material:
   `falseKillRate` 77.1% (54/70) → 78.6% (55/70),
   `killRate` 80.0% (20/25) → 80.0% (20/25),
@@ -158,11 +158,11 @@ gate must report `killRate`, `falseKillRate` and
   "must not regress" rule is therefore not satisfied *as proof* — a
   one-comment delta is exactly this sample's resolution (1.4 pp) — and the
   gate is recorded as **not proven either way, with no evidence of a
-  systematic increase in false kills**. Landing B4 rests on that reading
-  plus the mechanism being additive and auditable; the post-B4 full-corpus
+  systematic increase in false kills**. Landing this change rests on that reading
+  plus the mechanism being additive and auditable; the post-change full-corpus
   round scores 2,012 comments and carries the same three kill-family numbers
   and the ground distribution, which is where a systematic shift would show.
-  This is a concrete variance datapoint for M2's change protocol: a 95-row
+  This is a concrete variance datapoint for the change protocol: a 95-row
   sample cannot gate a prompt change at the one-comment level, so a
   before/after claim of "no regression" needs repeats (or the full corpus)
   before it is treated as evidence.

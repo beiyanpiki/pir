@@ -127,7 +127,7 @@ Usage:
                       (<provider>/<model> or fuzzy; PIR_VERIFIER_MODEL env
                       applies when the flag is absent). An unresolvable id is
                       a hard session error, never a silent fallback
-  --angles <list>     experimental (F1): round 1 fans out one specialized
+  --angles <list>     experimental (angle fan-out): round 1 fans out one specialized
                       reviewer session per angle (default off). Built-ins:
                       correctness, concurrency, security, contracts,
                       performance — or "all". Capped at 4 parallel sessions,
@@ -137,7 +137,7 @@ Usage:
                       today; more packs follow): comma-separated names,
                       "none" to disable, or "auto" to detect from marker
                       files at head (default)
-  --rule <path>       project rule file (B5/ADR-0010). Three layers, first
+  --rule <path>       project rule file (ADR 0010 Part I). Three layers, first
                       match wins: --rule > <root>/.pir/rule.json >
                       <config-dir>/rule.json. Each rule pairs a path glob with
                       guidance (inline or a repo-relative .md/.markdown/.txt
@@ -146,7 +146,7 @@ Usage:
                       guidance for the run. Applied rules and their hash are
                       recorded in run.json; \`pir config show\` prints the
                       layers. Local mode only; find only
-  --background <text> user background for this change (S2/ADR-0016): the
+  --background <text> user background for this change (ADR 0016 Part I): the
                       stated goal, intentional behaviour changes, migration
                       notes. Delimited and labelled as untrusted context in
                       the reviewer prompt — never as instructions, and never
@@ -164,14 +164,14 @@ Usage:
                       and server)
   --no-sync-index     skip codegraph index sync
   --preview           print the file selection a real find of the same range
-                      would review (#B1): per-file status and churn, plus
+                      would review: per-file status and churn, plus
                       selected or excluded with the gate's reason — binary,
                       secret paths, skip patterns, oversized single-file
                       diff. Excluded files stay visible as metadata; their
                       diff bodies never reach a model. No run, no model, no
                       writes; run-shaping flags are rejected
   --detach            return once the run is accepted instead of waiting
-                      (#53, ADR 0022): locally the review is re-executed as a
+                      (#53, ADR 0016 Part IV): locally the review is re-executed as a
                       detached background process with a 0600 log at
                       ~/.pir/logs/<jobId>.log and a receipt; remotely it is
                       an async job (see Remote mode). Exit 0 means accepted,
@@ -214,7 +214,7 @@ Usage:
                       model, no writes. --list-files adds per-file
                       selection/classification/reason
   --detach            return once the run is accepted instead of waiting
-                      (#53, ADR 0022): locally the review is re-executed as a
+                      (#53, ADR 0016 Part IV): locally the review is re-executed as a
                       detached background process with a 0600 log at
                       ~/.pir/logs/<jobId>.log and a receipt; remotely it is
                       an async job (see Remote mode). Exit 0 means accepted,
@@ -338,7 +338,7 @@ Usage:
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
   --detach            submit find/audit and return after acceptance, never
-                      after the review (#53, ADR 0022). Exit 0 means
+                      after the review (#53, ADR 0016 Part IV). Exit 0 means
                       accepted, not reviewed. Remote — an async job, and
                       stdout carries the submission envelope (full jobId,
                       origin, project, head/base, follow-up commands); the
@@ -553,7 +553,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
 export type OutputFormat = "text" | "json" | "sarif";
 
 /**
- * `find`/`audit` output selection (ADR 0020). `--format` names the
+ * `find`/`audit` output selection (ADR 0016 Part III). `--format` names the
  * format and the legacy `--json` is the same choice spelled differently, so
  * asking for two different formats at once is a usage error rather than a
  * silent precedence rule. Resolved before any run row or session exists.
@@ -698,7 +698,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = resolved;
   }
 
-  // Project-rule introspection (Track B, S7): answers "which rule wins for
+  // Project-rule introspection: answers "which rule wins for
   // this path?" from the same layer loader and matcher find uses. Client-side
   // only — it reads the caller's rule files, opens no project database and
   // starts no model session.
@@ -730,7 +730,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
     if (flags.has("--rule")) throw new UsageError("--rule applies to find only (audit has no change-mode prompt)");
     if (flags.has("--background") || flags.has("--background-file")) {
-      throw new UsageError("audit has no reviewer background; --background/--background-file are find-only flags (S2/ADR-0016)");
+      throw new UsageError("audit has no reviewer background; --background/--background-file are find-only flags (ADR 0016 Part I)");
     }
   }
 
@@ -820,7 +820,7 @@ async function runInContext(
       case "verify-fix":
         code = await cmdVerifyFix(ctx, positional.slice(1), flags, json, emit);
         break;
-      // Internal eval command (M0): outside the stable contract, never listed
+      // Internal eval command: outside the stable contract, never listed
       // in help and never forwarded to a remote server (see cli.ts LOCAL_ONLY).
       case "_verify-comment":
         code = await cmdVerifyComment(ctx, positional.slice(1), flags, json, emit, log);
@@ -1015,7 +1015,7 @@ export function maxFindingsFlag(flags: Map<string, string | boolean>): number | 
 /**
  * --max-tokens: positive integer, or the literal "unlimited"
  * (case-insensitive) which removes every token ceiling — including find's
- * B3 default ceilings (ADR 0006). Parsed to null so the supervisor can tell
+ * default ceilings (ADR 0006). Parsed to null so the supervisor can tell
  * "no ceiling" from every numeric ceiling; undefined means the flag was
  * absent (find applies its defaults, audit stays unlimited).
  */
@@ -1099,7 +1099,7 @@ export function verifierModelFlag(
 }
 
 /**
- * --angles <a,b|all> (F1, experimental): round 1 fans out one specialized
+ * --angles <a,b|all> (angle fan-out, experimental): round 1 fans out one specialized
  * reviewer session per listed angle instead of one general session. "all"
  * expands to every built-in angle; unknown ids fail here with the available
  * list. Default off; find-only.
@@ -1124,7 +1124,7 @@ export function anglesFlag(flags: Map<string, string | boolean>): string[] | und
 }
 
 /**
- * S2 (ADR-0016): `--background` / `--background-file` → the prompt-ready
+ * ADR 0016 Part I: `--background` / `--background-file` → the prompt-ready
  * record. `--background-file` wins with a warning; every guard failure is a
  * usage error, so a run never starts half-set. Warnings go to the caller's
  * warning sink, which the CLI wires straight to stderr: a truncation must
@@ -1216,14 +1216,14 @@ async function cmdFind(
   warn: Log,
 ): Promise<number> {
   const format = resolveOutputFormat(flags);
-  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // --detach is a client-side flag since ADR 0016 Part IV: the local CLI detaches
   // before the executor runs, and the remote client strips the flag before
   // forwarding. This guard's remaining job is the server lane — a server
   // receiving an unstripped --detach (old client) must fail, never ignore it.
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
   }
-  // File-selection preview (B1/T4): the exact change set and the exact pure
+  // File-selection preview (preview): the exact change set and the exact pure
   // filter a real find of the same range would apply — no run row, no model
   // session, no writes. Run-shaping flags cannot affect a selection, so they
   // are rejected instead of silently ignored (the audit --dry-run precedent).
@@ -1250,7 +1250,7 @@ async function cmdFind(
   if (ruleFile !== undefined && (typeof ruleFile !== "string" || ruleFile.trim() === "")) {
     throw new UsageError("--rule requires a path to a project rule file");
   }
-  // S2 (ADR-0016): resolve the background before any run row or session
+  // ADR 0016 Part I: resolve the background before any run row or session
   // exists. A missing/oversized file, empty text or a reserved delimiter is a
   // usage error (exit 2) — never a run that silently drops the context.
   const background = userBackgroundFromFlags(flags, warn);
@@ -1273,7 +1273,7 @@ async function cmdFind(
       onProgress: (event) => log(`• ${event.message}`),
     });
   } catch (error) {
-    // B5 (ADR-0010): a broken rule file is a configuration error (exit 2),
+    // ADR 0010 Part I: a broken rule file is a configuration error (exit 2),
     // not a runtime failure, and it never reaches a model session.
     if (error instanceof ProjectRuleError) throw new UsageError(error.message);
     throw error;
@@ -1305,7 +1305,7 @@ async function cmdFind(
             maxFindings: result.maxFindings,
             maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
-            // Purely additive (B1): every pre-B1 key keeps its value, plus
+            // Purely additive (change-mode filter): every pre-filter key keeps its value, plus
             // files[].excluded (always present) and excludedReason (filtered only).
             files: result.changeSet.files.map(changedFileSummary),
           },
@@ -1399,7 +1399,7 @@ async function cmdAudit(
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
-  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // --detach is a client-side flag since ADR 0016 Part IV: the local CLI detaches
   // before the executor runs, and the remote client strips the flag before
   // forwarding. A server receiving it unstripped (old client) must fail
   // instead of ignoring it.
@@ -1547,7 +1547,7 @@ async function cmdAudit(
 }
 
 /**
- * `pir find --preview [--json]` (B1/T4): the change set a real find of the
+ * `pir find --preview [--json]` (preview): the change set a real find of the
  * same range would review, plus the per-file decision of the shared
  * change-mode filter — the same buildChangeSet + selectChangeFiles calls the
  * run makes, so what is previewed is what gets reviewed by construction.
@@ -2093,7 +2093,7 @@ async function cmdConfig(args: string[], flags: Map<string, string | boolean>, j
 
   if (sub === "show") {
     const config = loadUserConfig();
-    // B5 (ADR-0010): the effective rule layers are part of `config show`; a
+    // ADR 0010 Part I: the effective rule layers are part of `config show`; a
     // broken rule file fails here with the same loud usage error find gives.
     // --cwd selects the repository whose `.pir/rule.json` layer is read.
     const rules = loadRulesForConfig(typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd());
@@ -2331,7 +2331,7 @@ function ruleCheckJson(
 }
 
 /**
- * `pir rules check <path>` (Track B, S7): the winning rule, its layer, the
+ * `pir rules check <path>`: the winning rule, its layer, the
  * matched glob and the rendered guidance for one repository path. Pure read:
  * no review run row, no project database, no model session, no repo writes.
  */

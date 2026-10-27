@@ -13,7 +13,7 @@ export interface RoundInfo {
   suppressed?: number;
   pending?: number;
   reviewerRan?: boolean;
-  /** C1: cumulative change-mode diff coverage snapshot at round end. */
+  /** coverage ledger: cumulative change-mode diff coverage snapshot at round end. */
   coverage?: ChangeCoverageCounts;
   summary: string;
 }
@@ -34,7 +34,7 @@ export interface ReviewState {
   dryRounds: number;
   estimatedTokens: number;
   stoppedBecause: string | null;
-  /** C1 stage 2: the single forced coverage round has been spent. */
+  /** coverage follow-up: the single forced coverage round has been spent. */
   forcedCoverageRoundUsed: boolean;
 }
 

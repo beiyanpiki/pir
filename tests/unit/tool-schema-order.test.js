@@ -8,7 +8,7 @@ import { createAgentSession } from "@earendil-works/pi-coding-agent";
 import { createIsolatedSessionOptions } from "../../dist/agents/session-factory.js";
 import { createSubmitVerdictTool } from "../../dist/tools/collector-tools.js";
 
-// S1 diagnostic (docs/adr/0015-tool-schema-field-order-diagnostic.md): does the
+// Field-order diagnostic (docs/adr/0007-aacr-benchmarks-and-verifier-calibration.md): does the
 // property order submit_verdict declares reach the provider wire unchanged?
 // Everything here is model-free: no credentials, no socket, no ModelRuntime
 // (which would read real auth/settings).

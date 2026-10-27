@@ -944,7 +944,7 @@ test("findIssues: --verify-model routes verifier sessions to a separate model an
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const factory = new FakeSessionFactory({
     reviewerScript: async (tool) => {
-      // Reads the diff: a competent pass keeps C1 stage 2 out of this fixture.
+      // Reads the diff: a competent pass keeps coverage follow-up out of this fixture.
       await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
       await tool("record_candidate").execute({
         title: "issue 1",
@@ -1023,7 +1023,7 @@ test("findIssues: without --verify-model verifier sessions use the reviewer mode
   }
 });
 
-test("findIssues: coverage ledger accumulates hunk pages and read windows across the run (C1)", async () => {
+test("findIssues: coverage ledger accumulates hunk pages and read windows across the run (coverage ledger)", async () => {
   const savedEnv = process.env.PIR_TRANSCRIPTS;
   process.env.PIR_TRANSCRIPTS = "1";
   const repo = setupRepo();
@@ -1074,7 +1074,7 @@ test("findIssues: coverage ledger accumulates hunk pages and read windows across
   }
 });
 
-test("findIssues: a reviewer that never reads the diff reports zero coverage (C1)", async () => {
+test("findIssues: a reviewer that never reads the diff reports zero coverage (coverage ledger)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const factory = new FakeSessionFactory({
@@ -1180,7 +1180,7 @@ test("findIssues: reviewer reads survive a failure thrown after the reviewer rou
   }
 });
 
-test("findIssues: cold memory keeps the verifier prompt free of dismissal context (M1)", async () => {
+test("findIssues: cold memory keeps the verifier prompt free of dismissal context (observational)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const verifierPrompts = [];
@@ -1212,11 +1212,11 @@ test("findIssues: cold memory keeps the verifier prompt free of dismissal contex
   }
 });
 
-test("findIssues: warm memory surfaces cross-entity dismissals in the verifier prompt (M1)", async () => {
+test("findIssues: warm memory surfaces cross-entity dismissals in the verifier prompt (observational)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   // A dismissal recorded against the same anchor path but a different claim
-  // and no fingerprint: only the M1 cross-entity channel can surface it.
+  // and no fingerprint: only the observational cross-entity channel can surface it.
   ctx.memory.issues.insert({
     featureKey: null,
     entityKey: null,
@@ -1277,7 +1277,7 @@ const FORCED_ROUND_CANDIDATE = {
   evidence: [{ kind: "code", path: "src/pay.ts", startLine: 1, excerpt: "consumeQuota(1)" }],
 };
 
-test("findIssues: one forced coverage round points the reviewer at unread hunks (C1 stage 2)", async () => {
+test("findIssues: one forced coverage round points the reviewer at unread hunks (coverage follow-up)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   let reviewerRound = 0;
@@ -1314,7 +1314,7 @@ test("findIssues: one forced coverage round points the reviewer at unread hunks 
   }
 });
 
-test("findIssues: no forced coverage round when coverage is complete (C1 stage 2)", async () => {
+test("findIssues: no forced coverage round when coverage is complete (coverage follow-up)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const reviewerPrompts = [];
@@ -1339,7 +1339,7 @@ test("findIssues: no forced coverage round when coverage is complete (C1 stage 2
   }
 });
 
-test("findIssues: no forced coverage round when the budget or cap is exhausted (C1 stage 2)", async () => {
+test("findIssues: no forced coverage round when the budget or cap is exhausted (coverage follow-up)", async () => {
   // Budget: maxRounds 1 leaves no room for a forced round.
   {
     const repo = setupRepo();
@@ -1390,7 +1390,7 @@ test("findIssues: no forced coverage round when the budget or cap is exhausted (
   }
 });
 
-test("findIssues: a reviewer that still refuses cannot loop the forced round (C1 stage 2)", async () => {
+test("findIssues: a reviewer that still refuses cannot loop the forced round (coverage follow-up)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   let reviewerRound = 0;
@@ -1680,14 +1680,14 @@ test("findIssues: --angles fans out round 1, merges candidates, reassigns displa
   }
 });
 
-test("findIssues: angle fan-out shrinks deterministically under a token budget (F1)", async () => {
+test("findIssues: angle fan-out shrinks deterministically under a token budget (angle fan-out)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const anglePrompts = [];
   const factory = new FakeSessionFactory({
     reviewerScript: async (tool, promptText) => {
       if (promptText.includes("SPECIALIZED FOCUS")) anglePrompts.push(promptText);
-      // Read the diff: keeps C1 stage 2's forced round out of this fixture.
+      // Read the diff: keeps coverage follow-up's forced round out of this fixture.
       await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
       await tool("finish_round").execute({ summary: "nothing found", nextFocus: [], needsMoreRounds: false });
     },
@@ -1718,7 +1718,7 @@ test("findIssues: angle fan-out shrinks deterministically under a token budget (
   }
 });
 
-test("findIssues: an angle session failure recovers every angle's candidates (F1)", async () => {
+test("findIssues: an angle session failure recovers every angle's candidates (angle fan-out)", async () => {
   const repo = setupRepo();
   const ctx = await createAppContext(repo.dir, { noSyncIndex: true, dbPath: path.join(repo.dir, "m.sqlite") });
   const factory = new FakeSessionFactory({

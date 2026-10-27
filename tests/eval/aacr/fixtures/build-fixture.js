@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * AACR-Bench M1 — fixture builder (upstream samples to the pinned test set).
+ * AACR-Bench end-to-end benchmark — fixture builder (upstream samples to the pinned test set).
  *
  * Downloads (or accepts `--from <file>`) the pinned upstream
  * `dataset/positive_samples.json`, verifies the sha256 pin in meta.json's
- * `fixtures` block, and converts it into the M1 task set: one row per PR with
+ * `fixtures` block, and converts it into the end-to-end task set: one row per PR with
  * the upstream converter's mapping
  *
  *   repo         = owner/name parsed from githubPrUrl
@@ -17,14 +17,14 @@
  *                    source_model}   (index-aligned with reference_comments)
  *
  * positive_samples is the upstream label=1 split: every reference comment is
- * a known-correct review comment. That is deliberate — M1 measures an
+ * a known-correct review comment. That is deliberate — the end-to-end benchmark measures an
  * end-to-end reviewer against known-positive feedback, judged by the pinned
- * upstream judge; it is not M0's binary verifier question.
+ * upstream judge; it is not the verifier benchmark's binary verifier question.
  *
  * The fixture BODY is derived upstream data and is not redistributed: only
  * the builder, the pin (URL + sha256 + size + record count) and the citation
  * are committed. The generated `test-set.json` is gitignored and rebuildable
- * from the pin at any time (ADR-0007 §10, ADR-0009).
+ * from the pin at any time (ADR-0007 §10, ADR 0007 Part II).
  *
  * Opt-in eval surface, same contract as the other AACR scripts: without
  * PIR_EVAL=1 this exits 0 with a parseable skip notice and touches nothing;
@@ -49,7 +49,7 @@ export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex"
 export function loadFixturePin(metaPath = DEFAULT_META) {
   const meta = JSON.parse(readFileSync(metaPath, "utf8"));
   const pin = meta?.fixtures;
-  if (!pin) throw new Error(`meta.json has no fixtures pin: ${metaPath} (M1 needs the pinned positive_samples.json)`);
+  if (!pin) throw new Error(`meta.json has no fixtures pin: ${metaPath} (the end-to-end benchmark needs the pinned positive_samples.json)`);
   for (const field of REQUIRED_PIN_FIELDS) {
     if (pin[field] === undefined || pin[field] === null || pin[field] === "") {
       throw new Error(`meta.json fixtures pin is missing ${field}: ${metaPath}`);
@@ -86,7 +86,7 @@ function optionalString(value) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
-/** One upstream PR record -> one M1 fixture row. Throws instead of silently skipping. */
+/** One upstream PR record -> one end-to-end fixture row. Throws instead of silently skipping. */
 export function convertRecord(record, index = 0) {
   const where = `positive_samples[${index}]`;
   if (!record || typeof record !== "object") throw new Error(`${where}: record must be an object`);
@@ -142,7 +142,7 @@ export function convertRecord(record, index = 0) {
     clone_url: `https://github.com/${repo}.git`,
     change_line_count: changeLineCount ?? null,
     project_main_language: optionalString(record.project_main_language),
-    // PR-level bucket provenance for the later A1 report (comment-level
+    // PR-level bucket provenance for the later report (comment-level
     // category lives in comment_meta).
     pr_category: optionalString(record.category),
     reference_comments,
@@ -152,7 +152,7 @@ export function convertRecord(record, index = 0) {
 }
 
 /**
- * Validate structural invariants the rest of M1 relies on: unique instance
+ * Validate structural invariants the rest of the end-to-end benchmark relies on: unique instance
  * ids, non-empty reference comments, valid sides, aligned comment_meta.
  */
 export function validateFixtureRows(rows) {
@@ -354,7 +354,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const options = parseOptions(argv, env);
   if (options.help) {
     console.log("PIR_EVAL=1 node tests/eval/aacr/fixtures/build-fixture.js [--meta meta.json] [--out fixtures/test-set.json] [--from <positive_samples.json>] [--url <pinned raw url>] [--cache fixtures/positive_samples.json] [--force] [--json]\n" +
-      "Downloads the pinned upstream dataset/positive_samples.json, verifies meta.json's fixtures sha256/size/record pin, and writes the gitignored M1 fixture body (one row per PR; header carries the pin and the arXiv citation).\n" +
+      "Downloads the pinned upstream dataset/positive_samples.json, verifies meta.json's fixtures sha256/size/record pin, and writes the gitignored end-to-end fixture body (one row per PR; header carries the pin and the arXiv citation).\n" +
       "--from <file> converts an existing download (offline / tests). --force re-downloads even when the cached copy matches the pin.");
     return 0;
   }

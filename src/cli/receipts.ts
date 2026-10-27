@@ -27,7 +27,7 @@ export interface Receipt {
   head: string;
   /**
    * "async" is a submission a server accepted (the historical value);
-   * "local" is a detached local run (ADR 0022). A file with no mode at all
+   * "local" is a detached local run (ADR 0016 Part IV). A file with no mode at all
    * predates local detach and reads as a remote submission.
    */
   mode: "async" | "local";
@@ -70,7 +70,7 @@ function sanitizeReceiptArgv(argv: string[]): string[] {
     out.push(token);
   }
   // A receipt lives on disk forever; the inline user background is model
-  // input, not receipt metadata, so its value is redacted too (ADR-0016,
+  // input, not receipt metadata, so its value is redacted too (ADR 0016 Part I,
   // dogfood F-2).
   return redactUserBackgroundArgv(out);
 }
@@ -140,7 +140,7 @@ export interface LocalReceiptInput {
 }
 
 /**
- * A local detach's receipt (ADR 0022): no server, no project identity and no
+ * A local detach's receipt (ADR 0016 Part IV): no server, no project identity and no
  * run id — origin is "local" and the durable facts are the log path and, once
  * the child's exit hook runs, the final exit code. Built before the spawn so
  * the record exists even if the child never starts.
@@ -274,7 +274,7 @@ export function updateReceiptFromResult(jobId: string, resultOutput: string): vo
 export function receiptRecoveryCommands(receipt: Receipt): string[] {
   const id8 = receipt.jobId.slice(0, 8);
   // A detached local run has no server and no job registry: everything about
-  // it is local (ADR 0022). Two concurrent detaches are told apart by these
+  // it is local (ADR 0016 Part IV). Two concurrent detaches are told apart by these
   // receipts and logs, never by `audit coverage --latest`.
   if (receipt.mode === "local") {
     const local = [

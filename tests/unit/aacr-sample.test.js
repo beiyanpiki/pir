@@ -42,7 +42,7 @@ test("commentId is stable, distinct per comment, and index-prefixed", () => {
   assert.notEqual(commentId(3, { ...first, label: 0 }), id);
 });
 
-test("M0 dogfood F-187: sampleRecords skips LEFT-side comments and keeps dataset indices", () => {
+test("verifier-benchmark dogfood F-187: sampleRecords skips LEFT-side comments and keeps dataset indices", () => {
   const records = [
     record({ side: "left", path: "src/old.ts" }),
     record({ path: "src/a.ts" }), record({ path: "src/b.ts" }), record({ path: "src/c.ts" }),
@@ -59,7 +59,7 @@ test("M0 dogfood F-187: sampleRecords skips LEFT-side comments and keeps dataset
   assert.throws(() => sampleRecords(records, { limit: 4, seed: 7 }), /head-anchorable dataset size/);
 });
 
-test("M0 dogfood F-187: validateRecords rejects an unknown side value", () => {
+test("verifier-benchmark dogfood F-187: validateRecords rejects an unknown side value", () => {
   assert.throws(() => validateRecords([record({ side: "middle" })]), /side must be "left" or "right"/);
   assert.doesNotThrow(() => validateRecords([record({ side: "left" })]));
 });
@@ -80,7 +80,7 @@ test("sampleRecords is reproducible from (dataset, seed, limit) and never repeat
   assert.equal(new Set(all.map((entry) => entry.index)).size, 50);
 });
 
-test("M0 Iteration 2: a no-limit sample is the whole head-anchorable corpus, not records.length", () => {
+test("verifier-benchmark iteration 2: a no-limit sample is the whole head-anchorable corpus, not records.length", () => {
   // The full-corpus round omits --limit; with LEFT rows present the dataset
   // size (3) and the anchorable size (2) disagree, so sizing the full sample by
   // records.length used to throw "limit 3 exceeds the head-anchorable dataset

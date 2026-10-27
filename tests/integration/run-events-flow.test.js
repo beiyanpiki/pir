@@ -56,7 +56,7 @@ function setupRepo() {
 
 async function reviewerRecordsCandidate(tool) {
   // The reviewer pages the diff's raw hunk: a competent pass reads the change,
-  // so C1 stage 2 never needs to fire in this fixture.
+  // so coverage follow-up never needs to fire in this fixture.
   await tool("get_change").execute({ path: "src/pay.ts", hunkIndex: 0 });
   await tool("record_candidate").execute({
     title: "retry quota consumed without remote attempt",
@@ -110,7 +110,7 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.ok(phases.includes("round-end"), "round-end progress emitted");
     const roundEnd = events.find((event) => event.kind === "progress" && event.phase === "round-end");
     assert.ok(roundEnd.roundInfo, "round-end carries the round record");
-    // C1: the fixture reviewer paged the diff's single hunk — covered.
+    // Coverage ledger: the fixture reviewer paged the diff's single hunk — covered.
     assert.deepEqual(roundEnd.roundInfo.coverage, { hunksTotal: 1, hunksCovered: 1, filesTotal: 1, filesCovered: 1 });
     const runEnd = events.find((event) => event.kind === "run-end");
     assert.equal(runEnd.status, "completed");
@@ -151,7 +151,7 @@ test("findIssues emits the run-event sequence, feeds a LiveRegistry and writes r
     assert.equal(manifest.runVerdict, "incorrect");
     // Q5: no separate verifier model requested — verifiers used the reviewer model.
     assert.equal(manifest.verifierModel, null);
-    // C1: change-mode manifest carries the per-file coverage ledger.
+    // Coverage ledger: the change-mode manifest carries the per-file ledger.
     assert.deepEqual(manifest.changeCoverage, {
       hunksTotal: 1, hunksCovered: 1, filesTotal: 1, filesCovered: 1,
       files: [{ path: "src/pay.ts", covered: 1, total: 1 }],

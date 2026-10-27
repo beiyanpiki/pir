@@ -16,7 +16,7 @@ import {
 } from "../../dist/core/user-background.js";
 
 /**
- * S2 (ADR-0016) T3: every guard on the explicit user background — precedence,
+ * ADR 0016 Part I: every guard on the explicit user background — precedence,
  * the three caps, sanitisation, delimiter rejection, hash stability — plus the
  * no-background path that must resolve to nothing at all.
  */

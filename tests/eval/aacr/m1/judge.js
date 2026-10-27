@@ -1,7 +1,7 @@
 /**
- * AACR-Bench M1 — judging delegation (pinned upstream judge and evaluate scripts).
+ * AACR-Bench end-to-end benchmark — judging delegation (pinned upstream judge and evaluate scripts).
  *
- * M1 never builds a judge. It reuses the pinned upstream framework
+ * The end-to-end benchmark never builds a judge. It reuses the pinned upstream framework
  * (alibaba/aacr-bench @ the commit in meta.json's `framework` block):
  *
  *   1. resolve a depth-1 clone of the pinned commit,
@@ -14,7 +14,7 @@
  * Reviewer: upstream's CLI only accepts ocr|claude|codex, and our result files
  * are OCR-shaped (`review.comments[{content,path,start_line,end_line}]`), so
  * the delegation uses `--reviewer ocr` by default. `evaluate.py`'s OCR builder
- * is exactly the fallback shape M1 writes.
+ * is exactly the fallback shape the end-to-end benchmark writes.
  *
  * Modes:
  *   off   skip entirely
@@ -99,7 +99,7 @@ async function git(cwd, args, { timeoutMs = DEFAULT_GIT_TIMEOUT_MS } = {}) {
 /**
  * Ensure the pinned upstream clone exists at `judgeDir` and is checked out at
  * `pin.commit`. An existing directory at another commit fails loudly: judge
- * drift silently invalidates every comparison (the M2 change protocol depends
+ * drift silently invalidates every comparison (the change protocol depends
  * on the pin).
  */
 export async function ensureJudgeCheckout({ judgeDir, pin, timeoutMs = DEFAULT_GIT_TIMEOUT_MS } = {}) {
@@ -234,7 +234,7 @@ export function resolvePython(judgeDir, env = process.env) {
 
 /**
  * Pure invocation description (tests assert it without spawning Python).
- * `--reviewer` must be one upstream's CLI accepts; M1's result files use the
+ * `--reviewer` must be one upstream's CLI accepts; the end-to-end benchmark's result files use the
  * OCR shape, so `ocr` is the default and the evaluation falls through
  * evaluate.py's OCR builder.
  */
@@ -244,7 +244,7 @@ export function buildJudgeInvocation({
 } = {}) {
   if (!judgeDir) throw new Error("buildJudgeInvocation needs judgeDir");
   if (!UPSTREAM_REVIEWERS.includes(reviewer)) {
-    throw new Error(`upstream pipeline --reviewer only accepts ${UPSTREAM_REVIEWERS.join(", ")} (M1 writes OCR-shaped results, use "ocr")`);
+    throw new Error(`upstream pipeline --reviewer only accepts ${UPSTREAM_REVIEWERS.join(", ")} (the end-to-end benchmark writes OCR-shaped results, use "ocr")`);
   }
   if (!runId) throw new Error("buildJudgeInvocation needs runId");
   if (!Number.isSafeInteger(evalRounds) || evalRounds < 1) throw new Error("evalRounds must be a positive integer");
@@ -293,7 +293,7 @@ export function findMetricsFile(metricsDir, reviewer, evalRounds = 1) {
   if (evalRounds > 1) {
     // A missing average file means the averaged run did not finish — never
     // fall back to one round's file and publish it as the N-round average
-    // (ADR-0009 §10: the pinned judge's averaging is part of the result).
+    // (ADR 0007 Part II §10: the pinned judge's averaging is part of the result).
     return candidates.find((file) => file.endsWith("_average.json")) ?? null;
   }
   candidates.sort((a, b) => (statSync(b).mtimeMs ?? 0) - (statSync(a).mtimeMs ?? 0));

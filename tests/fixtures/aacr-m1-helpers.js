@@ -1,5 +1,5 @@
 /**
- * Shared M1 test fixtures: tiny positive_samples records, a pin-verified
+ * Shared end-to-end test fixtures: tiny positive_samples records, a pin-verified
  * fixture document, a local bare mirror that accepts exact-SHA fetches, and a
  * fake `pir` CLI. None of these touch the network or a model.
  */

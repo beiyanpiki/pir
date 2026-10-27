@@ -34,7 +34,7 @@ const ADR_RE = /\bADR[-\s]?\d{3,4}\b/;
 // exempt, matched by content so the exemption survives edits above them.
 const EMITTED_PROSE = new Map([
   ["tests/eval/aacr/report.js", ["The three are read together", "- Caliber (", "Ground truth is "]],
-  // The M1 renderer emits no such sentence today; it is listed so a future one
+  // The end-to-end report renderer emits no such sentence today; it is listed so a future one
   // is treated the same way instead of failing the lint silently.
   ["tests/eval/aacr/m1/report-m1.js", []],
 ]);

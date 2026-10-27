@@ -9,7 +9,7 @@ import { DEFAULT_FIND_REVIEWER_INPUT_TOKENS, DEFAULT_FIND_VERIFIER_INPUT_TOKENS 
 import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 
 /**
- * B3 (ADR 0006) budget-hit behavior, driven by scripted sessions with injected
+ * Default-budget behavior (ADR 0006), driven by scripted sessions with injected
  * usage — no model, no network. A scripted session reports whatever usage the
  * scenario needs, so crossing a 1.2M/0.8M ceiling costs nothing.
  */
@@ -111,7 +111,7 @@ async function withRepo(fn) {
   }
 }
 
-test("findIssues B3/A1: the default reviewer ceiling starts no new round but verifies the pending backlog", async () => {
+test("findIssues: the default reviewer ceiling starts no new round but verifies the pending backlog (default budget)", async () => {
   const savedTranscripts = process.env.PIR_TRANSCRIPTS;
   process.env.PIR_TRANSCRIPTS = "1";
   try {
@@ -143,7 +143,7 @@ test("findIssues B3/A1: the default reviewer ceiling starts no new round but ver
       assert.deepEqual(outcome.budgetStop, { kind: "reviewer-tokens", reason: outcome.stoppedBecause });
       assert.ok(outcome.usage.inputTokens >= DEFAULT_FIND_REVIEWER_INPUT_TOKENS);
 
-      // T3: un-reviewed work still reports incomplete and the exit-code
+      // Un-reviewed work still reports incomplete and the exit-code
       // contract is untouched (0 without --fail-on, 1 on a reported P1, 3 for
       // incomplete work under a gate).
       assert.equal(outcome.incomplete, true);
@@ -168,7 +168,7 @@ test("findIssues B3/A1: the default reviewer ceiling starts no new round but ver
   }
 });
 
-test("findIssues B3: the verifier ceiling does not cut the pending backlog short (grace)", async () => {
+test("findIssues: the verifier ceiling does not cut the pending backlog short (default budget; grace)", async () => {
   await withRepo(async (repo, ctx) => {
     const factory = scriptedFactory({
       usage: {
@@ -194,7 +194,7 @@ test("findIssues B3: the verifier ceiling does not cut the pending backlog short
   });
 });
 
-test("findIssues B3/F-178: a backlog larger than one drain cap is still fully verified", async () => {
+test("findIssues: a backlog larger than one drain cap is still fully verified (default budget; dogfood F-178)", async () => {
   await withRepo(async (repo, ctx) => {
     const factory = scriptedFactory({
       usage: {
@@ -224,7 +224,7 @@ test("findIssues B3/F-178: a backlog larger than one drain cap is still fully ve
   });
 });
 
-test("findIssues B3: an explicit --max-tokens replaces the default ceilings; unlimited removes them", async () => {
+test("findIssues: an explicit --max-tokens replaces the default ceilings; unlimited removes them (default budget)", async () => {
   for (const [label, maxTokens] of [["an explicit whole-run ceiling", 10_000_000], ["the unlimited opt-out", null]]) {
     await withRepo(async (repo, ctx) => {
       let rounds = 0;
@@ -254,7 +254,7 @@ test("findIssues B3: an explicit --max-tokens replaces the default ceilings; unl
   }
 });
 
-test("auditIssues B3: audit keeps the pre-B3 semantics — no default token ceiling", async () => {
+test("auditIssues: audit keeps the pre-budget semantics — no default token ceiling", async () => {
   const repo = createTempGitRepo("pir-audit-b3-");
   repo.write("src/a/util.ts", "export const id = (x) => x;\n");
   repo.write("src/b/calc.ts", "export const add = (a, b) => a + b;\n");
