@@ -15,6 +15,17 @@ Iteration 4):** decision 11 records the locked baseline population and the
 change protocol; the full 196-PR run remains parked by maintainer direction,
 so M1 still has no published score.
 
+**Amended 2026-10-26 (full-corpus re-test).** The full 196-PR corpus ran on
+the completed roadmap build (`60106b2`, CLI sha256 `b7c1eb0f…`): 185
+instances evaluated and 11 force-pushed upstream heads unfetchable
+(`upload-pack: not our ref`), counted in the judge's `missing_instances` and
+never as empty reviews. The published M1 baseline is now the full corpus in
+[`RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md) and
+[`M1-2026-10-26-full-roadmap.md`](../../tests/eval/aacr/results/M1-2026-10-26-full-roadmap.md).
+Decision 11's 50-PR subset is retained only as a reproducible cheaper
+comparison face; it is no longer the locked baseline, so a subset comparison
+must run both sides under one build.
+
 ## Context
 
 M0 measures the verifier in isolation on supplied comments with a binary
@@ -222,6 +233,17 @@ of that measurement.
     not be quoted as such.
 
 11. **M2 amendment (2026-10-20): the baseline population and the change protocol.** M1's locked comparison population is the **fixed 50-PR subset** selected by `--limit 50 --seed 42` (instance-set digest `754ae13a0c0fd523ddbf3a9e98d321de6e23ea30fc5332b871714194401ddb8c`), not the parked convenience sample and not the full 196. The full corpus is reserved for the publishable baseline and release-level claims; the subset is the before/after face because it is four times cheaper than the full judge-backed sweep and, being paired, its bias cancels in a delta. The subset is reproducible from `(seed, limit)` alone: the driver orders rows with M0's `mulberry32` PRNG and the same backwards Fisher-Yates, applies `--limit` afterwards, records `limits.seed` plus the existing `fixture.instanceSetDigest`, and `--resume` / `--judge-only` refuse or replay a different selection — so a subset is a provenance pin, not a convenience. Verifier-stage changes are compared on M0's fixed 100-comment sample instead (the surface where the dataset label is the dependent variable); end-to-end changes use M1. The rb variance rules are copied verbatim (both comparison runs no worse than the comparison's worse run; judge drift invalidates a comparison and forces a rerun), one run per side is labelled a point comparison, and M1 stays a manual, paid check with the `--limit 20` smoke as its only pipeline gate. The operational record — baseline lock-in, registry, dashboard and the exact procedure — is [`tests/eval/aacr/results/RESULTS.md`](../../tests/eval/aacr/results/RESULTS.md).
+
+12. **Full-corpus baseline (2026-10-26).** The full 196-PR corpus is the
+    published M1 baseline. The 11 unfetchable force-pushed heads are
+    upstream data loss and stay outside every denominator; the round is
+    published as 185/196 evaluated, never extrapolated. The M0 full-corpus
+    baseline was re-run on the same build
+    (`M0-2026-10-26-full-roadmap.md`). Decision 11's locked 50-PR subset
+    remains a cheaper face for before/after deltas, but a subset comparison
+    must re-baseline both sides on the current build. This decision does not
+    change the judge pin, the two-view reporting, the missing-is-not-zero
+    rule, or the variance rules.
 
 ## Consequences
 

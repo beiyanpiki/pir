@@ -1,4 +1,4 @@
-# M0 — AACR-Bench verifier benchmark, full corpus (2026-10-19)
+# M0 — AACR-Bench verifier offline benchmark (2026-10-27)
 
 > Dataset: [Alibaba-Aone/aacr-bench](https://huggingface.co/datasets/Alibaba-Aone/aacr-bench) `dataset.json` revision `47be1d6df1e7faf222cf531587772d92f79fe6b2`, sha256 `0804505f0a474765ce2840c832cfeaa6c4f0250dd6ccb169fe73c6758b245a86` (2145 records), Apache-2.0.
  The OCR comparison arm ports `review_filter_task_system.md` / `review_filter_task_user.md` from [alibaba/open-code-review](https://github.com/alibaba/open-code-review) @ `8eb83340a487b1150af00701b94f01af97e4b4d6` (Apache-2.0), strictly as evaluation apparatus.
@@ -23,29 +23,42 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 
 | field | value |
 | --- | --- |
-| round | `2026-10-19-m0-full-glm` |
-| date | 2026-10-19T15:14:21.767Z → 2026-10-20T00:05:10.024Z |
+| round | `2026-10-26-m0-full-roadmap` |
+| date | 2026-10-26T15:28:22.003Z → 2026-10-27T01:09:17.936Z |
 | model (both arms) | `zai-coding-cn/glm-5.3:max` |
-| CLI sha256 | `2a6ce18571d8a26ca89c884bfc943f974f3065897b47d201f5cfe51061171e9d` |
-| build sha256 (dist digest) | `ccaa884a1b00e74fcfb285ca5125e22ef3554885a02e061ea05daa3d6c983362` |
+| CLI sha256 | `b7c1eb0f13f839bf9cc612df321b307c155d49ebe3428ae59d56bda40727164b` |
+| build sha256 (dist digest) | `1a60f16e872ad9361ae340dfe5d89cf3b1906fa610917005e538a0f028bc97af` |
 | dataset sha256 | `0804505f0a474765ce2840c832cfeaa6c4f0250dd6ccb169fe73c6758b245a86` |
 | sample | limit 2134, seed 42, digest `95b5b358e545bda24afb29e596db953dd26c411e878a7f41296d8e1042a92cef` |
 | arms | verifier, ocr |
-| concurrency / timeout | 5 / 1200000 ms |
+| concurrency / timeout | 8 / 1200000 ms |
 | materialization errors | 122 (excluded rows) |
-| clone cache | `/home/miku/review-agents/.cache/pir-aacr` (16658 MiB) |
+| clone cache | `/home/miku/review-agents/.cache/pir-aacr` (16717 MiB) |
 | config snapshot | model zai-coding-cn/glm-5.3:max, thinking low |
 
 ## Headline metrics
 
 | arm | policy | n | label1/label0 | metrics |
 | --- | --- | --- | --- | --- |
- | ocr | **uncertain=keep** | 2012 | 1410 / 602 | acc 70.3% | P 71.1% | R 96.9% | F1 82.0% | kill 8.0% | falseKill 3.0% | interceptP 52.7% | AUC 0.525 | 
- | ocr | uncertain=miss | 2012 | 1410 / 602 | acc 70.3% | P 71.1% | R 96.9% | F1 82.0% | kill 8.0% | falseKill 3.0% | interceptP 52.7% | AUC 0.525 | 
- | ocr | errors / invalid / strict-unresolved | 1 / 0 / 0 |  | 
- | verifier | **uncertain=keep** | 2012 | 1410 / 602 | acc 44.3% | P 79.1% | R 27.9% | F1 41.3% | kill 82.7% | falseKill 72.0% | interceptP 32.9% | AUC 0.611 | 
- | verifier | uncertain=miss | 2012 | 1410 / 602 | acc 44.2% | P 79.0% | R 27.8% | F1 41.1% | kill 82.7% | falseKill 72.0% | interceptP 32.9% | AUC 0.611 | 
- | verifier | errors / invalid / strict-unresolved | 1 / 0 / 0 |  | 
+ | ocr | **uncertain=keep** | 2012 | 1410 / 602 | acc 69.9% | P 71.1% | R 96.3% | F1 81.8% | kill 8.1% | falseKill 3.7% | interceptP 48.5% | AUC 0.522 | 
+ | ocr | uncertain=miss | 2012 | 1410 / 602 | acc 69.9% | P 71.1% | R 96.3% | F1 81.8% | kill 8.1% | falseKill 3.7% | interceptP 48.5% | AUC 0.522 | 
+ | ocr | macro (bucket mean) | 2012 | 1410 / 602 | acc 71.1% | P 72.3% | R 96.3% | F1 82.5% | kill 8.3% | falseKill 3.7% | interceptP 49.7% | AUC — | 
+ | ocr | errors / invalid / strict-unresolved | 0 / 0 / 0 |  | 
+ | verifier | **uncertain=keep** | 2012 | 1410 / 602 | acc 44.5% | P 78.5% | R 28.7% | F1 42.1% | kill 81.6% | falseKill 71.3% | interceptP 32.8% | AUC 0.611 | 
+ | verifier | uncertain=miss | 2012 | 1410 / 602 | acc 44.4% | P 78.5% | R 28.5% | F1 41.8% | kill 81.6% | falseKill 71.3% | interceptP 32.8% | AUC 0.611 | 
+ | verifier | macro (bucket mean) | 2012 | 1410 / 602 | acc 44.9% | P 79.1% | R 29.9% | F1 42.7% | kill 80.8% | falseKill 70.1% | interceptP 31.7% | AUC — | 
+ | verifier | errors / invalid / strict-unresolved | 0 / 0 / 4 |  | 
+
+The macro row is the unweighted mean of each metric over every bucket cell below (the four dataset strata of ADR-0007 §6); the `n` and `label1/label0` beside it are the micro overall counts. A metric undefined in a bucket (for example `killRate` with no label-0 rows) is left out of the mean rather than counted as zero, and the `strict-unresolved` counter is read from the strict (uncertain = miss) bucket while `errors`/`invalid` stay policy-independent.
+
+## Session usage
+
+Tokens as reported by each run's CLI result, summed over the rows that reported usage. `total tokens` includes cache reads and the CLI result does not itemise them, so the three columns do not compose: read `output tokens` as the generated-token cost and `total tokens` as session volume, never as input + output. `output / row` is the cost side, read beside killRate and falseKillRate as one group and never instead of them. Rows without usage (errors, older builds) are excluded from the sums and stay visible in the `rows with usage` column.
+
+| arm | rows with usage | input tokens | output tokens | total tokens | output / row | total / row |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+ | ocr | 2012 | 7,126,129 | 1,984,174 | 9,496,031 | 986 | 4,720 | 
+ | verifier | 2012 | 29,632,398 | 13,554,226 | 237,731,968 | 6,737 | 118,157 | 
 
 ## ocr — per-bucket metrics
 
@@ -56,36 +69,36 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
  | GPT-5.2 | 542 | 357 | 185 | 65.9% | 66.3% | 98.0% | 79.1% | 3.8% | 2.0% | 50.0% | 0.509 | 
- | human | 497 | 353 | 144 | 71.4% | 72.7% | 95.8% | 82.6% | 11.8% | 4.0% | 54.8% | 0.539 | 
- | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 70.8% | 70.7% | 97.8% | 82.1% | 13.1% | 2.2% | 73.3% | 0.554 | 
- | Qwen-Coder-480B | 245 | 157 | 88 | 63.7% | 64.4% | 96.8% | 77.4% | 4.5% | 3.2% | 44.4% | 0.507 | 
- | GLM-4.7 | 217 | 173 | 44 | 78.3% | 80.9% | 95.4% | 87.5% | 11.4% | 4.6% | 38.5% | 0.534 | 
- | Deepseek-V3.2 | 127 | 93 | 34 | 71.7% | 73.9% | 94.6% | 83.0% | 8.8% | 5.4% | 37.5% | 0.517 | 
+ | human | 497 | 353 | 144 | 71.0% | 72.7% | 94.9% | 82.3% | 12.5% | 5.1% | 50.0% | 0.537 | 
+ | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 70.5% | 70.7% | 96.7% | 81.7% | 14.3% | 3.3% | 66.7% | 0.555 | 
+ | Qwen-Coder-480B | 245 | 157 | 88 | 62.4% | 63.9% | 94.9% | 76.4% | 4.5% | 5.1% | 33.3% | 0.497 | 
+ | GLM-4.7 | 217 | 173 | 44 | 77.9% | 80.8% | 94.8% | 87.2% | 11.4% | 5.2% | 35.7% | 0.531 | 
+ | Deepseek-V3.2 | 127 | 93 | 34 | 71.7% | 73.6% | 95.7% | 83.2% | 5.9% | 4.3% | 33.3% | 0.508 | 
  | Gemini-3-Pro | 120 | 97 | 23 | 81.7% | 81.5% | 100.0% | 89.8% | 4.3% | 0.0% | 100.0% | 0.522 | 
 
 **category**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Code Defect | 958 | 665 | 293 | 70.1% | 70.7% | 97.4% | 81.9% | 8.2% | 2.6% | 58.5% | 0.528 | 
- | Maintainability and Readability | 849 | 584 | 265 | 68.8% | 69.8% | 96.4% | 80.9% | 7.9% | 3.4% | 51.2% | 0.522 | 
- | Performance | 133 | 108 | 25 | 78.9% | 81.7% | 95.4% | 88.0% | 8.0% | 4.6% | 28.6% | 0.517 | 
+ | Code Defect | 958 | 665 | 293 | 69.2% | 70.3% | 96.2% | 81.3% | 7.8% | 3.8% | 47.9% | 0.520 | 
+ | Maintainability and Readability | 849 | 584 | 265 | 68.9% | 69.9% | 96.4% | 81.0% | 8.3% | 3.6% | 51.2% | 0.524 | 
+ | Performance | 133 | 108 | 25 | 79.7% | 82.4% | 95.4% | 88.4% | 12.0% | 4.6% | 37.5% | 0.537 | 
  | Security Vulnerability | 72 | 53 | 19 | 73.6% | 74.3% | 98.1% | 84.6% | 5.3% | 1.9% | 50.0% | 0.517 | 
 
 **context**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Diff Level | 964 | 714 | 250 | 74.2% | 74.8% | 98.2% | 84.9% | 5.6% | 1.8% | 51.9% | 0.519 | 
- | File Level | 689 | 477 | 212 | 69.8% | 71.1% | 95.0% | 81.3% | 13.2% | 4.8% | 54.9% | 0.542 | 
- | Repo Level | 359 | 219 | 140 | 60.7% | 61.3% | 96.8% | 75.0% | 4.3% | 3.2% | 46.2% | 0.505 | 
+ | Diff Level | 964 | 714 | 250 | 73.5% | 74.7% | 97.2% | 84.5% | 6.0% | 2.8% | 42.9% | 0.516 | 
+ | File Level | 689 | 477 | 212 | 69.7% | 71.0% | 95.0% | 81.3% | 12.7% | 5.0% | 52.9% | 0.539 | 
+ | Repo Level | 359 | 219 | 140 | 60.7% | 61.3% | 96.3% | 75.0% | 5.0% | 3.7% | 46.7% | 0.507 | 
 
 **is_ai_comment**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | true | 1515 | 1057 | 458 | 69.9% | 70.7% | 97.3% | 81.8% | 6.8% | 2.7% | 51.7% | 0.520 | 
- | false | 497 | 353 | 144 | 71.4% | 72.7% | 95.8% | 82.6% | 11.8% | 4.0% | 54.8% | 0.539 | 
+ | true | 1515 | 1057 | 458 | 69.6% | 70.6% | 96.8% | 81.6% | 6.8% | 3.2% | 47.7% | 0.518 | 
+ | false | 497 | 353 | 144 | 71.0% | 72.7% | 94.9% | 82.3% | 12.5% | 5.1% | 50.0% | 0.537 | 
 
 ### uncertain = miss (strict)
 
@@ -94,36 +107,36 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
  | GPT-5.2 | 542 | 357 | 185 | 65.9% | 66.3% | 98.0% | 79.1% | 3.8% | 2.0% | 50.0% | 0.509 | 
- | human | 497 | 353 | 144 | 71.4% | 72.7% | 95.8% | 82.6% | 11.8% | 4.0% | 54.8% | 0.539 | 
- | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 70.8% | 70.7% | 97.8% | 82.1% | 13.1% | 2.2% | 73.3% | 0.554 | 
- | Qwen-Coder-480B | 245 | 157 | 88 | 63.7% | 64.4% | 96.8% | 77.4% | 4.5% | 3.2% | 44.4% | 0.507 | 
- | GLM-4.7 | 217 | 173 | 44 | 78.3% | 80.9% | 95.4% | 87.5% | 11.4% | 4.6% | 38.5% | 0.534 | 
- | Deepseek-V3.2 | 127 | 93 | 34 | 71.7% | 73.9% | 94.6% | 83.0% | 8.8% | 5.4% | 37.5% | 0.517 | 
+ | human | 497 | 353 | 144 | 71.0% | 72.7% | 94.9% | 82.3% | 12.5% | 5.1% | 50.0% | 0.537 | 
+ | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 70.5% | 70.7% | 96.7% | 81.7% | 14.3% | 3.3% | 66.7% | 0.555 | 
+ | Qwen-Coder-480B | 245 | 157 | 88 | 62.4% | 63.9% | 94.9% | 76.4% | 4.5% | 5.1% | 33.3% | 0.497 | 
+ | GLM-4.7 | 217 | 173 | 44 | 77.9% | 80.8% | 94.8% | 87.2% | 11.4% | 5.2% | 35.7% | 0.531 | 
+ | Deepseek-V3.2 | 127 | 93 | 34 | 71.7% | 73.6% | 95.7% | 83.2% | 5.9% | 4.3% | 33.3% | 0.508 | 
  | Gemini-3-Pro | 120 | 97 | 23 | 81.7% | 81.5% | 100.0% | 89.8% | 4.3% | 0.0% | 100.0% | 0.522 | 
 
 **category**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Code Defect | 958 | 665 | 293 | 70.1% | 70.7% | 97.4% | 81.9% | 8.2% | 2.6% | 58.5% | 0.528 | 
- | Maintainability and Readability | 849 | 584 | 265 | 68.8% | 69.8% | 96.4% | 80.9% | 7.9% | 3.4% | 51.2% | 0.522 | 
- | Performance | 133 | 108 | 25 | 78.9% | 81.7% | 95.4% | 88.0% | 8.0% | 4.6% | 28.6% | 0.517 | 
+ | Code Defect | 958 | 665 | 293 | 69.2% | 70.3% | 96.2% | 81.3% | 7.8% | 3.8% | 47.9% | 0.520 | 
+ | Maintainability and Readability | 849 | 584 | 265 | 68.9% | 69.9% | 96.4% | 81.0% | 8.3% | 3.6% | 51.2% | 0.524 | 
+ | Performance | 133 | 108 | 25 | 79.7% | 82.4% | 95.4% | 88.4% | 12.0% | 4.6% | 37.5% | 0.537 | 
  | Security Vulnerability | 72 | 53 | 19 | 73.6% | 74.3% | 98.1% | 84.6% | 5.3% | 1.9% | 50.0% | 0.517 | 
 
 **context**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Diff Level | 964 | 714 | 250 | 74.2% | 74.8% | 98.2% | 84.9% | 5.6% | 1.8% | 51.9% | 0.519 | 
- | File Level | 689 | 477 | 212 | 69.8% | 71.1% | 95.0% | 81.3% | 13.2% | 4.8% | 54.9% | 0.542 | 
- | Repo Level | 359 | 219 | 140 | 60.7% | 61.3% | 96.8% | 75.0% | 4.3% | 3.2% | 46.2% | 0.505 | 
+ | Diff Level | 964 | 714 | 250 | 73.5% | 74.7% | 97.2% | 84.5% | 6.0% | 2.8% | 42.9% | 0.516 | 
+ | File Level | 689 | 477 | 212 | 69.7% | 71.0% | 95.0% | 81.3% | 12.7% | 5.0% | 52.9% | 0.539 | 
+ | Repo Level | 359 | 219 | 140 | 60.7% | 61.3% | 96.3% | 75.0% | 5.0% | 3.7% | 46.7% | 0.507 | 
 
 **is_ai_comment**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | true | 1515 | 1057 | 458 | 69.9% | 70.7% | 97.3% | 81.8% | 6.8% | 2.7% | 51.7% | 0.520 | 
- | false | 497 | 353 | 144 | 71.4% | 72.7% | 95.8% | 82.6% | 11.8% | 4.0% | 54.8% | 0.539 | 
+ | true | 1515 | 1057 | 458 | 69.6% | 70.6% | 96.8% | 81.6% | 6.8% | 3.2% | 47.7% | 0.518 | 
+ | false | 497 | 353 | 144 | 71.0% | 72.7% | 94.9% | 82.3% | 12.5% | 5.1% | 50.0% | 0.537 | 
 
 ## verifier — per-bucket metrics
 
@@ -133,37 +146,37 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | GPT-5.2 | 542 | 357 | 185 | 38.0% | 65.7% | 12.3% | 20.8% | 87.6% | 87.7% | 34.1% | 0.579 | 
- | human | 497 | 353 | 144 | 45.1% | 79.9% | 30.3% | 43.9% | 81.3% | 69.4% | 32.3% | 0.613 | 
- | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 51.9% | 82.7% | 37.2% | 51.3% | 83.3% | 62.8% | 38.3% | 0.683 | 
- | Qwen-Coder-480B | 245 | 157 | 88 | 44.1% | 69.2% | 22.9% | 34.4% | 81.8% | 77.1% | 37.3% | 0.550 | 
- | GLM-4.7 | 217 | 173 | 44 | 47.5% | 86.4% | 40.5% | 55.1% | 75.0% | 59.5% | 24.3% | 0.607 | 
- | Deepseek-V3.2 | 127 | 93 | 34 | 39.4% | 83.3% | 21.5% | 34.2% | 88.2% | 78.5% | 29.1% | 0.571 | 
- | Gemini-3-Pro | 120 | 97 | 23 | 53.3% | 84.7% | 51.5% | 64.1% | 60.9% | 48.5% | 23.0% | 0.623 | 
+ | GPT-5.2 | 542 | 357 | 185 | 37.5% | 63.2% | 12.0% | 20.2% | 86.5% | 88.0% | 33.8% | 0.571 | 
+ | human | 497 | 353 | 144 | 46.7% | 79.7% | 33.4% | 47.1% | 79.2% | 66.6% | 32.7% | 0.614 | 
+ | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 51.5% | 81.7% | 37.2% | 51.1% | 82.1% | 62.8% | 37.9% | 0.673 | 
+ | Qwen-Coder-480B | 245 | 157 | 88 | 44.5% | 71.4% | 22.3% | 34.0% | 84.1% | 77.7% | 37.8% | 0.562 | 
+ | GLM-4.7 | 217 | 173 | 44 | 45.6% | 83.1% | 39.9% | 53.9% | 68.2% | 60.1% | 22.4% | 0.607 | 
+ | Deepseek-V3.2 | 127 | 93 | 34 | 40.9% | 84.6% | 23.7% | 37.0% | 88.2% | 76.3% | 29.7% | 0.610 | 
+ | Gemini-3-Pro | 120 | 97 | 23 | 54.2% | 85.0% | 52.6% | 65.0% | 60.9% | 47.4% | 23.3% | 0.615 | 
 
 **category**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Code Defect | 958 | 665 | 293 | 40.4% | 78.3% | 19.5% | 31.3% | 87.7% | 80.5% | 32.4% | 0.607 | 
- | Maintainability and Readability | 849 | 584 | 265 | 50.5% | 78.1% | 39.0% | 52.1% | 75.8% | 60.8% | 36.2% | 0.617 | 
- | Performance | 133 | 108 | 25 | 33.1% | 91.3% | 19.4% | 32.1% | 92.0% | 80.6% | 20.9% | 0.616 | 
- | Security Vulnerability | 72 | 53 | 19 | 44.4% | 88.2% | 28.3% | 42.9% | 89.5% | 71.7% | 30.9% | 0.691 | 
+ | Code Defect | 958 | 665 | 293 | 40.0% | 76.5% | 19.5% | 31.1% | 86.3% | 80.5% | 32.1% | 0.603 | 
+ | Maintainability and Readability | 849 | 584 | 265 | 51.2% | 78.1% | 40.4% | 53.3% | 75.1% | 59.6% | 36.4% | 0.624 | 
+ | Performance | 133 | 108 | 25 | 33.1% | 88.0% | 20.4% | 33.1% | 88.0% | 79.6% | 20.4% | 0.608 | 
+ | Security Vulnerability | 72 | 53 | 19 | 47.2% | 89.5% | 32.1% | 47.2% | 89.5% | 67.9% | 32.1% | 0.681 | 
 
 **context**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Diff Level | 964 | 714 | 250 | 42.7% | 84.6% | 27.7% | 41.8% | 85.6% | 72.3% | 29.3% | 0.638 | 
- | File Level | 689 | 477 | 212 | 44.3% | 75.1% | 29.1% | 42.0% | 78.3% | 70.6% | 33.0% | 0.583 | 
- | Repo Level | 359 | 219 | 140 | 48.7% | 72.2% | 26.0% | 38.3% | 84.3% | 74.0% | 42.1% | 0.597 | 
+ | Diff Level | 964 | 714 | 250 | 42.9% | 83.6% | 28.6% | 42.6% | 84.0% | 71.4% | 29.2% | 0.638 | 
+ | File Level | 689 | 477 | 212 | 46.0% | 77.5% | 31.0% | 44.3% | 79.7% | 69.0% | 33.9% | 0.602 | 
+ | Repo Level | 359 | 219 | 140 | 46.0% | 65.4% | 24.2% | 35.3% | 80.0% | 75.8% | 40.3% | 0.562 | 
 
 **is_ai_comment**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | true | 1515 | 1057 | 458 | 44.1% | 78.8% | 27.2% | 40.4% | 83.2% | 72.8% | 33.1% | 0.610 | 
- | false | 497 | 353 | 144 | 45.1% | 79.9% | 30.3% | 43.9% | 81.3% | 69.4% | 32.3% | 0.613 | 
+ | true | 1515 | 1057 | 458 | 43.8% | 78.0% | 27.2% | 40.3% | 82.3% | 72.8% | 32.9% | 0.610 | 
+ | false | 497 | 353 | 144 | 46.7% | 79.7% | 33.4% | 47.1% | 79.2% | 66.6% | 32.7% | 0.614 | 
 
 ### uncertain = miss (strict)
 
@@ -171,62 +184,56 @@ Comment-level binary classification: label 1 = the comment is correct (should su
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | GPT-5.2 | 542 | 357 | 185 | 38.0% | 65.7% | 12.3% | 20.8% | 87.6% | 87.7% | 34.1% | 0.579 | 
- | human | 497 | 353 | 144 | 44.9% | 79.7% | 30.0% | 43.6% | 81.3% | 69.4% | 32.3% | 0.613 | 
- | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 51.9% | 82.7% | 37.2% | 51.3% | 83.3% | 62.8% | 38.3% | 0.683 | 
- | Qwen-Coder-480B | 245 | 157 | 88 | 44.1% | 69.2% | 22.9% | 34.4% | 81.8% | 77.1% | 37.3% | 0.550 | 
- | GLM-4.7 | 217 | 173 | 44 | 47.5% | 86.4% | 40.5% | 55.1% | 75.0% | 59.5% | 24.3% | 0.607 | 
- | Deepseek-V3.2 | 127 | 93 | 34 | 38.6% | 82.6% | 20.4% | 32.8% | 88.2% | 78.5% | 29.1% | 0.571 | 
- | Gemini-3-Pro | 120 | 97 | 23 | 53.3% | 84.7% | 51.5% | 64.1% | 60.9% | 48.5% | 23.0% | 0.623 | 
+ | GPT-5.2 | 542 | 357 | 185 | 37.5% | 63.2% | 12.0% | 20.2% | 86.5% | 88.0% | 33.8% | 0.571 | 
+ | human | 497 | 353 | 144 | 46.3% | 79.5% | 32.9% | 46.5% | 79.2% | 66.6% | 32.7% | 0.614 | 
+ | Claude-Code/Claude-4.5-Sonnet | 264 | 180 | 84 | 51.1% | 81.5% | 36.7% | 50.6% | 82.1% | 62.8% | 37.9% | 0.673 | 
+ | Qwen-Coder-480B | 245 | 157 | 88 | 44.5% | 71.4% | 22.3% | 34.0% | 84.1% | 77.7% | 37.8% | 0.562 | 
+ | GLM-4.7 | 217 | 173 | 44 | 45.6% | 84.1% | 39.9% | 54.1% | 68.2% | 60.1% | 22.4% | 0.607 | 
+ | Deepseek-V3.2 | 127 | 93 | 34 | 40.9% | 84.6% | 23.7% | 37.0% | 88.2% | 76.3% | 29.7% | 0.610 | 
+ | Gemini-3-Pro | 120 | 97 | 23 | 54.2% | 85.0% | 52.6% | 65.0% | 60.9% | 47.4% | 23.3% | 0.615 | 
 
 **category**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Code Defect | 958 | 665 | 293 | 40.2% | 78.0% | 19.2% | 30.9% | 87.7% | 80.5% | 32.4% | 0.607 | 
- | Maintainability and Readability | 849 | 584 | 265 | 50.5% | 78.1% | 39.0% | 52.1% | 75.8% | 60.8% | 36.2% | 0.617 | 
- | Performance | 133 | 108 | 25 | 33.1% | 91.3% | 19.4% | 32.1% | 92.0% | 80.6% | 20.9% | 0.616 | 
- | Security Vulnerability | 72 | 53 | 19 | 44.4% | 88.2% | 28.3% | 42.9% | 89.5% | 71.7% | 30.9% | 0.691 | 
+ | Code Defect | 958 | 665 | 293 | 39.7% | 76.0% | 19.1% | 30.5% | 86.3% | 80.5% | 32.1% | 0.603 | 
+ | Maintainability and Readability | 849 | 584 | 265 | 51.2% | 78.4% | 40.4% | 53.3% | 75.1% | 59.6% | 36.4% | 0.624 | 
+ | Performance | 133 | 108 | 25 | 33.1% | 88.0% | 20.4% | 33.1% | 88.0% | 79.6% | 20.4% | 0.608 | 
+ | Security Vulnerability | 72 | 53 | 19 | 47.2% | 89.5% | 32.1% | 47.2% | 89.5% | 67.9% | 32.1% | 0.681 | 
 
 **context**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | Diff Level | 964 | 714 | 250 | 42.7% | 84.6% | 27.7% | 41.8% | 85.6% | 72.3% | 29.3% | 0.638 | 
- | File Level | 689 | 477 | 212 | 44.0% | 74.9% | 28.7% | 41.5% | 78.3% | 70.6% | 33.0% | 0.583 | 
- | Repo Level | 359 | 219 | 140 | 48.7% | 72.2% | 26.0% | 38.3% | 84.3% | 74.0% | 42.1% | 0.597 | 
+ | Diff Level | 964 | 714 | 250 | 42.8% | 83.5% | 28.4% | 42.4% | 84.0% | 71.4% | 29.2% | 0.638 | 
+ | File Level | 689 | 477 | 212 | 45.7% | 77.2% | 30.6% | 43.8% | 79.7% | 69.0% | 33.9% | 0.602 | 
+ | Repo Level | 359 | 219 | 140 | 46.0% | 66.3% | 24.2% | 35.5% | 80.0% | 75.8% | 40.3% | 0.562 | 
 
 **is_ai_comment**
 
 | value | n | label1 | label0 | acc | P | R | F1 | killRate | falseKillRate | interceptP | AUC |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
- | true | 1515 | 1057 | 458 | 44.0% | 78.8% | 27.1% | 40.3% | 83.2% | 72.8% | 33.1% | 0.610 | 
- | false | 497 | 353 | 144 | 44.9% | 79.7% | 30.0% | 43.6% | 81.3% | 69.4% | 32.3% | 0.613 | 
+ | true | 1515 | 1057 | 458 | 43.8% | 78.1% | 27.1% | 40.2% | 82.3% | 72.8% | 32.9% | 0.610 | 
+ | false | 497 | 353 | 144 | 46.3% | 79.5% | 32.9% | 46.5% | 79.2% | 66.6% | 32.7% | 0.614 | 
 
 ### Rejection grounds (B4)
 
 | ground | kills | label0 | label1 | false-kill share of ground |
 | --- | --- | --- | --- | --- |
- | contradicted-by-code | 685 | 259 | 426 | 62.2% | 
- | speculative | 503 | 155 | 348 | 69.2% | 
- | pre-existing | 200 | 56 | 144 | 72.0% | 
- | guarded | 112 | 22 | 90 | 80.4% | 
- | no-such-code | 11 | 6 | 5 | 45.5% | 
- | not-introduced-by-change | 1 | 0 | 1 | 100.0% | 
- | other | 1 | 0 | 1 | 100.0% | 
+ | contradicted-by-code | 696 | 257 | 439 | 63.1% | 
+ | speculative | 480 | 155 | 325 | 67.7% | 
+ | pre-existing | 196 | 51 | 145 | 74.0% | 
+ | guarded | 107 | 19 | 88 | 82.2% | 
+ | no-such-code | 14 | 7 | 7 | 50.0% | 
+ | not-introduced-by-change | 3 | 2 | 1 | 33.3% | 
 
 A ground is the reason a rejected verdict named (ADR-0008). The distribution is over kills under both policies — a rejected verdict is a kill either way — so it reads as the audit trail of the arm's kill decisions. Rows without a ground pre-date B4 or belong to the OCR arm, which has no ground vocabulary; they are counted as `unknown` rather than dropped.
 
 ## Notes and limits
 
-- Sample: the whole head-anchorable corpus — 2,134 of the dataset's 2,145 records. The 11 LEFT-side comments cannot be anchored to head-file lines and are excluded by the sampler (sample.sideExcluded=11); seed 42, digest 95b5b358…; one run per arm.
-- Materialization: 122 of the 2,134 sampled comments (5.7%) are error rows — their captured head commit is no longer fetchable from GitHub (force-pushed PRs; refs/pull/N/head now points elsewhere, verified on samples). ADR-0007 §7 forbids substituting a different commit, so they are counted in the population and scored as misses, never silently dropped.
-- One further scored instance (c0002) produced no verdict: its _verify-comment run exits 3 (runtime failure) and is recorded as a counted error row — a miss for recall/kill-rate, never a silent exclusion (1 of the 2,012 scored rows).
-- Model: zai-coding-cn/glm-5.3:max (max thinking). The iteration's earlier full attempt used opencode-go/deepseek-v4.1-flash:medium until that account's usage limit was exhausted mid-round; it was abandoned rather than mixed into this round (a round carries one model). The B4 gate and the Iteration 1 100-sample round are deepseek numbers and are not cross-comparable with this corpus; this round's model id is the single source of truth for these numbers.
-- Rate-limit handling (recorded, not hidden): zai's per-account request rate tolerates about 8 concurrent verifier sessions; runs at 10 or 12 produced 429 responses within minutes. Every rate-limited row was deleted and re-run at concurrency 8, so the committed round contains zero provider-error rows — a 429 row would otherwise be scored as a verifier miss and quietly depress the metrics.
-- Run configuration: the concurrency/timeout row records the final resume pass (5); the bulk of the round ran at concurrency 8 (see the rate-limit note), and the round was assembled from resume passes over the same model and build, never mixed.
-- This round measures the post-B4 verifier: a rejected verdict names a ground (ADR-0008), so the Rejection grounds table is the audit trail of every kill in the corpus and the first full-corpus view of *why* the verifier rejects.
-- One run per arm: these are one sample's numbers, not a variance floor. Repeats, and M1's --eval-rounds averaging, are separate rounds; ADR-0007's rb variance rules apply to any before/after claim made from them.
+- Full corpus: 2,134 selected comment rows; 122 upstream materialization errors excluded; 2,012 usable comments scored per arm.
+- Provider-rate handling: rows with no decision (status error, decision invalid, provider-error, missing-verdict) were removed and re-run on resume; the committed round contains zero provider-error rows.
+- Review model and OCR comparison arm both use zai-coding-cn/glm-5.3:max; no judge is involved in M0.
 - Caliber (roadmap R2): the pir arm is repository-aware (pinned reads, search, structural queries) while the OCR arm is diff-only, which is the OCR prompt's native material. A diff-only pir ablation is deliberately out of scope for M0.
 - Diff base: every scored row used the GitHub merge base (ADR-0007 §7); no degraded base-tip rows.
 - **Target question (measured limitation, ADR-0007 Consequences):** the dataset's label asks whether the comment is *correct review feedback*; `runVerifier` answers whether a *concrete, change-attributable defect* exists. The first run's rationales show valid comments rejected precisely because they are a style preference or a pre-existing observation, which the shipped do-not-report contract requires. `falseKillRate` is therefore still `rejected(label=1)/label=1` operationally, but it must not be read as "the verifier destroys real findings", and it is not the same quantity as the OCR arm's false-kill. Read `killRate` (label-0 interception) and the per-category table jointly; Maintainability concentrates the mismatch.

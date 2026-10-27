@@ -57,7 +57,7 @@ PIR_EVAL=1 node tests/eval/aacr/run-m0.js --round 2026-10-19-m0 \
 # 4. score + render the results document
 node tests/eval/aacr/score.js --run tests/eval/aacr/out/2026-10-19-m0 --json
 node tests/eval/aacr/report.js --run tests/eval/aacr/out/2026-10-19-m0 \
-  --out tests/eval/aacr/results/M0-2026-10-19-limit100.md
+  --out tests/eval/aacr/results/M0-<round>.md
 ```
 
 A controlled before/after (B4's merge gate, ADR-0008) runs the same sample twice — once with the pre-change build (`--cli` pointing at its `dist/cli/cli.js`), once with the build under test — into two round directories, then renders the comparison from the after-round with the before-round as baseline:

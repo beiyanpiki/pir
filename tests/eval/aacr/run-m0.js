@@ -462,7 +462,16 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
         mkdirSync(runDir, { recursive: true });
         for (const dir of ["agent", "config"]) cpSync(path.join(configRoot, dir), path.join(runDir, dir), { recursive: true });
         const taskFile = path.join(runDir, "task.json");
-        writeFileSync(taskFile, `${JSON.stringify({ id: task.id, index: task.index, comment: task.comment, material: task.material })}\n`);
+        // Fixture defect normalization: a handful of upstream comments carry
+        // an inverted line range (to_line < from_line). The verifier task
+        // parser requires an integer to_line >= from_line; clamp it to the
+        // anchor line instead of excluding an otherwise head-anchorable
+        // comment. This changes nothing about the comment text or scoring.
+        const taskComment = { ...task.comment };
+        if (!Number.isInteger(taskComment.to_line) || taskComment.to_line < taskComment.from_line) {
+          taskComment.to_line = taskComment.from_line;
+        }
+        writeFileSync(taskFile, `${JSON.stringify({ id: task.id, index: task.index, comment: taskComment, material: task.material })}\n`);
         const run = await runCliOnce({ cli: options.cli, taskFile, arm, checkout, model: options.model, runDir, timeoutMs: options.timeoutMs, env });
         const row = scoreRow(task, arm, run);
         writeResult(roundDir, arm, task.id, row);
