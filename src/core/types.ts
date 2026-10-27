@@ -5,6 +5,20 @@ export interface SourceAnchor {
   path: string;
   startLine: number;
   endLine?: number;
+  /**
+   * Optional verbatim snippet from the pinned file, used for local
+   * re-location (ADR 0005). Absent means the supplied lines are trusted
+   * exactly as before.
+   */
+  excerpt?: string;
+  /**
+   * True when a supplied excerpt's unique sliding-window match decided this
+   * anchor's lines (the local location always overrides the model's).
+   */
+  lineCorrected?: boolean;
+  /** The model-supplied range, kept whenever lineCorrected is set. */
+  originalStartLine?: number;
+  originalEndLine?: number;
 }
 
 /** Provenance and trust level of a memory record. */

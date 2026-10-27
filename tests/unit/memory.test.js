@@ -597,6 +597,70 @@ test("verifier confidence round-trips through insert/get/updateVerified (Q4)", a
   }
 });
 
+test("verifier rejection ground round-trips through insert/get/updateVerified (B4)", async () => {
+  const repo = createTempGitRepo();
+  const memory = await openMemory(repo);
+  try {
+    const base = {
+      title: "guarded finding", claim: "guarded claim", trigger: "t", category: "correctness",
+      severity: "P2", featureKey: "ground-flow", entityKey: "E.ground", anchors: [], evidence: [], round: 1,
+      identity: buildIdentity({ featureKey: "ground-flow", entityKey: "E.ground", category: "correctness", claim: "guarded claim", trigger: "t" }),
+      status: "rejected", memoryMatches: [], verifierRationale: "the guard makes it unreachable",
+    };
+    const inserted = memory.findings.insert({ ...base, rejectionGround: "guarded" }, "run-b4");
+    assert.equal(inserted.rejectionGround, "guarded");
+    assert.equal(memory.findings.get(inserted.id).rejectionGround, "guarded");
+    // The audit checkpoint path rewrites the same row including the ground.
+    const updated = memory.findings.updateVerified(inserted.id, {
+      status: "rejected", verifierRationale: "re-checked", rejectionGround: "pre-existing", memoryMatches: [], confidence: 0.5,
+    });
+    assert.equal(updated.rejectionGround, "pre-existing");
+    // Kept rows and rows written before B4 carry no ground.
+    const kept = memory.findings.insert({ ...base, claim: "kept claim", status: "confirmed", identity: buildIdentity({
+      featureKey: "ground-flow", entityKey: "E.kept", category: "correctness", claim: "kept claim", trigger: "t",
+    }) }, "run-b4");
+    assert.equal(kept.rejectionGround, null);
+  } finally {
+    memory.close();
+    repo.cleanup();
+  }
+});
+
+test("migration v8: an existing (pre-ground) db upgrades in place (B4)", async () => {
+  const repo = createTempGitRepo("pir-ground-mig-");
+  const dbPath = `${repo.dir}/.pir/memory.sqlite`;
+  const memory = await Memory.open(repo.dir, { dbPath });
+  const run = memory.findings.createRun({ base: "b", head: "h" });
+  const row = memory.findings.insert({
+    title: "pre-ground finding", claim: "pre-ground claim", trigger: "t", category: "correctness",
+    severity: "P2", featureKey: "mig8", entityKey: "E.mig8", anchors: [], evidence: [],
+    round: 1, identity: buildIdentity({ featureKey: "mig8", entityKey: "E.mig8", category: "correctness", claim: "pre-ground claim", trigger: "t" }),
+    status: "rejected", memoryMatches: [], verifierRationale: "legacy rejection",
+  }, run.id);
+  memory.close();
+
+  // Simulate a v7 db: drop the column and its migration record.
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  db.exec("BEGIN");
+  db.exec("ALTER TABLE findings DROP COLUMN rejection_ground");
+  db.exec("DELETE FROM _migrations WHERE version >= 8");
+  db.exec("COMMIT");
+  db.close();
+
+  const upgraded = await Memory.open(repo.dir, { dbPath });
+  try {
+    const columns = upgraded.store.all("PRAGMA table_info(findings)").map((r) => r.name);
+    assert.ok(columns.includes("rejection_ground"), `rejection_ground column missing: ${columns.join(",")}`);
+    const survived = upgraded.findings.get(row.displayId);
+    assert.ok(survived, "row survives the upgrade");
+    assert.equal(survived.rejectionGround, null);
+  } finally {
+    upgraded.close();
+    repo.cleanup();
+  }
+});
+
 test("migration v7: an existing (pre-confidence) db upgrades in place (Q4)", async () => {
   const repo = createTempGitRepo("pir-conf-mig-");
   const dbPath = `${repo.dir}/.pir/memory.sqlite`;
@@ -612,11 +676,12 @@ test("migration v7: an existing (pre-confidence) db upgrades in place (Q4)", asy
   }, run.id);
   memory.close();
 
-  // Simulate a v6 db: drop the column and its migration record.
+  // Simulate a v6 db: drop both later columns and their migration records.
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(dbPath);
   db.exec("BEGIN");
   db.exec("ALTER TABLE findings DROP COLUMN confidence");
+  db.exec("ALTER TABLE findings DROP COLUMN rejection_ground");
   db.exec("DELETE FROM _migrations WHERE version >= 7");
   db.exec("COMMIT");
   db.close();

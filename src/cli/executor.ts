@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,20 @@ import {
   type UserConfig,
 } from "./config.js";
 import { createAppContext } from "../app/context.js";
+import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
+import {
+  ProjectRuleError,
+  applyProjectRules,
+  checkProjectRules,
+  layerLabel,
+  loadProjectRules,
+  pirConfigDir,
+  type ProjectRuleCheck,
+  type ProjectRuleSet,
+  type RuleLayerCheck,
+} from "../rules/project-rules.js";
+import { UserBackgroundError, resolveUserBackground, type UserBackground } from "../core/user-background.js";
 import { runAudit } from "../app/audit.js";
 import { MAX_VERIFY_CONCURRENCY } from "../core/supervisor.js";
 import { FINDER_ANGLES } from "../agents/prompts.js";
@@ -36,6 +49,7 @@ import {
   type MemorySyncResult,
 } from "../app/services.js";
 import { envelope, findExitCode, renderAuditResultText, renderFindResultText } from "../app/output.js";
+import { renderSarif } from "../app/sarif.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
@@ -67,6 +81,7 @@ Usage:
       --web  also serve the read-only run explorer UI at / (env PIR_WEB_UI=1;
              viewer auth via PIR_WEB_UI_TOKEN; transcripts default on)
   pir config [show|wizard|set|reset]     manage ~/.pir/config.json (client setup)
+  pir rules check <path>                 which project rule wins for a repository path
   pir skill [path|install|print]         locate / install the LLM skill for pir
   pir plugins list                      list language packs and what this repo activates
   pir version`,
@@ -75,8 +90,14 @@ Usage:
   --base <ref>        base ref (default: HEAD^)
   --head <ref>        head ref (default: HEAD)
   --max-rounds <n>    discovery/verification loop rounds (default 2)
-  --max-tokens <n>    optional session-boundary token budget; reviews run
-                      unbounded by default (rounds and findings still cap)
+  --max-tokens <n>    token ceiling for the run. Unset: the find defaults
+                      apply — 1.2M reviewer + 0.8M verifier input tokens
+                      (ADR 0006); hitting one starts no new reviewer round but
+                      still verifies every pending candidate, so a budget stop
+                      is a controlled truncation, not a lost run. A positive
+                      integer sets one explicit whole-run ceiling instead, and
+                      "unlimited" removes every token ceiling (rounds and
+                      findings still cap; remote needs a same-version server)
   --max-findings <n>  cap on reported findings (default 10). A ceiling, not
                       a target: fewer findings is correct when evidence runs
                       out — nothing is padded to reach it. "unlimited"
@@ -94,6 +115,10 @@ Usage:
                       deleted or dropped from the findings list
   --fail-on <sev>     exit 1 when a finding with severity >= sev is reported
                       (P0|P1|P2|P3|none, default none)
+  --format <fmt>      stdout format: text (default), json (the same choice
+                      --json makes) or sarif — a SARIF 2.1.0 log for
+                      code-scanning consumers. --json and a non-json --format
+                      together are a usage error; exit codes are unchanged
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
@@ -112,9 +137,45 @@ Usage:
                       today; more packs follow): comma-separated names,
                       "none" to disable, or "auto" to detect from marker
                       files at head (default)
+  --rule <path>       project rule file (B5/ADR-0010). Three layers, first
+                      match wins: --rule > <root>/.pir/rule.json >
+                      <config-dir>/rule.json. Each rule pairs a path glob with
+                      guidance (inline or a repo-relative .md/.markdown/.txt
+                      file, 64 KiB and repo-contained) and optionally
+                      mergeBuiltin=false to replace the built-in language
+                      guidance for the run. Applied rules and their hash are
+                      recorded in run.json; \`pir config show\` prints the
+                      layers. Local mode only; find only
+  --background <text> user background for this change (S2/ADR-0016): the
+                      stated goal, intentional behaviour changes, migration
+                      notes. Delimited and labelled as untrusted context in
+                      the reviewer prompt — never as instructions, and never
+                      for verifier or audit sessions. At most 8,000 characters
+                      after sanitisation (longer input is truncated loudly;
+                      keep it under ~2,000); control characters stripped,
+                      blank lines collapsed, the reserved <user_background>
+                      delimiters rejected. The canonical sha256 and sizes are
+                      recorded in run.json, never the text
+  --background-file <path>
+                      read the background from a file instead (UTF-8, at most
+                      1 MiB raw, regular file). Wins over --background with a
+                      warning; relative paths resolve against the invocation
+                      directory. Local path: rejected in remote mode (client
+                      and server)
   --no-sync-index     skip codegraph index sync
-  --detach            remote only: submit as an async job and return
-                      immediately (#53; see Remote mode)`,
+  --preview           print the file selection a real find of the same range
+                      would review (#B1): per-file status and churn, plus
+                      selected or excluded with the gate's reason — binary,
+                      secret paths, skip patterns, oversized single-file
+                      diff. Excluded files stay visible as metadata; their
+                      diff bodies never reach a model. No run, no model, no
+                      writes; run-shaping flags are rejected
+  --detach            return once the run is accepted instead of waiting
+                      (#53, ADR 0022): locally the review is re-executed as a
+                      detached background process with a 0600 log at
+                      ~/.pir/logs/<jobId>.log and a receipt; remotely it is
+                      an async job (see Remote mode). Exit 0 means accepted,
+                      never that the review ran or passed`,
 
   audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
@@ -124,7 +185,8 @@ Usage:
   --head <ref>        snapshot commit to audit (default: HEAD). The committed
                       tree only: uncommitted changes are never audited
   --max-tokens <n>    optional whole-run token budget across all units;
-                      unlimited unless set (rounds and findings still cap)
+                      unlimited unless set — audit has no default ceiling
+                      (rounds and findings still cap); "unlimited" removes it
   --max-findings <n>  whole-run cap on reported findings (default 10);
                       "unlimited" removes it (#57)
   --verify-concurrency <n>
@@ -143,13 +205,20 @@ Usage:
                       applies when the flag is absent). An unresolvable id is
                       a hard session error, never a silent fallback
   --fail-on <sev>     same gate as find (P0|P1|P2|P3|none, default none)
+  --format <fmt>      stdout format: text (default), json or sarif (SARIF 2.1.0
+                      with the audit coverage on the invocation); --dry-run and
+                      coverage reject sarif, exit codes are unchanged
   --dry-run           preview the scope a real audit of the same tree and
                       options would take (#56): head/tree ids, selection and
                       classification counts, planned units — no run, no
                       model, no writes. --list-files adds per-file
                       selection/classification/reason
-  --detach            remote only: submit as an async job and return
-                      immediately (#53; see Remote mode)
+  --detach            return once the run is accepted instead of waiting
+                      (#53, ADR 0022): locally the review is re-executed as a
+                      detached background process with a 0600 log at
+                      ~/.pir/logs/<jobId>.log and a receipt; remotely it is
+                      an async job (see Remote mode). Exit 0 means accepted,
+                      never that the review ran or passed
   coverage            post-run readout of one recorded audit run (#56):
                       per-file coverage ledger from the local project db.
                       Exactly one of --run <run-id> | --latest
@@ -228,6 +297,9 @@ Usage:
 
   global: `Global options:
   --json              machine-readable JSON on stdout (progress goes to stderr)
+  --format <fmt>      find/audit stdout: text | json | sarif; --json is the
+                      same choice as --format json, and --format sarif emits
+                      SARIF 2.1.0 (see README "Output contract")
   --cwd <path>        repository to operate on (default: process cwd)
   --quiet             suppress progress output
   --help              print help locally and exit 0 — answered before any
@@ -265,12 +337,15 @@ Usage:
                       overall deadline by design (#54)
   --insecure          accept self-signed TLS certificates
   --local             force local execution despite remote config
-  --detach            submit find/audit as an async job and exit 0 without
-                      waiting (#53): implies async, writes the #52 receipt,
-                      prints the submission envelope (full jobId, origin,
-                      project, head/base, follow-up commands) on stdout.
-                      Exit 0 means accepted, not reviewed. Local mode
-                      rejects the flag
+  --detach            submit find/audit and return after acceptance, never
+                      after the review (#53, ADR 0022). Exit 0 means
+                      accepted, not reviewed. Remote — an async job, and
+                      stdout carries the submission envelope (full jobId,
+                      origin, project, head/base, follow-up commands); the
+                      #52 receipt is the durable record. Local — the run
+                      continues as a detached background process with its
+                      log at ~/.pir/logs/<jobId>.log and a receipt that
+                      carries the child's final exit code
 
   Review bundles are packed in a throwaway temporary bare repository that
   reads the checkout's object store (#46): the source repo's refs, index,
@@ -289,7 +364,22 @@ Usage:
   mode local|remote   model <provider/model>|""
   server.url <url>    server.token <t>|""      server.insecure true|false
   server.viewerToken <t>|""  web-tier credential for runs/findings --run
-  server.timeoutSeconds <s>|""  remote response wait (#54)`,
+  server.timeoutSeconds <s>|""  remote response wait (#54)
+
+  pir config show also prints the effective project-rule layers (repo
+  .pir/rule.json + global ~/.pir/rule.json) and their canonical hash`,
+
+  rules: `Rules options (which project rule wins for a path — reads rule files only):
+  check <path>        print the winning rule for one repository path: layer,
+                      matched glob, mergeBuiltin and the rendered guidance
+                      text. <path> is repository-relative; an absolute path
+                      inside the repository is accepted and reported relative.
+                      A path that does not exist is matched by string and
+                      flagged. No review run, no model session, no project db.
+  --rule <path>       add the per-invocation layer find also accepts; a missing
+                      or invalid file is a usage error
+  --json              machine-readable envelope (rules.check), including the
+                      rendered PROJECT RULES section for that path`,
 
   footer: `Feedback decisions: ${FEEDBACK_DECISIONS.join(", ")}
 
@@ -311,6 +401,7 @@ export const USAGE = [
   USAGE_SECTIONS.modes,
   USAGE_SECTIONS.remote,
   USAGE_SECTIONS.config,
+  USAGE_SECTIONS.rules,
   USAGE_SECTIONS.footer,
 ].join("\n\n");
 
@@ -326,6 +417,7 @@ const HELP_SECTIONS: Record<string, string> = {
   memory: USAGE_SECTIONS.memorySync,
   serve: USAGE_SECTIONS.serve,
   config: USAGE_SECTIONS.config,
+  rules: USAGE_SECTIONS.rules,
 };
 
 /**
@@ -346,6 +438,13 @@ export interface ExecResult {
 export interface ExecOptions {
   /** Progress/log sink (CLI: stderr; server: server log; tests: capture). */
   onLog?: (message: string) => void;
+  /**
+   * Warning sink for messages a machine-mode invocation must never hide.
+   * The CLI wires this straight to stderr, so --json and --quiet cannot
+   * silence it (dogfood F-2); callers that only pass onLog keep the previous
+   * behaviour (progress channel), e.g. the server log.
+   */
+  onWarn?: (message: string) => void;
   /** Restrict --cwd to paths under this root (server mode guard). */
   cwdGuard?: string;
   /** Explicit sqlite location override (bundle/worktree server flows). */
@@ -404,8 +503,13 @@ export const VALUE_FLAGS = new Set([
   "--limit",
   "--offset",
   "--plugins",
+  "--rule",
+  "--background",
+  "--background-file",
   "--path",
   "--skip",
+  "--task-file",
+  "--arm",
 ]);
 
 /** Repeatable value flags: the single-slot map keeps the last value for
@@ -444,6 +548,27 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags, multi };
+}
+
+export type OutputFormat = "text" | "json" | "sarif";
+
+/**
+ * `find`/`audit` output selection (ADR 0020). `--format` names the
+ * format and the legacy `--json` is the same choice spelled differently, so
+ * asking for two different formats at once is a usage error rather than a
+ * silent precedence rule. Resolved before any run row or session exists.
+ */
+export function resolveOutputFormat(flags: Map<string, string | boolean>): OutputFormat {
+  const raw = flags.get("--format");
+  const json = flags.get("--json") === true;
+  if (raw === undefined) return json ? "json" : "text";
+  if (raw !== "text" && raw !== "json" && raw !== "sarif") {
+    throw new UsageError(`invalid --format: ${String(raw)} (expected text, json or sarif)`);
+  }
+  if (json && raw !== "json") {
+    throw new UsageError(`--json selects json output and contradicts --format ${raw}`);
+  }
+  return raw;
 }
 
 /**
@@ -518,6 +643,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   const out: string[] = [];
   const emit = (text: string) => out.push(text);
   const log = (message: string) => opts.onLog?.(message);
+  const warn = (message: string) => (opts.onWarn ?? opts.onLog)?.(message);
 
   // Help first (#43): no --repo materialization, no --uncommitted snapshot,
   // no context or db — a forwarded `pir findings list --help` must not make
@@ -541,7 +667,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
   // installation, so a pir serve instance must never execute them.
   if (command === "config") {
     if (opts.cwdGuard) throw new UsageError("config is a client-side command; run it on your machine");
-    return await cmdConfig(positional.slice(1), json, emit, out);
+    return await cmdConfig(positional.slice(1), flags, json, emit, out);
   }
   if (command === "skill") {
     if (opts.cwdGuard) throw new UsageError("skill is a client-side command; run it on your machine");
@@ -572,6 +698,15 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = resolved;
   }
 
+  // Project-rule introspection (Track B, S7): answers "which rule wins for
+  // this path?" from the same layer loader and matcher find uses. Client-side
+  // only — it reads the caller's rule files, opens no project database and
+  // starts no model session.
+  if (command === "rules") {
+    if (opts.cwdGuard) throw new UsageError("rules is a client-side command; run it on your machine");
+    return await cmdRules(positional.slice(1), flags, json, emit, out, cwd);
+  }
+
   // Review the working tree (tracked + untracked) as a virtual commit,
   // without touching the user's index or branches.
   const explicitDbPath = typeof opts.dbPath === "string" ? opts.dbPath : undefined;
@@ -593,6 +728,10 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
     if (flags.has("--branch")) throw new UsageError("audit selects a commit with --head; --branch is not supported");
     if (flags.has("--angles")) throw new UsageError("audit has no finder fan-out in v1; --angles is a find-only flag (experimental)");
+    if (flags.has("--rule")) throw new UsageError("--rule applies to find only (audit has no change-mode prompt)");
+    if (flags.has("--background") || flags.has("--background-file")) {
+      throw new UsageError("audit has no reviewer background; --background/--background-file are find-only flags (S2/ADR-0016)");
+    }
   }
 
   // Server-side registered repo: fetch the clone, review in a throwaway worktree.
@@ -612,7 +751,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = materialized.worktree;
     const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
     flags.set("--cwd", cwd);
-    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, materialized);
+    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
   }
 
   if (command === "version") {
@@ -627,12 +766,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError("serve must run in the local CLI process, not through the executor");
   }
 
-  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill"]);
+  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill", "_verify-comment"]);
   if (!knownCommands.has(command)) {
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, null, Boolean(opts.readOnlyMemory));
+  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
@@ -646,6 +785,7 @@ async function runInContext(
   out: string[],
   emit: Emit,
   log: Log,
+  warn: Log,
   materialized: import("../app/repos.js").MaterializedReview | null,
   readOnlyMemory = false,
 ): Promise<ExecResult> {
@@ -660,7 +800,7 @@ async function runInContext(
   try {
     switch (command) {
       case "find":
-        code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log);
+        code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log, warn);
         break;
       case "audit":
         code = await cmdAudit(ctx, positional.slice(1), flags, multi, json, emit, log);
@@ -679,6 +819,11 @@ async function runInContext(
         break;
       case "verify-fix":
         code = await cmdVerifyFix(ctx, positional.slice(1), flags, json, emit);
+        break;
+      // Internal eval command (M0): outside the stable contract, never listed
+      // in help and never forwarded to a remote server (see cli.ts LOCAL_ONLY).
+      case "_verify-comment":
+        code = await cmdVerifyComment(ctx, positional.slice(1), flags, json, emit, log);
         break;
       default:
         throw new UsageError(`unknown command: ${command}`);
@@ -868,6 +1013,27 @@ export function maxFindingsFlag(flags: Map<string, string | boolean>): number | 
 }
 
 /**
+ * --max-tokens: positive integer, or the literal "unlimited"
+ * (case-insensitive) which removes every token ceiling — including find's
+ * B3 default ceilings (ADR 0006). Parsed to null so the supervisor can tell
+ * "no ceiling" from every numeric ceiling; undefined means the flag was
+ * absent (find applies its defaults, audit stays unlimited).
+ */
+export function maxTokensFlag(flags: Map<string, string | boolean>): number | null | undefined {
+  const raw = flags.get("--max-tokens");
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string") {
+    throw new UsageError('invalid --max-tokens: a value is required (positive integer or "unlimited")');
+  }
+  if (raw.trim().toLowerCase() === "unlimited") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new UsageError(`invalid --max-tokens: ${raw} (positive integer or "unlimited" required)`);
+  }
+  return value;
+}
+
+/**
  * --verify-concurrency: parallel verifier sessions during a verification
  * drain. Precedence: flag > PIR_VERIFY_CONCURRENCY env > undefined (the
  * supervisor applies the default of 1). Bounded 1–MAX_VERIFY_CONCURRENCY so
@@ -958,6 +1124,32 @@ export function anglesFlag(flags: Map<string, string | boolean>): string[] | und
 }
 
 /**
+ * S2 (ADR-0016): `--background` / `--background-file` → the prompt-ready
+ * record. `--background-file` wins with a warning; every guard failure is a
+ * usage error, so a run never starts half-set. Warnings go to the caller's
+ * warning sink, which the CLI wires straight to stderr: a truncation must
+ * never be silent, even under --json/--quiet (dogfood F-2).
+ */
+export function userBackgroundFromFlags(
+  flags: Map<string, string | boolean>,
+  warn: (message: string) => void,
+): UserBackground | undefined {
+  const text = flags.get("--background");
+  const file = flags.get("--background-file");
+  try {
+    return resolveUserBackground({
+      ...(typeof text === "string" ? { text } : {}),
+      ...(typeof file === "string" ? { file } : {}),
+      cwd: process.cwd(),
+      warn: (message) => warn(`warning: ${message}`),
+    });
+  } catch (error) {
+    if (error instanceof UserBackgroundError) throw new UsageError(error.message);
+    throw error;
+  }
+}
+
+/**
  * --plugins <a,b|none|auto>: unknown names fail as usage errors here, with the
  * available list, instead of a runtime error deep in the finding loop.
  */
@@ -1021,33 +1213,86 @@ async function cmdFind(
   json: boolean,
   emit: Emit,
   log: Log,
+  warn: Log,
 ): Promise<number> {
-  // --detach is a remote-submission flag (#53): local execution cannot honor
-  // it, and a server receiving it unstripped (old client) must not ignore it.
+  const format = resolveOutputFormat(flags);
+  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // before the executor runs, and the remote client strips the flag before
+  // forwarding. This guard's remaining job is the server lane — a server
+  // receiving an unstripped --detach (old client) must fail, never ignore it.
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
+  }
+  // File-selection preview (B1/T4): the exact change set and the exact pure
+  // filter a real find of the same range would apply — no run row, no model
+  // session, no writes. Run-shaping flags cannot affect a selection, so they
+  // are rejected instead of silently ignored (the audit --dry-run precedent).
+  if (flags.get("--preview") === true) {
+    for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--model", "--verify-model", "--angles", "--plugins", "--rule", "--background", "--background-file"]) {
+      if (flags.has(shaping)) {
+        throw new UsageError(`find --preview previews the file selection only; ${shaping} shapes a real run`);
+      }
+    }
+    if (format === "sarif") {
+      throw new UsageError("find --preview prints the selection; --format sarif applies to a review run");
+    }
+    return await renderFindPreview(ctx, {
+      base: flags.get("--base") as string | undefined,
+      head: flags.get("--head") as string | undefined,
+      json: format === "json",
+      emit,
+    });
   }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
   const maxFindings = maxFindingsFlag(flags);
-  const result = await runFind(ctx, {
-    base: flags.get("--base") as string | undefined,
-    head: flags.get("--head") as string | undefined,
-    maxRounds: positiveIntFlag(flags, "--max-rounds"),
-    maxTokens: positiveIntFlag(flags, "--max-tokens"),
-    maxFindings,
-    verifyConcurrency: verifyConcurrencyFlag(flags),
-    minConfidence: minConfidenceFlag(flags),
-    model: flags.get("--model") as string | undefined,
-    verifierModel: verifierModelFlag(flags),
-    angles: anglesFlag(flags),
-    ...(await parsePluginsFlag(flags)),
-    onProgress: (event) => log(`• ${event.message}`),
-  });
+  const ruleFile = flags.get("--rule");
+  if (ruleFile !== undefined && (typeof ruleFile !== "string" || ruleFile.trim() === "")) {
+    throw new UsageError("--rule requires a path to a project rule file");
+  }
+  // S2 (ADR-0016): resolve the background before any run row or session
+  // exists. A missing/oversized file, empty text or a reserved delimiter is a
+  // usage error (exit 2) — never a run that silently drops the context.
+  const background = userBackgroundFromFlags(flags, warn);
+  let result: Awaited<ReturnType<typeof runFind>>;
+  try {
+    result = await runFind(ctx, {
+      base: flags.get("--base") as string | undefined,
+      head: flags.get("--head") as string | undefined,
+      maxRounds: positiveIntFlag(flags, "--max-rounds"),
+      maxTokens: maxTokensFlag(flags),
+      maxFindings,
+      verifyConcurrency: verifyConcurrencyFlag(flags),
+      minConfidence: minConfidenceFlag(flags),
+      model: flags.get("--model") as string | undefined,
+      verifierModel: verifierModelFlag(flags),
+      angles: anglesFlag(flags),
+      ...(await parsePluginsFlag(flags)),
+      ...(typeof ruleFile === "string" ? { ruleFile } : {}),
+      ...(background ? { background } : {}),
+      onProgress: (event) => log(`• ${event.message}`),
+    });
+  } catch (error) {
+    // B5 (ADR-0010): a broken rule file is a configuration error (exit 2),
+    // not a runtime failure, and it never reaches a model session.
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
   const findings = result.findings.map((row) => toFindingView(ctx, row));
   const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
-  if (json) {
+  if (format === "sarif") {
+    emit(
+      renderSarif({
+        command: "find",
+        version: readVersion(),
+        findings,
+        incomplete: result.incomplete,
+        stoppedBecause: result.stoppedBecause,
+        runId: result.runId,
+      }),
+    );
+  } else if (format === "json") {
     emit(
       envelope(
         "find",
@@ -1060,12 +1305,9 @@ async function cmdFind(
             maxFindings: result.maxFindings,
             maxFindingsMode: result.maxFindings === null ? "unlimited" : "capped",
             transcriptDir: result.transcriptDir ?? null,
-            files: result.changeSet.files.map((f) => ({
-              path: f.path,
-              status: f.status,
-              additions: f.additions,
-              deletions: f.deletions,
-            })),
+            // Purely additive (B1): every pre-B1 key keeps its value, plus
+            // files[].excluded (always present) and excludedReason (filtered only).
+            files: result.changeSet.files.map(changedFileSummary),
           },
           degraded: result.degraded,
           plugins: result.plugins,
@@ -1110,6 +1352,39 @@ async function cmdFind(
   return findExitCode(findings, failOn, result.incomplete);
 }
 
+/**
+ * `_verify-comment` (ADR 0007): internal eval command, OUTSIDE the stable
+ * contract — underscore-prefixed, not listed in USAGE/HELP_SECTIONS, local-only,
+ * and gated on PIR_EVAL=1. It verifies ONE materialized AACR-Bench comment and
+ * prints the verdict, so the offline benchmark measures the shipped verifier.
+ * May change or disappear without notice; do not build consumers on it.
+ */
+async function cmdVerifyComment(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  if (process.env.PIR_EVAL !== "1") {
+    throw new UsageError("_verify-comment is an internal evaluation command; set PIR_EVAL=1 to run it");
+  }
+  const taskFile = flags.get("--task-file");
+  if (typeof taskFile !== "string" || taskFile.trim() === "") {
+    throw new UsageError("_verify-comment requires --task-file <path>");
+  }
+  const arm = (flags.get("--arm") as string | undefined) ?? "verifier";
+  if (arm !== "verifier" && arm !== "ocr") throw new UsageError(`invalid --arm: ${arm} (verifier|ocr)`);
+  const { readTaskFile, runVerifyComment } = await import("../app/verify-comment.js");
+  const task = readTaskFile(taskFile);
+  const model = flags.get("--model") as string | undefined;
+  log(`• _verify-comment ${task.id} arm=${arm}`);
+  const result = await runVerifyComment(ctx, task, { arm, ...(model === undefined ? {} : { model }) });
+  emit(json ? `${envelope("_verify-comment", result)}\n` : `${JSON.stringify(result, null, 2)}\n`);
+  return 0;
+}
+
 async function cmdAudit(
   ctx: Ctx,
   _args: string[],
@@ -1119,19 +1394,25 @@ async function cmdAudit(
   emit: Emit,
   log: Log,
 ): Promise<number> {
+  const format = resolveOutputFormat(flags);
   // Audit has no comparison semantics: reject flags that would imply one.
   if (flags.has("--base")) throw new UsageError("audit has no comparison base; --base is a find-only flag");
   if (flags.has("--uncommitted")) throw new UsageError("audit reviews committed snapshots only; --uncommitted is a find-only flag");
   if (flags.has("--max-rounds")) throw new UsageError("audit has no global round limit; units and budgets bound the run (see --max-tokens)");
-  // --detach is remote-only (#53): a local run cannot detach, and a server
-  // receiving the flag unstripped (old client) must fail instead of ignoring.
+  // --detach is a client-side flag since ADR 0022: the local CLI detaches
+  // before the executor runs, and the remote client strips the flag before
+  // forwarding. A server receiving it unstripped (old client) must fail
+  // instead of ignoring it.
   if (flags.has("--detach")) {
     throw new UsageError("--detach submits to a remote server and returns without waiting; it needs --server <url> or remote mode");
   }
   // Post-run coverage readout (#56) answers from the recorded ledger — no
   // snapshot, no model, no run.
   if (_args[0] === "coverage") {
-    return await cmdAuditCoverage(ctx, _args.slice(1), flags, json, emit, log);
+    if (format === "sarif") {
+      throw new UsageError("audit coverage prints a recorded ledger; --format sarif applies to an audit run");
+    }
+    return await cmdAuditCoverage(ctx, _args.slice(1), flags, format === "json", emit, log);
   }
   const failOn = (flags.get("--fail-on") as string) ?? "none";
   if (!["P0", "P1", "P2", "P3", "none"].includes(failOn)) throw new UsageError(`invalid --fail-on: ${failOn}`);
@@ -1152,12 +1433,15 @@ async function cmdAudit(
         throw new UsageError(`audit --dry-run previews the scope only; ${shaping} shapes a real run`);
       }
     }
+    if (format === "sarif") {
+      throw new UsageError("audit --dry-run prints a scope preview; --format sarif applies to a real audit run");
+    }
     return await renderAuditDryRun(ctx, {
       head: flags.get("--head") as string | undefined,
       includePaths,
       skipGlobs,
       listFiles: flags.get("--list-files") === true,
-      json,
+      json: format === "json",
       emit,
     });
   }
@@ -1166,7 +1450,7 @@ async function cmdAudit(
     head: flags.get("--head") as string | undefined,
     includePaths,
     skipGlobs,
-    maxTokens: positiveIntFlag(flags, "--max-tokens"),
+    maxTokens: maxTokensFlag(flags),
     maxFindings,
     verifyConcurrency: verifyConcurrencyFlag(flags),
     minConfidence: minConfidenceFlag(flags),
@@ -1181,7 +1465,19 @@ async function cmdAudit(
   const findings = result.findings.map((row) => toFindingView(ctx, row));
   const lowConfidenceFindings = result.lowConfidenceFindings.map((row) => toFindingView(ctx, row));
 
-  if (json) {
+  if (format === "sarif") {
+    emit(
+      renderSarif({
+        command: "audit",
+        version: readVersion(),
+        findings,
+        incomplete: result.incomplete,
+        stoppedBecause: result.stoppedBecause,
+        runId: result.runId,
+        coverage: { ...result.coverage },
+      }),
+    );
+  } else if (format === "json") {
     emit(
       envelope(
         "audit",
@@ -1248,6 +1544,98 @@ async function cmdAudit(
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `pir find --preview [--json]` (B1/T4): the change set a real find of the
+ * same range would review, plus the per-file decision of the shared
+ * change-mode filter — the same buildChangeSet + selectChangeFiles calls the
+ * run makes, so what is previewed is what gets reviewed by construction.
+ * Excluded files are reported with their path/status/churn and the gate's
+ * reason: the reviewer's view is "this changed, and you may not read its
+ * diff". No run row, no model session, no writes.
+ */
+async function renderFindPreview(
+  ctx: Ctx,
+  input: { base: string | undefined; head: string | undefined; json: boolean; emit: Emit },
+): Promise<number> {
+  const { buildChangeSet } = await import("../changes/change-set.js");
+  const { DEFAULT_SKIP_PATTERNS, FILTER_VERSION, MAX_DIFF_FILE_BYTES, SECRET_PATH_PATTERNS, selectChangeFiles } = await import("../changes/filter.js");
+  const { getHeadCommit } = await import("../changes/git.js");
+  const emit = input.emit;
+  // Ref labels stay labels ("HEAD^") in the readout; only the diff is pinned
+  // to resolved commits.
+  const requestedBase = input.base ?? `${input.head ?? "HEAD"}^`;
+  const changeSet = await buildChangeSet(ctx.repoRoot, requestedBase, input.head ?? (await getHeadCommit(ctx.repoRoot)));
+  const decisions = selectChangeFiles(changeSet.files);
+  const files = changeSet.files.map((file, index) => {
+    const decision = decisions[index]!;
+    return {
+      path: file.path,
+      status: file.status,
+      additions: file.additions,
+      deletions: file.deletions,
+      language: file.language,
+      excluded: !decision.selected,
+      ...(file.oldPath ? { oldPath: file.oldPath } : {}),
+      ...(decision.reason ? { excludedReason: decision.reason } : {}),
+      ...(decision.gate ? { gate: decision.gate } : {}),
+    };
+  });
+  const byGate: Record<string, number> = {};
+  for (const decision of decisions) {
+    if (decision.gate) byGate[decision.gate] = (byGate[decision.gate] ?? 0) + 1;
+  }
+  const selected = decisions.filter((decision) => decision.selected).length;
+  const counts = { total: files.length, selected, excluded: files.length - selected, byGate };
+  const note = "no run is created and no model is used; this is the same change set and filter a real find would use";
+  const gates = ["binary", "secret", "not-included", "skip-pattern", "oversized-diff"];
+  if (input.json) {
+    emit(
+      envelope(
+        "find.preview",
+        {
+          base: changeSet.baseCommit ?? changeSet.base,
+          head: changeSet.headCommit ?? changeSet.head,
+          requestedBase,
+          mergeBase: changeSet.mergeBase,
+          churn: changeSet.churn,
+          filter: {
+            version: FILTER_VERSION,
+            gates,
+            maxDiffBytes: MAX_DIFF_FILE_BYTES,
+            secretPaths: SECRET_PATH_PATTERNS,
+            defaultExclusions: DEFAULT_SKIP_PATTERNS,
+          },
+          counts,
+          files,
+          note,
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: changeSet.headCommit ?? changeSet.head } },
+      ),
+    );
+    emit("\n");
+    return 0;
+  }
+  const gateSummary = gates
+    .filter((gate) => (byGate[gate] ?? 0) > 0)
+    .map((gate) => `${byGate[gate]} ${gate}`)
+    .join(", ");
+  const lines = [
+    `find preview: merge-base ${changeSet.mergeBase} -> head ${changeSet.headCommit ?? changeSet.head} (${changeSet.files.length} files, ${changeSet.churn} changed lines)`,
+    `requested base: ${requestedBase}; filter version ${FILTER_VERSION} (gates: ${gates.join(" -> ")}, ${MAX_DIFF_FILE_BYTES}-byte diff cap)`,
+    `files: ${counts.total} total — ${counts.selected} selected, ${counts.excluded} excluded${gateSummary ? ` (${gateSummary})` : ""}`,
+    "excluded files keep path/status/churn metadata; their diff bodies never reach a model",
+  ];
+  for (const file of files) {
+    const state = file.excluded ? "excluded" : "selected";
+    const rename = file.oldPath ? ` (from ${file.oldPath})` : "";
+    const reason = file.excludedReason ? `  (${file.excludedReason})` : "";
+    lines.push(`  ${state.padEnd(10)}${file.status.padEnd(10)}+${file.additions}/-${file.deletions}${" ".repeat(Math.max(1, 8 - `+${file.additions}/-${file.deletions}`.length))}${file.path}${rename}${reason}`);
+  }
+  lines.push(note);
+  emit(`${lines.join("\n")}\n`);
+  return 0;
 }
 
 /**
@@ -1700,17 +2088,21 @@ async function cmdVerifyFix(
   return 0;
 }
 
-async function cmdConfig(args: string[], json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
+async function cmdConfig(args: string[], flags: Map<string, string | boolean>, json: boolean, emit: Emit, out: string[]): Promise<ExecResult> {
   const sub = args[0] ?? "show";
 
   if (sub === "show") {
     const config = loadUserConfig();
+    // B5 (ADR-0010): the effective rule layers are part of `config show`; a
+    // broken rule file fails here with the same loud usage error find gives.
+    // --cwd selects the repository whose `.pir/rule.json` layer is read.
+    const rules = loadRulesForConfig(typeof flags.get("--cwd") === "string" ? (flags.get("--cwd") as string) : process.cwd());
     if (json) {
-      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }) })}\n`);
+      emit(`${envelope("config.show", { path: configPath(), ...(config ? { config: redactConfig(config) } : { config: null }), rules: projectRulesJson(rules) })}\n`);
     } else if (!config) {
-      emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n`);
+      emit(`no config yet — running with local defaults\npath: ${configPath()}\ncreate one with: pir config\n${renderProjectRulesConfig(rules)}`);
     } else {
-      emit(renderConfig(config, configPath()));
+      emit(`${renderConfig(config, configPath())}${renderProjectRulesConfig(rules)}`);
     }
     return { code: 0, output: out.join("") };
   }
@@ -1763,6 +2155,229 @@ function renderConfig(config: UserConfig, file: string): string {
   if (config.model) lines.push(`model:  ${config.model}`);
   lines.push(`path:   ${file}`);
   return `${lines.join("\n")}\n`;
+}
+
+/** Load the layers `config show` reports; a broken file is a usage error. */
+function loadRulesForConfig(repoRoot: string): ProjectRuleSet {
+  try {
+    return loadProjectRules({ repoRoot });
+  } catch (error) {
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
+}
+
+/** Machine-readable rule layers (`config show --json`); full guidance text. */
+function projectRulesJson(rules: ProjectRuleSet): Record<string, unknown> {
+  return {
+    schemaVersion: rules.schemaVersion,
+    hash: rules.hash,
+    layers: rules.layers.map((layer) => ({
+      layer: layer.layer,
+      file: layer.file,
+      include: layer.include,
+      exclude: layer.exclude,
+      rules: layer.rules.map((rule) => ({
+        path: rule.path,
+        mergeBuiltin: rule.mergeBuiltin,
+        guidanceSource: rule.guidanceSource,
+        ...(rule.guidanceFile ? { guidanceFile: rule.guidanceFile } : {}),
+        guidance: rule.guidance,
+      })),
+    })),
+  };
+}
+
+/** Human-readable rule layers: source, globs, merge flag and a guidance preview. */
+function renderProjectRulesConfig(rules: ProjectRuleSet): string {
+  const lines = ["project rules (layers: --rule > repo .pir/rule.json > global rule.json; first matching rule wins)"];
+  if (rules.layers.length === 0) {
+    lines.push(`  none (searched the repository's .pir/rule.json and ${path.join(pirConfigDir(), "rule.json")}; --rule is per invocation)`);
+  } else {
+    for (const layer of rules.layers) {
+      const scope = `include ${JSON.stringify(layer.include)}${layer.exclude.length > 0 ? `, exclude ${JSON.stringify(layer.exclude)}` : ""}`;
+      lines.push(`  ${layer.layer}: ${layer.file} — ${layer.rules.length} rule${layer.rules.length === 1 ? "" : "s"}, ${scope}`);
+      for (const rule of layer.rules) {
+        const source = rule.guidanceSource === "file" ? `file ${rule.guidanceFile}` : `inline ${rule.guidance.length} chars`;
+        const firstLine = rule.guidance.split("\n")[0] ?? "";
+        const preview = firstLine.length > 140 ? `${firstLine.slice(0, 140)}…` : firstLine;
+        lines.push(`    - "${rule.path}" mergeBuiltin=${rule.mergeBuiltin} (${source})${preview ? `: ${preview}` : ""}`);
+      }
+    }
+  }
+  lines.push(`  hash: ${rules.hash}`);
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Rule-layer display labels: the same `layerLabel` the reviewer prompt uses,
+ * so the command cannot name a layer differently from the prompt it explains
+ * (and neither output carries a host path).
+ */
+const ruleLayerFile = (set: ProjectRuleSet, index: number): string => layerLabel(set.layers[index]!);
+
+/** Normalize the checked path to the repo-relative POSIX form globs match. */
+function ruleCheckPath(repoRoot: string, raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed === "") throw new UsageError("rules check requires a non-empty <path>");
+  // Absolute-ness is decided on the raw argument, before backslashes become
+  // POSIX separators: a Windows drive/UNC path is absolute, not a relative path
+  // named "C:/repo/src/a.ts" (F-12). `win32.isAbsolute` also covers "/..." forms.
+  const given = trimmed.replace(/\\/g, "/");
+  if (path.win32.isAbsolute(trimmed) || path.posix.isAbsolute(given)) {
+    const resolved = path.resolve(given);
+    const relative = path.relative(repoRoot, resolved).split(path.sep).join("/");
+    if (relative === "" || relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) {
+      throw new UsageError("rules check path must be a file inside the repository");
+    }
+    // An existing target is contained by its real path, not by its spelling:
+    // a symlink that lives inside the checkout but points outside must not be
+    // reported as an in-repo path (F-11). A non-existent path has nothing to
+    // resolve, so the lexical check above stays the answer for it.
+    if (existsSync(resolved)) {
+      const rootReal = realpathSync(repoRoot);
+      const real = realpathSync(resolved);
+      if (real !== rootReal && !real.startsWith(rootReal + path.sep)) {
+        throw new UsageError("rules check path must be a file inside the repository");
+      }
+    }
+    return relative;
+  }
+  const relative = path.posix.normalize(given).replace(/^\.\//, "");
+  if (relative === "" || relative === "." || relative === ".." || relative.startsWith("../") || relative.endsWith("/")) {
+    throw new UsageError(`rules check path must name a file inside the repository (got "${raw}")`);
+  }
+  return relative;
+}
+
+/** Why one layer did or did not select a rule, in the command's own words. */
+function describeRuleLayer(layer: RuleLayerCheck): string {
+  if (layer.includedBy === null) return "path not included by any include glob";
+  if (layer.excludedBy !== null) return `path excluded by exclude glob "${layer.excludedBy}"`;
+  if (layer.rulePath === null) return "path included, no rule matched";
+  return layer.won
+    ? `winning rule "${layer.rulePath}"`
+    : `matches rule "${layer.rulePath}" (a higher-priority layer wins)`;
+}
+
+function renderRuleCheck(check: ProjectRuleCheck, set: ProjectRuleSet, displayPath: string, exists: boolean): string {
+  const lines = [`path: ${displayPath}`];
+  if (!exists) lines.push("note: path does not exist in this checkout; matched by path only");
+  if (check.match) {
+    const { layer, rule, layerIndex } = check.match;
+    lines.push(`rule: "${rule.path}"`);
+    lines.push(`layer: ${layer.layer} (${ruleLayerFile(set, layerIndex)})`);
+    lines.push(`mergeBuiltin: ${rule.mergeBuiltin}`);
+    const source = rule.guidanceSource === "file" ? `file ${rule.guidanceFile}` : "inline";
+    lines.push(`guidance (${source}, ${rule.guidance.length} chars):`);
+    lines.push(rule.guidance);
+    lines.push("");
+  } else {
+    lines.push("rule: none");
+    lines.push("layers:");
+    if (check.layers.length === 0) {
+      lines.push("  none loaded (searched .pir/rule.json and ~/.pir/rule.json; --rule is per invocation)");
+    } else {
+      for (const [index, layer] of check.layers.entries()) {
+        const count = `${layer.rules} rule${layer.rules === 1 ? "" : "s"}`;
+        lines.push(`  ${layer.layer} (${ruleLayerFile(set, index)}): ${count}, ${describeRuleLayer(layer)}`);
+      }
+    }
+  }
+  lines.push(`rules hash: ${set.hash}`);
+  return `${lines.join("\n")}\n`;
+}
+
+function ruleCheckJson(
+  check: ProjectRuleCheck,
+  set: ProjectRuleSet,
+  displayPath: string,
+  exists: boolean,
+  renderedSection: string,
+): Record<string, unknown> {
+  const winner = check.match;
+  return {
+    path: displayPath,
+    exists,
+    rulesHash: set.hash,
+    matched: winner !== null,
+    winner:
+      winner === null
+        ? null
+        : {
+            layer: winner.layer.layer,
+            file: ruleLayerFile(set, winner.layerIndex),
+            rule: winner.rule.path,
+            mergeBuiltin: winner.rule.mergeBuiltin,
+            guidanceSource: winner.rule.guidanceSource,
+            guidanceFile: winner.rule.guidanceFile ?? null,
+            guidance: winner.rule.guidance,
+          },
+    // The exact reviewer-prompt section this path would receive ("" when no
+    // rule applies); the same `applyProjectRules` call find makes.
+    renderedSection,
+    layers: check.layers.map((layer, index) => ({
+      layer: layer.layer,
+      file: ruleLayerFile(set, index),
+      rules: layer.rules,
+      include: layer.include,
+      exclude: layer.exclude,
+      includedBy: layer.includedBy,
+      excludedBy: layer.excludedBy,
+      rule: layer.rulePath,
+      won: layer.won,
+    })),
+  };
+}
+
+/**
+ * `pir rules check <path>` (Track B, S7): the winning rule, its layer, the
+ * matched glob and the rendered guidance for one repository path. Pure read:
+ * no review run row, no project database, no model session, no repo writes.
+ */
+async function cmdRules(
+  args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  out: string[],
+  cwd: string,
+): Promise<{ code: number; output: string }> {
+  if (flags.has("--repo")) throw new UsageError("rules check reads this checkout; --repo is not supported");
+  if (flags.has("--base") || flags.has("--head") || flags.has("--branch") || flags.has("--uncommitted")) {
+    throw new UsageError("rules check matches one path, not a review range; --base/--head/--branch/--uncommitted do not apply");
+  }
+  const sub = args[0];
+  if (sub === undefined) throw new UsageError("rules requires a subcommand: check <path>");
+  if (sub !== "check") throw new UsageError(`unknown rules subcommand: ${sub} (expected check <path>)`);
+  const raw = args[1];
+  if (raw === undefined) throw new UsageError("rules check requires a <path>");
+  if (args.length > 2) throw new UsageError("rules check takes one <path>");
+  const repoRoot = path.resolve(cwd);
+  const displayPath = ruleCheckPath(repoRoot, raw);
+  const explicitPath = typeof flags.get("--rule") === "string" ? (flags.get("--rule") as string) : undefined;
+  let set: ProjectRuleSet;
+  let renderedSection: string;
+  try {
+    set = loadProjectRules({ repoRoot, ...(explicitPath === undefined ? {} : { explicitPath }) });
+    // Rendering belongs to the same ProjectRuleError -> UsageError mapping:
+    // an over-cap rendered section (48,000 chars) is a configuration mistake
+    // the user can fix, so it exits 2 like the sibling `find` load, not 3 (F-10).
+    renderedSection = applyProjectRules(set, [{ path: displayPath }]).section;
+  } catch (error) {
+    if (error instanceof ProjectRuleError) throw new UsageError(error.message);
+    throw error;
+  }
+  // Winner and layer explanation share the reviewer prompt's matcher, and the
+  // rendered section is the same `applyProjectRules` output find consumes.
+  const check = checkProjectRules(set, displayPath);
+  const exists = existsSync(path.join(repoRoot, displayPath));
+  emit(
+    json
+      ? `${envelope("rules.check", ruleCheckJson(check, set, displayPath, exists, renderedSection))}\n`
+      : renderRuleCheck(check, set, displayPath, exists),
+  );
+  return { code: 0, output: out.join("") };
 }
 
 async function cmdSkill(

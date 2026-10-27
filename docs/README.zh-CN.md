@@ -123,6 +123,8 @@ docker compose up -d
 pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # 暂存、未暂存和未跟踪的内容
+pir find --preview --json               # 预演本次评审会选择哪些文件、遮蔽哪些文件
+pir find --background-file pr.md --base origin/main --json  # 说明这次改动的意图
 
 pir audit --json                        # 已提交的 HEAD 快照
 pir audit --path src/auth --path src/payments --json
@@ -141,9 +143,11 @@ pir memory bootstrap
 pir memory refresh
 pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
+
+pir rules check src/core/supervisor.ts  # 查看某个路径最终命中的项目规则
 ```
 
-`--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制。未设置预算时，评审默认没有 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Frontend、Go 和 TypeScript 包均支持 find 与 audit。前端包按框架 marker（`next.config.*`、`nuxt.config.*`、`svelte.config.*`、`astro.config.*`、`angular.json`、`vite.config.*`、`index.html`）在仓库任意深度自动激活，覆盖 React/Next、Vue/Nuxt、Svelte 等 Web UI——没有任何 marker 的纯 SPA 仓库可显式传 `--plugins frontend`。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
+`--max-findings` 是报告上限，不是要凑满的数量；`--max-findings unlimited` 彻底取消上限（#57，远端需要同版本 server）。JSON 结果的 `run.maxFindings`（无上限时为 `null`）与显式的 `run.maxFindingsMode`（`capped`/`unlimited`）一并输出。`--max-rounds` 用于变更评审；audit 由工作单元和可选的 `--max-tokens` 预算限制，默认没有 token 上限。find 默认上限为 120 万 reviewer + 80 万 verifier 输入 token（ADR 0006）：触顶后不再开启新的 reviewer 轮次，但仍会验证已发现的全部候选，停止原因记录在 `stoppedBecause`，`incomplete` 语义不变（配合 `--fail-on` 退出码 3）。传 `--max-tokens N` 时改用单一显式的整轮上限，`--max-tokens unlimited` 取消全部 token 上限。语言包默认自动检测，也可以用 `--plugins none` 禁用，或用逗号分隔的内置包名称指定。自带的 Frontend、Go 和 TypeScript 包均支持 find 与 audit。前端包按框架 marker（`next.config.*`、`nuxt.config.*`、`svelte.config.*`、`astro.config.*`、`angular.json`、`vite.config.*`、`index.html`）在仓库任意深度自动激活，覆盖 React/Next、Vue/Nuxt、Svelte 等 Web UI——没有任何 marker 的纯 SPA 仓库可显式传 `--plugins frontend`。注意区分:`findings list` 是**存储查询分页**(默认每页 100 条,JSON 输出携带 `total`/`returned`/`hasMore`/`nextOffset`,`--all` 一次取全量),与评审期的 `--max-findings` 上限是两个独立概念。
 
 验证默认串行。`--verify-concurrency <n>`（1–8，默认 1；未传 flag 时读 `PIR_VERIFY_CONCURRENCY` 环境变量）让每轮验证排空最多并行运行 n 个 verifier 会话，find 与 audit 均适用。即使验证并发竞争，报告的 findings 数也不会超过 `--max-findings`，且 findings 顺序保持确定。
 
@@ -165,6 +169,12 @@ verifier 会话可以使用与 reviewer 不同的模型：`--verify-model <id>`�
 
 进度和诊断信息写入 stderr。退出码 `0` 表示未触发门禁失败，`1` 表示有已报告的问题达到 `--fail-on` 阈值，`2` 表示用法错误，`3` 表示运行错误。默认 `--fail-on none` 下，不完整结果仍可能返回 `0`，需要检查 `data.incomplete`。设置门禁后，不完整评审返回 `3`，除非已有达到阈值的问题使其返回 `1`。
 
+`find` 与 `audit` 还可以输出 SARIF 2.1.0，而不是信封或文本报告：`--format sarif`（`--format text|json` 选择另外两种；`--json` 等价于 `--format json`，两者同时给出且取值不同是用法错误）。每个已报告的 finding 产出一条 result：`category` 成为 `ruleId`，P0/P1 映射为 `error`、P2 为 `warning`、P3 为 `note`，anchors 成为物理位置（第一个是主位置，其余进入 `relatedLocations`），finding 的规范化身份写入 `partialFingerprints["pirFinding/v1"]`。每次调用都会记录本次运行是否完成（`executionSuccessful`），提前停止时附带一条携带 `stoppedBecause` 的 `warning` 通知；audit 的调用还会带上覆盖率摘要。没有 finding 时输出合法的空 `results`。退出码契约不变；无法表达 finding 的通道（`find --preview`、`audit --dry-run`、`audit coverage`）会拒绝 `sarif`。远程模式需要同版本 server。
+
+```bash
+pir find --base origin/main --head HEAD --format sarif > pir.sarif
+```
+
 Audit 还返回覆盖率记录。范围内文件分别记为 `reviewed`、`partial`、`unreviewed`、`blocked` 或 `failed`；被排除及未选中的文件另行统计。`reviewed` 表示流程完成，不表示已经找到了全部缺陷。
 
 在投入长时间 audit 之前可以先预览范围（#56）：
@@ -176,6 +186,36 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 ```
 
 `--dry-run` 复用真实 audit 的快照与单元规划器，不建 run、不调模型；`coverage` 从本地项目库读取该 run 过程中持久化的覆盖率记录。
+
+变更评审在模型看到 diff 之前先做过滤。change set 构建完成后，每个文件按固定顺序过四道闸门——binary、secret 路径（不可被任何 include/skip 覆盖）、skip 规则（依赖目录、构建产物、lockfile、压缩产物）以及超大的单文件 diff。被排除的文件保留 path/status/churn 元数据，但 diff 正文被清空，任何 reviewer 会话都无法翻页读取。被排除的文件是"可见的排除"而不是消失：`find --json` 信封与 run manifest 的 `files[]` 新增 `excluded`（始终存在）与 `excludedReason`（仅被排除时），纯增量——所有既有字段名与值不变。secret 是唯一绝对闸门：`.env`、`.ssh` 内容、SSH 密钥家族、`.netrc`/`.npmrc`/`.pypirc`/`.dockercfg` 永不进入模型（仓库中作为示例提交的 `.env.example`/`.sample`/`.template` 不受影响，仍可评审）。
+
+`pir find --preview` 在付出评审成本之前打印这次选择——逐文件的 status/churn，以及 selected/excluded 与对应原因（文本或 `--json`）。它调用与真实运行完全相同的 change set 构建器与纯过滤函数，不建 run、不开启模型会话、不写入任何内容；run-shaping 类 flag 会直接报用法错误，而不是被静默忽略。
+
+### 项目规则
+
+仓库评审约定可以直接声明，而不必依赖记忆：规则文件把路径 glob 与 guidance 配对，`find` 只注入命中本次评审路径的规则。三层按优先级从高到低加载——`--rule <path>`、`<repo>/.pir/rule.json`、`<config-dir>/rule.json`（默认 `~/.pir/rule.json`）——同一个路径由第一个命中的规则决定（层优先，层内按声明顺序），因此匹配是确定性的代码判断。每层还可带 `include`/`exclude` glob；`mergeBuiltin: false` 表示该规则对其路径拥有最终解释权，并整轮抑制 reviewer 会话的内置语言包 guidance（verifier 会话保留自己的可信 guidance）。
+
+```json
+{
+  "schemaVersion": 1,
+  "include": ["src/**"],
+  "exclude": ["**/*.test.ts"],
+  "rules": [
+    { "path": "src/web/**", "guidance": "组件挂载后不要再修改 props。", "mergeBuiltin": true },
+    { "path": "src/db/**", "guidanceFile": "docs/db-review.md", "mergeBuiltin": false }
+  ]
+}
+```
+
+`guidanceFile` 与仓库层规则文件本身都按不可信仓库内容处理：仓库相对路径、仅限 `.md`/`.markdown`/`.txt`、最大 64 KiB、经 `realpath` 解析后必须仍在仓库根内。规则文件损坏、guidance 逃逸或过大，或渲染后的 PROJECT RULES 超过 48,000 字符，都会在任何模型会话开始前直接失败。实际生效的规则与规范化 `sha256` 会写入 run manifest 的 `projectRules`；`pir config show` 打印已加载的层、规则与哈希。规则仅用于 `find`；`--rule` 是本地路径，远程模式会在客户端与服务端两侧被拒绝。
+
+`pir rules check <path>` 不开评审、直接回答"这个路径会命中哪条规则"：命中的层与其标签、匹配的 glob、`mergeBuiltin`、规范化后的 guidance 文本以及规则哈希；没有任何规则命中时，逐个已加载层给出一行原因（未被 include 命中、被 exclude 排除、该层无规则匹配）。输出的路径始终是仓库相对路径，绝不会出现宿主机绝对路径；仓库内的绝对路径会被接受并以相对形式输出，仓库外的路径是用法错误（退出码 2），不存在的文件会被标注而不是被静默匹配。`--json`（`command: "rules.check"`）返回同样内容，外加该路径会收到的完整 PROJECT RULES prompt 片段。该命令只读取规则文件：不创建评审 run、不打开项目数据库、不启动模型会话。
+
+### 用户背景
+
+评审看得到 diff，却看不到这次改动想达成什么。`--background <text>` 与 `--background-file <path>` 给 reviewer 一个显式、带定界符的上下文块——改动目标、有意的行为变更、迁移说明——除此之外不改变任何东西。该输入默认关闭、仅用于 `find`，并且有明确上限：文件原始大小 1 MiB、进入 prompt 的净化文本 8,000 字符（超长会被截断，prompt 内写明截断标记并在 stderr 警告）、2,000 字符软上限只警告。控制字符与不可见格式字符会被剥离，连续空行会合并，出现保留的 `<user_background>` 定界符会直接报错；两个 flag 同时给出时文件优先，相对路径与 `--rule` 一样相对调用目录解析。
+
+reviewer prompt 把该文本放在保留的 `<user_background>` 区段里——位于全部流程规则之后、证据块之前——并标注它是由用户提供的上下文，既不是指令也不是证据：它不能覆盖来源校验、严重度、do-not-report 清单或报告上限，其中的说法必须用钉住的代码验证。verifier 会话永远看不到它，`audit` 会直接拒绝这两个 flag，唯一被持久化的痕迹是 `run.json` 的 `background`——来源、规范化 `sha256`、字符数与截断标记，绝不包含正文。所有回显 argv 的记账面（服务端错误日志、`GET /v1/jobs`/`pir jobs` 背后的任务注册表、本地提交回执）都保留 flag、把取值替换为 `<background redacted>`。会话转录（transcript）是会话记录而非溯源面：开启时它与其他输入一样包含该 prompt。`--background` 可以转发到远端（需要同版本 server）；`--background-file` 是本地路径，远程模式会在两侧被拒绝——CLI 转发前与服务端执行通道都会拒绝，因此直接调用 API 也无法让服务端把任意文件读进 prompt。
 
 ## 服务 API 与任务
 
@@ -192,6 +232,10 @@ pir audit coverage --run <run-id>  # ……或指定某个 run
 从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。`find`/`audit --detach` 提交后立即返回（#53）：stdout 输出携带完整任务 id 与后续命令的提交信封，本地回执是持久记录——退出码 `0` 表示**已受理**，不表示评审成功。等待期间（`jobs wait` 或提交后的轮询）状态行在状态变化和约每分钟各打印一次（#55）：只报告连接存活，不虚构评审进度。
 
 bundle 在一个临时 bare 仓库中打包，该仓库通过 alternates 只读取 checkout 的对象库（#46）：源仓库的 refs、index、config 和对象零写入，只读 `.git` 也可用。唯一例外是 `find --uncommitted`——它按设计先在源仓库记录工作区对象再打包。
+
+本地模式下同一个 `--detach` 让运行脱离终端继续（ADR 0022）：CLI 以分离的后台进程重新执行自身并立即返回——退出码 `0` 只表示**已受理**，不表示评审完成。日志位于 `~/.pir/logs/<jobId>.log`（0600，目录 0700，跟随 `PIR_CONFIG_DIR`）；回执在子进程退出时写入最终 `exitCode`，`--json` 输出 `find.detach`/`audit.detach` 信封（含 jobId、`mode: "local"`、日志与回执路径）；`pir receipts show <id8>` 打印本地后续命令，`pir audit coverage --latest` 查看该运行的覆盖率状态。`--detach` 是显式开关，普通本地运行行为不变；`find --preview`、`audit --dry-run`、`audit coverage` 以及其他命令都会以用法错误（退出码 2）拒绝。父进程无法用 `--fail-on` 把关，需事后检查回执的 `exitCode` 或 findings。
+
+分离运行没有 watchdog：被杀（`SIGKILL`、OOM、重启）会留下未结算的回执和停止增长的日志——运行中的分离任务回执同样未结算，因此要对比日志是否还在增长，`pir audit coverage --latest` 指向最新一次运行的状态。并发两个分离运行时只能靠各自的回执与日志区分，不能用 `--latest` 判断。被杀掉的分离运行不会自动恢复或续跑（`--detach` 解决的是终端丢失，不是 audit resume）；远程 `--detach` 的语义保持不变。
 
 远程响应等待时长依次为 `--remote-timeout <秒>`（0 禁用）> `PIR_REMOTE_TIMEOUT` > 配置 `server.timeoutSeconds` > 默认 1800 秒（#54）。异步任务轮询（5 秒间隔）没有总时限。
 

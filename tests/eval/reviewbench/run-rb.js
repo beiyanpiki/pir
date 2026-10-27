@@ -309,7 +309,10 @@ async function mirrorRunToState(runDir, runId, env) {
 function runPir(cli, checkout, entry, options, runDir, env) {
   const args = ["find", "--base", entry.base, "--head", entry.head, "--model", options.model,
     "--max-rounds", String(options.maxRounds),
-    ...(options.maxTokens === "unlimited" ? [] : ["--max-tokens", String(options.maxTokens)]),
+    // "unlimited" must be passed explicitly: with B3 (ADR 0006) find applies
+    // default token ceilings when the flag is absent, so omitting it would
+    // silently cap a benchmark run.
+    ...(options.maxTokens === "unlimited" ? ["--max-tokens", "unlimited"] : ["--max-tokens", String(options.maxTokens)]),
     "--max-findings", String(options.maxFindings), "--json", "--quiet", "--local", "--cwd", checkout];
   mkdirSync(path.join(runDir, "home"), { recursive: true });
   return new Promise((resolve, reject) => {

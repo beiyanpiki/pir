@@ -1,8 +1,9 @@
 import type { AgentSessionFactory, SessionUsage } from "./types.js";
 import { READONLY_BUILTIN_TOOLS } from "./types.js";
-import { auditReviewerPrompt, reviewerPrompt, type AngleDef } from "./prompts.js";
+import { auditReviewerPrompt, reviewerPrompt, type AngleDef, type UserBackgroundContext } from "./prompts.js";
 import type { CandidateFinding } from "../findings/types.js";
 import type { RepoSnapshot } from "../changes/snapshot.js";
+import { changedFileSummary } from "../changes/change-set.js";
 import type { ReviewWorkUnit } from "../core/audit-planner.js";
 import type { ToolContext } from "../tools/context.js";
 import type { SessionEventEmitter } from "../observability/run-events.js";
@@ -107,6 +108,19 @@ export interface ReviewerDeps {
   transcriptFile?: string;
   /** Rendered built-in language-pack directions for this round's prompt. */
   languageGuidance?: string;
+  /** Rendered PROJECT RULES section (B5/ADR-0010); absent when no rule applies. */
+  projectRules?: string;
+  /**
+   * S2 (ADR-0016): the user's stated background for this change. Reviewer
+   * sessions only — the audit prompt and every verifier session ignore it.
+   */
+  userBackground?: UserBackgroundContext;
+  /**
+   * ADR-0014: prior-round candidates this session's duplicate hint compares
+   * against. A snapshot is taken here, so knowledge accumulated later in the
+   * run (including this round's own output) can never leak into the hint.
+   */
+  known?: readonly CandidateFinding[];
   /** Audit mode: current-state review of one work unit (no diff attribution). */
   audit?: ReviewerAuditScope;
   /** Live observation tap for this round's session (web UI). */
@@ -119,7 +133,14 @@ export interface ReviewerDeps {
  * mode reviews the base..head diff; audit mode reviews one snapshot unit.
  */
 export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoundResult> {
-  const collector: CandidateCollector = { candidates: [] };
+  const collector: CandidateCollector = {
+    candidates: [],
+    // ADR-0014: the hint baseline is prior-round knowledge as of round start,
+    // read-only; the collector's own candidates are added by the tool itself.
+    ...(deps.known && deps.known.length > 0 ? { known: [...deps.known] } : {}),
+    // B2: surface excerpt-driven anchor overrides on the live event channel.
+    ...(deps.onSessionEvent ? { onLineCorrected: (correction) => deps.onSessionEvent!.lineCorrected(correction) } : {}),
+  };
   const outcome: RoundOutcome = { summary: "", nextFocus: [], needsMoreRounds: false, submitted: false };
   const readPaths = new Set<string>();
   const hunkReads: Array<{ path: string; hunkIndex: number }> = [];
@@ -205,6 +226,11 @@ export async function runReviewerRound(deps: ReviewerDeps): Promise<ReviewerRoun
           angle: deps.angle,
           fanoutSize: deps.fanoutSize,
           languageGuidance: deps.languageGuidance,
+          projectRules: deps.projectRules,
+          ...(deps.userBackground ? { userBackground: deps.userBackground } : {}),
+          // S3 (ADR-0017): the same change-set projection the envelope and the
+          // manifest carry — the reviewer gets the map, not just the diff.
+          ...(sessionCtx.changeSet ? { changedFiles: sessionCtx.changeSet.files.map(changedFileSummary) } : {}),
         });
     deps.onSessionEvent?.sessionStarted(prompt);
     await session.prompt(prompt);

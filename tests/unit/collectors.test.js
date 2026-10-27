@@ -150,6 +150,31 @@ test("single-ID legacy boolean is compatible but cannot conflict or suppress unk
   }
 });
 
+test("B4: a change-mode rejection must name its ground, and unknown wording normalizes to other", async () => {
+  const rejected = { verdict: "rejected", rationale: "The caller guards this path at src/next.ts:2", confidence: 0.8 };
+  const required = createSubmitVerdictTool({}, undefined, undefined, { requireRejectionGround: true });
+  const missing = await required.execute(rejected);
+  assert.match(missing.text, /rejectionGround is required/);
+  assert.match(missing.text, /no-such-code, contradicted-by-code/, "the error lists the vocabulary so a retry can comply");
+  // A vocabulary miss is recorded, never a dead session: the ground is normalized.
+  const unknown = {};
+  assert.equal((await createSubmitVerdictTool(unknown, undefined, undefined, { requireRejectionGround: true }).execute({ ...rejected, rejectionGround: "because I said so" })).terminate, true);
+  assert.equal(unknown.verdict.rejectionGround, "other");
+  const canonical = {};
+  await createSubmitVerdictTool(canonical, undefined, undefined, { requireRejectionGround: true }).execute({ ...rejected, rejectionGround: "  Guarded " });
+  assert.equal(canonical.verdict.rejectionGround, "guarded");
+  // An empty ground is malformed, not "other".
+  assert.match((await required.execute({ ...rejected, rejectionGround: "   " })).text, /nonempty/);
+  // Non-rejected verdicts keep today's contract and carry no ground.
+  const confirmed = {};
+  await createSubmitVerdictTool(confirmed, undefined, undefined, { requireRejectionGround: true }).execute({ verdict: "confirmed", rationale: "Failure reachable from src/next.ts:2" });
+  assert.equal(confirmed.verdict.rejectionGround, undefined);
+  // Audit mode has no attribution grounds: the requirement stays off.
+  const audit = {};
+  assert.equal((await createSubmitVerdictTool(audit).execute(rejected)).terminate, true);
+  assert.equal(audit.verdict.rejectionGround, undefined);
+});
+
 test("uncertain verdict uses classified reason and caps code-only feedback", async () => {
   const collector = {};
   await createSubmitVerdictTool(collector).execute({ verdict: "uncertain", rationale: "Caller not available", confidence: 0, codeFeedback: "x".repeat(2000) });
@@ -174,3 +199,223 @@ test("issue-memory lookup uses claim matching and preserves IDs, triggers and st
   assert.ok(!(await tool.execute({ claim: "unrelated graphics polygon rendering" })).text.includes("issue-7"));
   assert.match((await tool.execute({})).text, /^ERROR:/);
 });
+// ---------------------------------------------------------------------------
+// B2: snippet-anchored location correction
+// ---------------------------------------------------------------------------
+
+/**
+ * 25-line head file with a distinctive 3-line target block at lines 10-12 and
+ * one line (3 and 20) repeated twice so excerpt ambiguity is real.
+ */
+function driftFixture() {
+  const repo = createTempGitRepo("pir-drift-");
+  const lines = Array.from({ length: 25 }, (_, index) => `const filler${index + 1} = ${index + 1};`);
+  lines[2] = "const duplicate = true;";
+  lines[19] = "const duplicate = true;";
+  lines[9] = "function computeTotal(items) {";
+  lines[10] = "  const total = items.reduce((sum, item) => sum + item.price, 1);";
+  lines[11] = "  return total * rate;";
+  repo.write("src/total.ts", `${lines.join("\n")}\n`);
+  const base = repo.commit("drift baseline");
+  lines[10] = "  const total = items.reduce((sum, item) => sum + item.price, 0);";
+  repo.write("src/total.ts", `${lines.join("\n")}\n`);
+  const head = repo.commit("drift changed snapshot");
+  const ctx = { repoRoot: repo.dir, headCommit: head, changeSet: { base, head, baseCommit: base, headCommit: head, mergeBase: base, files: [{ path: "src/total.ts", status: "modified" }], patch: "" }, codeMap: { structuralQueries: false }, memory: null };
+  return {
+    repo, ctx,
+    target: { path: "src/total.ts", startLine: 10, endLine: 12 },
+    excerpt: ["function computeTotal(items) {", "  const total = items.reduce((sum, item) => sum + item.price, 0);", "  return total * rate;"].join("\n"),
+    cleanup: () => repo.cleanup(),
+  };
+}
+
+function driftCandidate(drift, excerpt) {
+  return {
+    title: "Rate applied too late",
+    claim: "The running total ignores the per-item rate",
+    trigger: "Calling computeTotal once",
+    category: "correctness",
+    severity: "P1",
+    anchors: [{ path: "src/total.ts", startLine: 10 + drift, endLine: 12 + drift, ...(excerpt === undefined ? {} : { excerpt }) }],
+    evidence: [{ kind: "code", path: "src/total.ts", startLine: 11, excerpt: "sum + item.price" }],
+  };
+}
+
+test("excerpt locate corrects ±5-line drift on every fixture and keeps the original range (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 1);
+    const drifts = [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5];
+    let corrected = 0;
+    for (const drift of drifts) {
+      const output = await tool.execute(driftCandidate(drift, f.excerpt));
+      assert.ok(!output.text.startsWith("ERROR"), `drift ${drift}: ${output.text}`);
+      const anchor = collector.candidates.at(-1).anchors[0];
+      assert.equal(anchor.startLine, f.target.startLine, `drift ${drift}`);
+      assert.equal(anchor.endLine, f.target.endLine, `drift ${drift}`);
+      assert.equal(anchor.lineCorrected, true, `drift ${drift}`);
+      assert.equal(anchor.originalStartLine, f.target.startLine + drift, `drift ${drift}`);
+      assert.equal(anchor.originalEndLine, f.target.endLine + drift, `drift ${drift}`);
+      assert.equal(anchor.excerpt, f.excerpt, `drift ${drift}`);
+      if (anchor.lineCorrected) corrected += 1;
+    }
+    // A1: correction success rate over the ±5-line drift fixtures (11/11).
+    assert.equal(`${corrected}/${drifts.length}`, "11/11");
+    assert.equal(corrections.length, drifts.length);
+    assert.deepEqual(corrections[0], {
+      displayId: "F-101", path: "src/total.ts",
+      originalStartLine: 5, originalEndLine: 7, startLine: 10, endLine: 12,
+    });
+
+    // Drift past EOF is still corrected: a present excerpt decides the range,
+    // so the model's numbers are kept as original* without a bounds check.
+    const far = await tool.execute(driftCandidate(20, f.excerpt));
+    assert.ok(!far.text.startsWith("ERROR"), far.text);
+    const farAnchor = collector.candidates.at(-1).anchors[0];
+    assert.deepEqual([farAnchor.startLine, farAnchor.endLine, farAnchor.originalStartLine], [10, 12, 30]);
+
+    // A single-line excerpt collapses to startLine with no endLine/originalEndLine.
+    const single = await tool.execute({ ...driftCandidate(4, undefined), anchors: [{ path: f.target.path, startLine: 16, excerpt: "  return total * rate;" }] });
+    assert.ok(!single.text.startsWith("ERROR"), single.text);
+    const singleAnchor = collector.candidates.at(-1).anchors[0];
+    assert.deepEqual(Object.keys(singleAnchor), ["path", "startLine", "excerpt", "lineCorrected", "originalStartLine"]);
+    assert.equal(singleAnchor.startLine, 12);
+    assert.equal(singleAnchor.originalStartLine, 16);
+  } finally { f.cleanup(); }
+});
+
+test("an unlocatable excerpt is a tool-boundary error: zero hits, multiple hits, no partial record (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 2);
+
+    const none = await tool.execute(driftCandidate(0, "const nowhere = true;"));
+    assert.match(none.text, /^ERROR:/);
+    assert.match(none.text, /was not found in src\/total\.ts/);
+    const multiple = await tool.execute(driftCandidate(0, "const duplicate = true;"));
+    assert.match(multiple.text, /^ERROR:/);
+    assert.match(multiple.text, /matches 2 locations in src\/total\.ts/);
+
+    // One bad anchor rejects the whole candidate, even when a later anchor
+    // would have located (and even though the first never mutated anything).
+    const mixed = await tool.execute({
+      ...driftCandidate(0, f.excerpt),
+      anchors: [{ path: f.target.path, startLine: 10, endLine: 12, excerpt: "const nowhere = true;" }, { path: f.target.path, startLine: 10, endLine: 12, excerpt: f.excerpt }],
+    });
+    assert.match(mixed.text, /^ERROR:/);
+    assert.deepEqual(collector.candidates, []);
+    assert.deepEqual(corrections, [], "a rejected submission reports no correction");
+  } finally { f.cleanup(); }
+});
+
+test("no-excerpt anchors are byte-identical: output, anchor keys and events (B2)", async () => {
+  const f = driftFixture();
+  try {
+    const corrections = [];
+    const collector = { candidates: [], onLineCorrected: (correction) => corrections.push(correction) };
+    const tool = createRecordCandidateTool(f.ctx, collector, 3);
+    const output = await tool.execute(driftCandidate(0, undefined));
+    assert.equal(output.text, "Recorded candidate F-301: Rate applied too late");
+    assert.equal(output.terminate, undefined);
+    const candidate = collector.candidates[0];
+    // Pre-B2 anchor shape: same keys, same order, same JSON.
+    assert.deepEqual(Object.keys(candidate.anchors[0]), ["path", "startLine", "endLine"]);
+    assert.equal(JSON.stringify(candidate.anchors), '[{"path":"src/total.ts","startLine":10,"endLine":12}]');
+    assert.deepEqual(corrections, []);
+  } finally { f.cleanup(); }
+});
+
+test("record_candidate flags an exact duplicate of prior-round knowledge without suppressing it (S5/ADR-0014)", async () => {
+  const f = fixture();
+  try {
+    const first = { candidates: [] };
+    const original = { ...validCandidate(), severity: "P2" };
+    assert.equal((await createRecordCandidateTool(f.ctx, first, 1).execute(original)).text, "Recorded candidate F-101: Wrong increment");
+    const known = first.candidates;
+
+    const second = { candidates: [], known };
+    const tool = createRecordCandidateTool(f.ctx, second, 2);
+    const upgraded = await tool.execute({ ...validCandidate(), severity: "P0" });
+    assert.equal(upgraded.duplicateOf, "F-101");
+    assert.equal(upgraded.terminate, undefined);
+    assert.equal(upgraded.text, [
+      "Recorded candidate F-201: Wrong increment",
+      "Accepted and recorded for deduplication. It overlaps an existing finding (F-101) by fingerprint. If it is materially different, state the difference in the claim/trigger. Do not resubmit the same finding.",
+    ].join("\n"));
+    // Visibility only: the candidate is stored exactly as submitted (severity
+    // included) and prior-round knowledge stays a read-only baseline.
+    assert.equal(second.candidates.length, 1);
+    assert.equal(second.candidates[0].severity, "P0");
+    assert.equal(second.candidates[0].displayId, "F-201");
+    assert.deepEqual(known.map((entry) => entry.displayId), ["F-101"]);
+
+    // A distinct defect still gets the pre-S5 result, byte for byte.
+    const distinct = await tool.execute({ ...validCandidate(), title: "Guard is inverted", claim: "The guard rejects valid input", trigger: "Calling next with a zero" });
+    assert.equal(distinct.text, "Recorded candidate F-202: Guard is inverted");
+    assert.equal(distinct.duplicateOf, undefined);
+
+    // A candidate rejected by validation reports no hint and mutates nothing.
+    const before = second.candidates.length;
+    const invalid = await tool.execute({ ...validCandidate(), anchors: [{ path: "../outside.ts", startLine: 1 }] });
+    assert.match(invalid.text, /^ERROR:/);
+    assert.equal(invalid.duplicateOf, undefined);
+    assert.equal(second.candidates.length, before);
+  } finally { f.cleanup(); }
+});
+
+test("the duplicate hint covers entity+claim near-duplicates and honors the strict prior-round gates (S5/ADR-0014)", async () => {
+  const f = fixture();
+  const entityKey = "src/next.ts::next";
+  const claim = "the running total ignores the per item rate in the shared compute path";
+  try {
+    const first = { candidates: [] };
+    await createRecordCandidateTool(f.ctx, first, 1).execute({ ...validCandidate(), claim, entityKey });
+    const known = first.candidates;
+
+    // Same entityKey and category, one extra word: fingerprints differ,
+    // claim similarity is above the dedup threshold.
+    const near = { candidates: [], known };
+    const output = await createRecordCandidateTool(f.ctx, near, 2).execute({ ...validCandidate(), claim: `${claim} always`, entityKey });
+    assert.equal(output.duplicateOf, "F-101");
+    assert.match(output.text, /overlaps an existing finding \(F-101\) by claim similarity/);
+
+    // The strict rule survives three ways: a different category, a different
+    // entity, and no entity at all are each not a hint baseline match.
+    const otherCategory = { candidates: [], known };
+    const category = await createRecordCandidateTool(f.ctx, otherCategory, 2).execute({ ...validCandidate(), claim: `${claim} always`, entityKey, category: "security" });
+    assert.equal(category.duplicateOf, undefined);
+    assert.equal(category.text, "Recorded candidate F-201: Wrong increment");
+    const otherEntity = { candidates: [], known };
+    const entity = await createRecordCandidateTool(f.ctx, otherEntity, 2).execute({ ...validCandidate(), claim: `${claim} always`, entityKey: "src/other.ts::next" });
+    assert.equal(entity.duplicateOf, undefined);
+    const noEntity = { candidates: [], known };
+    const anon = await createRecordCandidateTool(f.ctx, noEntity, 2).execute({ ...validCandidate(), claim: `${claim} always` });
+    assert.equal(anon.duplicateOf, undefined);
+  } finally { f.cleanup(); }
+});
+
+test("parallel angle sessions never see each other's same-round candidates (S5/ADR-0014)", async () => {
+  const f = fixture();
+  try {
+    const known = [];
+    const angleA = { candidates: [], known };
+    const angleB = { candidates: [], known };
+    const first = await createRecordCandidateTool(f.ctx, angleA, 1).execute(validCandidate());
+    assert.equal(first.duplicateOf, undefined);
+    // B re-records the same defect: same-round peers stay supervisor-only, so
+    // the hint cannot fire and the session-local id is unchanged.
+    const peer = await createRecordCandidateTool(f.ctx, angleB, 1).execute(validCandidate());
+    assert.equal(peer.duplicateOf, undefined);
+    assert.equal(peer.text, "Recorded candidate F-101: Wrong increment");
+    // A does see its own earlier candidate.
+    const own = await createRecordCandidateTool(f.ctx, angleA, 1).execute(validCandidate());
+    assert.equal(own.duplicateOf, "F-101");
+    assert.match(own.text, /Accepted and recorded for deduplication/);
+    assert.equal(known.length, 0, "the shared knowledge baseline is never written by a session");
+  } finally { f.cleanup(); }
+});
+

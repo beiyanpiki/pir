@@ -1,7 +1,7 @@
 import type { ChangeSet } from "../changes/change-set.js";
 
 /**
- * Change-mode coverage ledger (roadmap C1, stage 1 — observational).
+ * Change-mode coverage ledger (stage 1 — observational; ADR 0003 §2).
  *
  * The denominator is the reviewed diff: every hunk of every changed file.
  * A hunk counts as covered when the reviewer saw its content through one of
@@ -56,8 +56,9 @@ export class ChangeCoverage {
 
   constructor(changeSet: ChangeSet) {
     for (const file of changeSet.files) {
-      // Files without hunks (binary, pure rename) have nothing observable to
-      // account for; including them would make full coverage unreachable.
+      // Files without hunks (binary, pure rename, change-filter-excluded)
+      // have nothing observable to account for; including them would make
+      // full coverage unreachable.
       if (file.hunks.length === 0) continue;
       this.regions.set(
         file.path,

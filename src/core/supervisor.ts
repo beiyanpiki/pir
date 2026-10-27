@@ -1,4 +1,5 @@
-import { buildChangeSet, type ChangeSet } from "../changes/change-set.js";
+import { buildChangeSet, changedFileSummary, type ChangeSet } from "../changes/change-set.js";
+import { applyChangeFilter } from "../changes/filter.js";
 import { getHeadCommit } from "../changes/git.js";
 import { buildRepoSnapshot } from "../changes/snapshot.js";
 import type { CodeMapProvider } from "../codemap/types.js";
@@ -13,14 +14,16 @@ import { ReviewerRoundError, runReviewerRound, type ReviewerRoundResult } from "
 import { resolveAngleIds, type AngleDef } from "../agents/prompts.js";
 import { runVerifier } from "../agents/verifier.js";
 import { loadBuiltInPacks, resolveLanguagePacks, type ActivePack } from "../plugins/index.js";
+import { applyProjectRules, loadProjectRules, type ProjectRulesSummary } from "../rules/project-rules.js";
 import type { ToolContext } from "../tools/context.js";
 import { planAuditUnits, PLANNER_VERSION, type ReviewWorkUnit } from "./audit-planner.js";
-import { Budget } from "./budget.js";
+import { Budget, DEFAULT_FIND_REVIEWER_INPUT_TOKENS, DEFAULT_FIND_VERIFIER_INPUT_TOKENS, type BudgetCeilingKind } from "./budget.js";
 import { CoverageLedger, type CoverageSummary } from "./coverage.js";
 import { calculateInformationGain, shouldStop } from "./convergence.js";
 import { expandFrontier } from "./frontier.js";
 import { applyVerdict, computeRunVerdict, createReviewState, reportedCount, type RoundInfo, type RunVerdict } from "./review-state.js";
 import { ChangeCoverage } from "./change-coverage.js";
+import { userBackgroundRecord, type UserBackground } from "./user-background.js";
 import type { VerifiedFinding } from "../findings/types.js";
 import type { FindingRow } from "../memory/finding-store.js";
 import type { CandidateFinding } from "../findings/types.js";
@@ -38,7 +41,13 @@ export interface FindOptions {
   base?: string;
   head?: string;
   maxRounds?: number;
-  maxTokens?: number;
+  /**
+   * Explicit whole-run token ceiling (`--max-tokens`), measured on total
+   * tokens. `null` is the explicit "unlimited" opt-out: it disables every
+   * token ceiling, including B3's default ones. When unset, find applies its
+   * default reviewer/verifier prompt-side input ceilings (ADR 0006).
+   */
+  maxTokens?: number | null;
   maxWallClockMs?: number;
   model?: string;
   maxVerificationsPerRound?: number;
@@ -57,13 +66,13 @@ export interface FindOptions {
    */
   minConfidence?: number;
   /**
-   * Specialized finder angles (roadmap F1, default off): round 1 fans out
+   * Specialized finder angles (ADR 0003, default off): round 1 fans out
    * one reviewer session per angle (capped at 4, budget-guarded) instead of
    * one general session. Later rounds stay single general-session.
    */
   angles?: string[];
   /**
-   * Separate verifier model (roadmap Q5): `<provider>/<model>` or a fuzzy id
+   * Separate verifier model (ADR 0003): `<provider>/<model>` or a fuzzy id
    * (see `pir models`). Reviewer sessions keep `model`; verifier sessions
    * resolve this one through the standard model-resolution path (an
    * unresolvable id is a hard session error, never a silent fallback).
@@ -74,6 +83,18 @@ export interface FindOptions {
   pluginMode?: "auto" | "manual" | "off";
   /** Pack names for pluginMode "manual". */
   manualPlugins?: string[];
+  /**
+   * B5 (ADR-0010): explicit `--rule` layer. The repo and global layers are
+   * discovered from the repository root and the client config dir.
+   */
+  ruleFile?: string;
+  /**
+   * S2 (ADR-0016): the user's stated background for this change, already
+   * sanitised and capped by `resolveUserBackground`. Absent by default — the
+   * reviewer prompt is then byte-identical to the pre-S2 one. Reviewer-only:
+   * verifier and audit sessions never see it.
+   */
+  background?: UserBackground;
 }
 
 export interface FindEvent {
@@ -100,6 +121,8 @@ export interface FindOutcome {
   pendingFindings: FindingRow[];
   pendingCandidates: number;
   incomplete: boolean;
+  /** B3 (ADR 0006): the ceiling that ended the run, when a budget stop did (null otherwise). */
+  budgetStop: { kind: BudgetCeilingKind; reason: string } | null;
   verificationErrors: number;
   uncertaintyReasons: Partial<Record<UncertaintyReason, number>>;
   stoppedBecause: string;
@@ -150,9 +173,10 @@ const ANGLE_TOKEN_ALLOWANCE = 150_000;
 const ANGLE_WALL_CLOCK_ALLOWANCE_MS = 15 * 60_000;
 
 /** Keep only as many angles as the remaining budget can still pay for (trailing angles drop first, floor 1). */
-function angleFanoutCount(requested: number, budget: Budget, limits: { maxTokens?: number; maxWallClockMs?: number }): number {
+function angleFanoutCount(requested: number, budget: Budget, limits: { maxTokens?: number | null; maxWallClockMs?: number }): number {
   let k = requested;
-  const tokensLeft = limits.maxTokens === undefined ? Number.POSITIVE_INFINITY : limits.maxTokens - budget.tokenEstimate;
+  // null is the explicit "unlimited" opt-out: no ceiling to shrink against.
+  const tokensLeft = limits.maxTokens == null ? Number.POSITIVE_INFINITY : limits.maxTokens - budget.tokenEstimate;
   const timeLeft = limits.maxWallClockMs === undefined ? Number.POSITIVE_INFINITY : limits.maxWallClockMs - budget.elapsedMs;
   while (k > 1 && (tokensLeft < k * ANGLE_TOKEN_ALLOWANCE || timeLeft < k * ANGLE_WALL_CLOCK_ALLOWANCE_MS)) k -= 1;
   return k;
@@ -365,7 +389,7 @@ async function drainVerifications(
 
   const land = (outcome: VerifyOneOutcome): void => {
     if (outcome.transcriptRef) deps.sessionFiles.push(outcome.transcriptRef);
-    budget.chargeSession(outcome.verdict.usage, deps.verifierGuidance, outcome.verdict.rationale);
+    budget.chargeSession(outcome.verdict.usage, "verifier", deps.verifierGuidance, outcome.verdict.rationale);
     const idx = state.pending.indexOf(outcome.candidate);
     if (idx !== -1) state.pending.splice(idx, 1);
     inFlight -= 1;
@@ -412,7 +436,10 @@ async function drainVerifications(
     if (state.pending.length <= inFlight) return null;
     if (admitted >= limits.maxVerifications) return null;
     if (limits.maxFindings !== null && reportedCount(state) >= limits.maxFindings) return null;
-    if (budget.exhausted()) return null;
+    // B3 grace (ADR 0006): only the hard ceilings (explicit --max-tokens,
+    // wall clock) refuse a pending verification. The default role ceilings do
+    // not — finishing what was already found is the point of the grace.
+    if (budget.hardExhausted()) return null;
     // No oversubscription: every in-flight candidate holds a findings slot.
     if (limits.maxFindings !== null && reportedCount(state) + inFlight >= limits.maxFindings) return "wait";
     const candidate = state.pending[inFlight]!;
@@ -462,14 +489,40 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
   const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
   // Unknown angle ids are a hard error, never a silent drop (F1).
   const angles = options.angles === undefined ? [] : resolveAngleIds(options.angles);
+  // B3 (ADR 0006): find defaults to per-role prompt-side input-token
+  // ceilings. An explicit --max-tokens replaces them — a positive integer
+  // keeps that ceiling's hard, whole-run semantics, while "unlimited" (null)
+  // is the explicit opt-out from every token ceiling.
+  const explicitMaxTokens = options.maxTokens === undefined
+    ? undefined
+    : options.maxTokens === null ? null : positiveInteger(options.maxTokens, "maxTokens");
   const budget = new Budget({
     maxRounds,
-    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
+    ...(explicitMaxTokens === undefined
+      ? { reviewerTokens: DEFAULT_FIND_REVIEWER_INPUT_TOKENS, verifierTokens: DEFAULT_FIND_VERIFIER_INPUT_TOKENS }
+      : explicitMaxTokens === null ? {} : { maxTokens: explicitMaxTokens }),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 
   const requestedHead = options.head ?? (await getHeadCommit(deps.repoRoot));
-  const changeSet = await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead);
+  // B1: the change-mode gate runs once, before any session exists — binary,
+  // secret paths (non-overridable), skip patterns, oversized single-file diff.
+  // Excluded files keep their path/status/churn metadata but arrive with no
+  // hunks, so no reviewer/verifier tool can put their diff body in a prompt.
+  const changeSet = applyChangeFilter(
+    await buildChangeSet(deps.repoRoot, options.base ?? `${requestedHead}^`, requestedHead),
+  );
+  // B5 (ADR-0010): project rules are resolved and rendered before any run row
+  // or session exists, so a malformed rule file or an unusable guidance
+  // reference fails the invocation instead of producing a silently different
+  // review. Only reviewed (non-excluded) files are matched.
+  const projectRuleSet = loadProjectRules({
+    repoRoot: deps.repoRoot,
+    ...(options.ruleFile ? { explicitPath: options.ruleFile } : {}),
+  });
+  const projectRuleApplication = applyProjectRules(projectRuleSet, changeSet.files);
+  const manifestProjectRules: ProjectRulesSummary | undefined =
+    projectRuleSet.layers.length > 0 ? projectRuleApplication.summary : undefined;
   // C1 stage 1 (observational): one ledger per run; reviewer reads and hunk
   // pages accumulate across rounds. No behavior change — accounting only.
   const changeCoverage = new ChangeCoverage(changeSet);
@@ -494,12 +547,27 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     });
   };
   if (transcriptDir) onProgress({ type: "info", message: `transcripts: ${transcriptDir}` });
+  // S2 (ADR-0016): the background is opt-in. When present it is named once in
+  // the progress stream (sizes and hash only — the text is never logged).
+  const background = options.background;
+  if (background) {
+    onProgress({
+      type: "info",
+      message: `user background: ${background.characters} characters from ${background.source}${background.truncated ? ` (truncated from ${background.suppliedCharacters})` : ""}, sha256 ${background.sha256.slice(0, 12)}`,
+    });
+  }
 
   const memoryPack = buildMemoryPack(deps.memory, {
     changedPaths: changeSet.files.flatMap((f) => f.oldPath ? [f.path, f.oldPath] : [f.path]),
     featureKeys: [], entityKeys: [], headCommit: head,
   });
-  const toolCtx: ToolContext = { repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory };
+  // B1: change mode also guards the pinned read channels, so the secret gate
+  // is not bypassed by read_code/search_text on a filtered path. Audit builds
+  // its own context without the guard — its behavior is unchanged.
+  const toolCtx: ToolContext = {
+    repoRoot: deps.repoRoot, headCommit: head, changeSet, codeMap: deps.codeMap, memory: deps.memory,
+    blockSecretPaths: true,
+  };
   const languagePacks = await resolveLanguagePacks({
     repoRoot: deps.repoRoot,
     headCommit: head,
@@ -512,6 +580,17 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     onProgress({
       type: "info",
       message: `language packs: ${languagePacks.active.map((p) => `${p.name}@${p.version} (${p.activation})`).join(", ")}`,
+    });
+  }
+  // ADR-0010: mergeBuiltin=false makes the project rule authoritative for its
+  // paths and withholds the built-in pack guidance for this run (the pack is
+  // rendered once for the whole session). The effective guidance is used for
+  // both the prompt and the budget estimate, so they never disagree.
+  const reviewerLanguageGuidance = projectRuleApplication.summary.builtinSuppressed ? "" : languagePacks.reviewerGuidance;
+  if (manifestProjectRules) {
+    onProgress({
+      type: "info",
+      message: `project rules: ${manifestProjectRules.rules} rule(s) for ${manifestProjectRules.matchedFiles} file(s), hash ${manifestProjectRules.hash.slice(0, 12)}${manifestProjectRules.builtinSuppressed ? ", built-in language guidance withheld" : ""}`,
     });
   }
   let needsReview = true;
@@ -528,7 +607,21 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         break;
       }
       const stop = shouldStop(state, budget);
-      if (stop.stop) { state.stoppedBecause = stop.reason!; break; }
+      if (stop.stop) {
+        // B3 (ADR 0006) grace: a default-ceiling hit ends discovery, not the
+        // verification of work discovery already found. The drain has its own
+        // per-round cap, so a backlog larger than one drain keeps the loop
+        // alive in drain-only rounds (a non-empty queue skips the reviewer
+        // session below) until the queue is empty — which is also why the
+        // ceiling, not "max rounds", is the reason reported at the end. Only
+        // the graceful ceilings defer: a hard ceiling refuses verifier
+        // admissions, so the queue could never shrink.
+        const graceful = budget.gracefulExhausted();
+        if (!(graceful !== null && state.pending.length > 0)) {
+          state.stoppedBecause = graceful ?? stop.reason!;
+          break;
+        }
+      }
       state.round += 1;
       onProgress({ type: "round-start", round: state.round, message: `review round ${state.round}${state.pending.length ? " (pending verification)" : ""}` });
 
@@ -571,8 +664,11 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
                   maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
                   verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
                   investigationFeedback: state.investigationFeedback, model: options.model, angle,
+                  known: state.known,
                   fanoutSize: roundAngles.length,
-                  languageGuidance: languagePacks.reviewerGuidance,
+                  languageGuidance: reviewerLanguageGuidance,
+                  projectRules: projectRuleApplication.section || undefined,
+                  ...(background ? { userBackground: background } : {}),
                   transcriptFile: transcriptDir ? path.join(transcriptDir, file) : undefined,
                   onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round, angle: angle.id,
                     ...(transcriptDir ? { transcriptFile: file } : {}) }),
@@ -591,7 +687,9 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           for (const { ok } of oks) {
             for (const hunk of ok.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
             for (const read of ok.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-            budget.chargeSession(ok.usage, memoryPack.text, languagePacks.reviewerGuidance, ok.assistantText, ok.summary);
+            // F-7/F-9: the rendered PROJECT RULES section is prompt content too,
+            // so a usage-less session's fallback estimate charges it with the rest.
+            budget.chargeSession(ok.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, projectRuleApplication.section, ok.assistantText, ok.summary);
           }
           const allCandidates = [
             ...oks.flatMap(({ ok }) => ok.candidates),
@@ -727,7 +825,10 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
           maxRounds, maxFindings, findingsRemaining: maxFindings === null ? null : maxFindings - reportedCount(state),
           verificationCapacity: maxVerifications, focus: state.focus, priorSummary: state.priorSummary,
           investigationFeedback: state.investigationFeedback, model: options.model,
-          languageGuidance: languagePacks.reviewerGuidance,
+          known: state.known,
+          languageGuidance: reviewerLanguageGuidance,
+          projectRules: projectRuleApplication.section || undefined,
+          ...(background ? { userBackground: background } : {}),
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           onSessionEvent: sink.session({ sessionKind: "reviewer", role: "code reviewer", model: options.model, round: state.round,
             ...(transcriptDir ? { transcriptFile: reviewerFile } : {}) }),
@@ -737,7 +838,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
         // discard the reviewer's deliberate reads from the ledger (F-122).
         for (const hunk of result.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
         for (const read of result.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
-        budget.chargeSession(result.usage, memoryPack.text, languagePacks.reviewerGuidance, result.assistantText, result.summary);
+        budget.chargeSession(result.usage, "reviewer", memoryPack.text, reviewerLanguageGuidance, background?.text, projectRuleApplication.section, result.assistantText, result.summary);
         if (!result.submitted) throw new Error("reviewer did not call finish_round");
         const dedup = deduplicateCandidates(result.candidates, state.known);
         freshCount = dedup.fresh.length;
@@ -813,7 +914,7 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       const recovered = deduplicateCandidates(error.candidates, state.known, { crossAngle: error.crossAngle }).fresh;
       state.known.push(...recovered);
       state.pending.push(...recovered);
-      budget.chargeSession(error.usage, error.message);
+      budget.chargeSession(error.usage, "reviewer", error.message);
       // The failed round's deliberate reads still count toward the ledger.
       for (const hunk of error.coverageEvidence?.hunks ?? []) changeCoverage.recordHunk(hunk.path, hunk.hunkIndex);
       for (const read of error.coverageEvidence?.reads ?? []) changeCoverage.recordRead(read.path, read.range);
@@ -843,11 +944,19 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
       plugins: languagePacks.active, sessions: sessionFiles,
       ...(budget.usage ? { usage: budget.usage } : {}),
       durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-      files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+      files: changeSet.files.map(changedFileSummary),
+      ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
+      ...(background ? { background: userBackgroundRecord(background) } : {}),
     });
     throw error;
   }
 
+  // B3 (ADR 0006): name the ceiling that ended the run when one did. The
+  // reason is compared rather than re-derived, so a ceiling that merely
+  // happens to be reached on a run that stopped for another reason
+  // (completion, max findings) is never misreported as the cause.
+  const ceiling = budget.ceilingHit();
+  const budgetStop = ceiling && ceiling.reason === state.stoppedBecause ? { kind: ceiling.kind, reason: ceiling.reason } : null;
   const incomplete = state.pending.length > 0 || errors.verificationErrors > 0 ||
     (needsReview && state.stoppedBecause !== "reviewer signaled completion");
   const persisted = state.verified.map((f) => deps.memory.findings.insert(f, run.id));
@@ -875,17 +984,19 @@ export async function findIssues(deps: FindDeps): Promise<FindOutcome> {
     schemaVersion: 1, runId: run.id, projectId: deps.memory.identity.projectId, mode: "change",
     status: incomplete ? "incomplete" : "completed",
     base, head, model: options.model ?? null, verifierModel: options.verifierModel ?? null, startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause: state.stoppedBecause ?? "completed", incomplete, runVerdict,
+    stoppedBecause: state.stoppedBecause ?? "completed", budgetStop, incomplete, runVerdict,
     maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     changeCoverage: changeCoverage.summary(),
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
     durationMs: budget.elapsedMs, estimatedTokens: budget.tokenEstimate,
-    files: changeSet.files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions })),
+    files: changeSet.files.map(changedFileSummary),
+    ...(manifestProjectRules ? { projectRules: manifestProjectRules } : {}),
+    ...(background ? { background: userBackgroundRecord(background) } : {}),
   });
   return {
     base, head, changeSet, rounds: state.rounds, findings: persisted, pendingFindings,
-    pendingCandidates: state.pending.length, incomplete, verificationErrors: errors.verificationErrors, uncertaintyReasons: errors.uncertaintyReasons,
+    pendingCandidates: state.pending.length, incomplete, budgetStop, verificationErrors: errors.verificationErrors, uncertaintyReasons: errors.uncertaintyReasons,
     stoppedBecause: state.stoppedBecause ?? "completed", estimatedTokens: budget.tokenEstimate,
     usage: budget.usage, usageComplete: budget.usageComplete, durationMs: budget.elapsedMs,
     memoryPackTokens: memoryPack.approxTokens, runId: run.id, maxFindings,
@@ -914,7 +1025,11 @@ export interface AuditOptions {
   includePaths?: string[];
   /** Documented globs subtracted from the selection. */
   skipGlobs?: string[];
-  maxTokens?: number;
+  /**
+   * Explicit whole-run token ceiling (`--max-tokens`); `null` ("unlimited")
+   * removes it. Audit has no default ceiling — B3's defaults are find-only.
+   */
+  maxTokens?: number | null;
   maxWallClockMs?: number;
   model?: string;
   /** `null` (#57): no whole-run cap on reported findings. */
@@ -928,7 +1043,7 @@ export interface AuditOptions {
    * and still count toward maxFindings.
    */
   minConfidence?: number;
-  /** Separate verifier model (roadmap Q5); defaults to `model` when unset. */
+  /** Separate verifier model (ADR 0003); defaults to `model` when unset. */
   verifierModel?: string;
   pluginMode?: "auto" | "manual" | "off";
   manualPlugins?: string[];
@@ -988,6 +1103,8 @@ export interface AuditOutcome {
   verificationErrors: number;
   uncertaintyReasons: Partial<Record<UncertaintyReason, number>>;
   stoppedBecause: string;
+  /** B3 (ADR 0006): the ceiling that ended the run, when a budget stop did (null otherwise). */
+  budgetStop: { kind: BudgetCeilingKind; reason: string } | null;
   estimatedTokens: number;
   usage?: SessionUsage;
   usageComplete: boolean;
@@ -1011,9 +1128,11 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   const verifyConcurrency = verifyConcurrencyOption(options.verifyConcurrency, "verifyConcurrency");
   const minConfidence = minConfidenceOption(options.minConfidence, "minConfidence");
   const maxUnitAttempts = DEFAULT_MAX_UNIT_ATTEMPTS;
+  // B3 scope: audit keeps the pre-B3 semantics — no default ceiling, only an
+  // explicit --max-tokens ("unlimited"/null removes it like an absent flag).
   const budget = new Budget({
     maxRounds: Number.MAX_SAFE_INTEGER,
-    maxTokens: options.maxTokens === undefined ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
+    maxTokens: options.maxTokens == null ? undefined : positiveInteger(options.maxTokens, "maxTokens"),
     maxWallClockMs: options.maxWallClockMs === undefined ? undefined : positiveInteger(options.maxWallClockMs, "maxWallClockMs"),
   });
 
@@ -1192,6 +1311,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           verificationCapacity: maxVerifications, focus: state.focus,
           priorSummary: unitSummaries.get(unit.id),
           investigationFeedback: state.investigationFeedback, model: options.model,
+          known: state.known,
           languageGuidance: languagePacks.reviewerGuidance,
           transcriptFile: transcriptDir ? path.join(transcriptDir, reviewerFile) : undefined,
           audit: { snapshot, unit, attempt, maxAttempts: maxUnitAttempts, unitsTotal: plan.units.length, unitsRemaining: queue.length },
@@ -1207,7 +1327,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           state.known.push(...recovered);
           state.pending.push(...recovered);
           persistCandidates(recovered);
-          budget.chargeSession(error.usage, error.message);
+          budget.chargeSession(error.usage, "reviewer", error.message);
           markUnit(unit.id, "failed", `reviewer session failed: ${error.message}`);
           state.rounds.push({
             round: state.round, candidates: error.candidates.length, fresh: recovered.length,
@@ -1218,7 +1338,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
           continue;
         }
         throw error;
-      }      budget.chargeSession(result.usage, memoryPack.text, result.assistantText, result.summary);
+      }      budget.chargeSession(result.usage, "reviewer", memoryPack.text, result.assistantText, result.summary);
       const dedup = deduplicateCandidates(result.candidates, state.known);
       state.known.push(...dedup.fresh);
       state.pending.push(...dedup.fresh);
@@ -1344,6 +1464,10 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
   mapSessionFindingIds(sessionFiles, [...persisted, ...pendingFindings], [...state.verified, ...state.pending], runtimeIds);
   const runVerdict = computeRunVerdict(state);
   const lowConfidenceFindings = lowConfidenceRows(persisted, minConfidence);
+  // B3 (ADR 0006): audit has no default ceiling, but an explicit --max-tokens
+  // (or the wall clock) that ends the run is recorded the same way find's is.
+  const auditCeiling = budget.ceilingHit();
+  const budgetStop = auditCeiling && auditCeiling.reason === stoppedBecause ? { kind: auditCeiling.kind, reason: auditCeiling.reason } : null;
   sink.runEnded({
     status: incomplete ? "incomplete" : "completed",
     stoppedBecause,
@@ -1357,7 +1481,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     status: incomplete ? "incomplete" : "completed",
     base: null, head: snapshot.commit, model: options.model ?? null, verifierModel: options.verifierModel ?? null,
     startedAt: startedAtMs, finishedAt: Date.now(),
-    stoppedBecause, incomplete, runVerdict,
+    stoppedBecause, budgetStop, incomplete, runVerdict,
     maxFindings, maxFindingsMode: maxFindings === null ? "unlimited" : "capped", rounds: state.rounds,
     plugins: languagePacks.active, sessions: sessionFiles,
     ...(budget.usage ? { usage: budget.usage } : {}),
@@ -1382,7 +1506,7 @@ export async function auditIssues(deps: AuditDeps): Promise<AuditOutcome> {
     incompleteReasons,
     verificationErrors: errors.verificationErrors,
     uncertaintyReasons: errors.uncertaintyReasons,
-    stoppedBecause,
+    stoppedBecause, budgetStop,
     estimatedTokens: budget.tokenEstimate,
     usage: budget.usage,
     usageComplete: budget.usageComplete,

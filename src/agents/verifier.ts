@@ -73,7 +73,7 @@ export async function runVerifier(deps: VerifierDeps): Promise<VerifierResult> {
         counting(createFindSymbolTool(sessionCtx)), counting(createFindReferencesTool(sessionCtx)),
         counting(createFindCallersTool(sessionCtx)), counting(createFindCalleesTool(sessionCtx)),
         ...createMemoryTools(sessionCtx), ...historyTools,
-        createSubmitVerdictTool(collector, deps.priorDecisions.map((match) => match.memoryId), () => ({ readPaths: pinnedReads, evidenceCalls })),
+        createSubmitVerdictTool(collector, deps.priorDecisions.map((match) => match.memoryId), () => ({ readPaths: pinnedReads, evidenceCalls }), { requireRejectionGround: !deps.audit }),
       ],
       builtinTools: [...READONLY_BUILTIN_TOOLS], model: deps.model, transcriptFile: deps.transcriptFile,
       ...(deps.onSessionEvent ? { onEvent: (event: unknown) => deps.onSessionEvent!.sdkEvent(event) } : {}),

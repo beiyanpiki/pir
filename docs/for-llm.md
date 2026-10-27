@@ -206,19 +206,52 @@ Audit `--path` is a literal file/directory prefix, repeatable as a union.
 `--skip` is repeatable and accepts `*`, `**`, `?`, or a literal prefix. Quote
 globs to prevent shell expansion. Default exclusions still apply.
 
+`find` accepts project rules from three layers, highest priority first:
+`--rule <path>`, `<repo>/.pir/rule.json`, and `<config-dir>/rule.json`
+(default `~/.pir/rule.json`). Each file is
+`{"schemaVersion":1,"include":[...],"exclude":[...],"rules":[{"path":"src/**","guidance":"...","mergeBuiltin":true}]}`;
+a rule carries exactly one of inline `guidance` or a repo-relative
+`guidanceFile` (`.md`/`.markdown`/`.txt`, ≤64 KiB, contained in the repo).
+The first matching rule for a reviewed path wins; `mergeBuiltin:false`
+withholds the built-in language-pack guidance from reviewer sessions for the run (verifiers keep theirs). The applied rules
+and their canonical hash are recorded in `run.json` under `projectRules`, and
+`pir config show [--json]` prints the loaded layers and rules. Rules are
+`find`-only; `--rule` is a local path and is rejected in remote mode.
+
+`pir rules check <path>` answers "which rule wins for this path?" without a
+run: the winning layer and label, the matched glob, `mergeBuiltin`, the
+canonical guidance text and the rules hash; when nothing matches it prints one
+line per loaded layer naming the gate (not included / excluded by / no rule
+matched). The path is reported repository-relative — an absolute path inside
+the repository is accepted and reported relative, one outside it is a usage
+error (exit 2) — and a file that does not exist is flagged rather than refused.
+`--json` returns `command: "rules.check"` with `path`, `exists`,
+`rulesHash`, `matched`, `winner` (`layer`, `file`, `rule`,
+`mergeBuiltin`, `guidanceSource`, `guidanceFile`, `guidance`),
+`layers[]` (include/exclude gates and which layer won) and
+`renderedSection` — the exact PROJECT RULES block that path would receive. It
+reads rule files only: no review run row, no project database, no model
+session. `--rule` is accepted as the flag layer; layer labels are
+`.pir/rule.json`, `~/.pir/rule.json` and `--rule`, never host paths.
+
+`find` can also carry one explicit user background: `--background <text>` or `--background-file <path>` (ADR 0016). It is opt-in, `find`-only, and reviewer-only: verifier sessions never see it, and `audit` rejects both flags. The text is turned into one `<user_background>` section placed after every process rule and before the evidence block, labelled as user-supplied context that is neither instructions nor evidence. Guards: 1 MiB raw file cap; sanitisation (LF line endings, control and invisible characters stripped, blank runs collapsed, trailing whitespace removed); empty-after-sanitisation and any reserved `<user_background>` delimiter rejected; 8,000 characters hard cap (truncated with an explicit marker in the prompt and a warning on stderr); 2,000 characters soft cap (warning only). Those warnings are written to stderr unconditionally — `--json` and `--quiet` do not silence them, and stdout stays machine-clean — and `--background-file` wins over `--background` with a warning on the same channel. `run.json` records `background: {source, sha256, characters, suppliedCharacters, truncated}` — the canonical hash of the supplied sanitised text, never the text; the surfaces that echo argv (server error log, job registry, submission receipts) redact the value as `<background redacted>`. Session transcripts, when enabled, record the prompt like every other session input. `--background-file` is a local path and is rejected in remote mode on both sides (the CLI before forwarding, and the server's `/v1/review`/`/v1/exec` lanes, so a direct API caller cannot read a server file into a prompt); `--background` may be forwarded to a same-version server.
+
 Limits:
 
 | Option | Default / meaning |
 | --- | --- |
 | `--max-findings N` | `10`; confirmed plus uncertain reports; ceiling, not target |
 | `--max-rounds N` | `2` for `find`; includes verification-only rounds |
-| `--max-tokens N` | unlimited unless set; checked between sessions |
+| `--max-tokens N` | `find`: default ceilings of 1.2M reviewer + 0.8M verifier prompt-side (input) tokens when the flag is absent — a hit starts no new reviewer round but still drains the pending verification backlog, and the stop is recorded in `stoppedBecause`/`budgetStop` with `incomplete` computed as usual; a numeric `N` replaces the defaults with one hard whole-run ceiling in measured total tokens (it also refuses new verifier admissions mid-drain, leaving pending candidates unverified); `unlimited` removes every token ceiling (the B3 opt-out). `audit`: unlimited unless set. All ceilings are checked between sessions |
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
 | `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |
 | `--angles a,b\|all` | experimental (F1, default off, find-only): round 1 fans out one specialized reviewer session per angle (correctness, concurrency, security, contracts, performance) instead of one general session; capped at 4 parallel sessions and shrunk by remaining token/wall-clock budget; later rounds stay general with the merged focus; cross-angle near-duplicates (same entity, near-identical claim) collapse and finding ids are reassigned uniquely |
 | `--fail-on P0\|P1\|P2\|P3\|none` | `none` |
 | `--plugins auto\|none\|frontend,golang,typescript` | `auto`, detected at selected head |
+| `--rule PATH` | no default; explicit highest-priority project rule file (`find` only, local mode) |
+| `--background TEXT` | no default; explicit user background for the change, reviewer prompt only (`find` only); ≤8,000 characters after sanitisation (truncated loudly), non-empty, no reserved `<user_background>` delimiter |
+| `--background-file PATH` | no default; read the background from a UTF-8 regular file (≤1 MiB raw); wins over `--background`; local path, rejected in remote mode |
 | `--no-sync-index` | skip optional codegraph index synchronization |
 
 `PIR_CODEGRAPH=1` (server/serve deployments) makes throwaway-worktree reviews
@@ -245,6 +278,22 @@ project?: { id, cwd, head }
 data: command-specific object
 ```
 
+`find` and `audit` also accept `--format text|json|sarif` (`--json` is the
+same choice as `--format json`; different values together are a usage error,
+exit 2). Machine output means `--json` or `--format json|sarif`: it also
+skips the first-run wizard (an interactive prompt would corrupt stdout) and
+selects the JSON form of the remote `<command>.detach` submission envelope,
+so a machine consumer never receives human text. `--format sarif` writes a SARIF 2.1.0 log instead of the envelope:
+`runs[0].results[]` carries one entry per reported finding (`ruleId` from
+`category`, `level` from severity — P0/P1 error, P2 warning, P3 note — the claim
+as `message.text`, anchors as locations with `relatedLocations` for the extras,
+and the canonical identity as `partialFingerprints["pirFinding/v1"]`), and
+`runs[0].invocations[0]` records `executionSuccessful` plus a `warning`
+notification carrying `stoppedBecause` when the run did not complete. An audit
+invocation also carries the coverage summary in `properties.coverage`. No
+findings yields `results: []` with no `rules`; exit codes are unchanged and the
+preview/readout lanes refuse sarif. Remote mode needs a same-version server.
+
 For review results, inspect these fields in order:
 
 1. `data.run.id`, head/base or `data.target`: confirm the reviewed target.
@@ -259,6 +308,15 @@ For review results, inspect these fields in order:
    `correct`.
 4. `data.pendingCandidates` and `pendingFindings`: list unresolved work.
 5. Audit `data.coverage` and `suspectedDuplicates`: account for scope.
+   In change mode, `data.run.files[]` lists every changed file; a file with
+   `excluded: true` (+ `excludedReason`) had its diff body withheld by the
+   file filter (binary, secret path, skip pattern, oversized diff). Metadata
+   is intact, the patch is not: do not claim to have reviewed those files,
+   and do not ask a session for their diff — `get_change` refuses. For the
+   secret gates (dotenv/SSH/credential files) `read_code` and `search_text`
+   refuse the path on every revision in change mode, so the file body is
+   unreachable through the review tools as well; the builtin filesystem tools
+   read the working tree and are not evidence.
 6. `usage`, `usageComplete`, `estimatedTokens`, and `durationMs`: report
    measured cost/usage only when available.
 
@@ -267,10 +325,16 @@ Finding shape:
 ```text
 id, displayId, title, claim, trigger, category, severity, status
 featureKey, entityKey
-anchors: [{ path, startLine, endLine? }]
+anchors: [{ path, startLine, endLine?, excerpt?, lineCorrected?, originalStartLine?, originalEndLine? }]
+  excerpt: verbatim snippet used for local re-location (optional)
+  lineCorrected: the excerpt's unique match decided startLine/endLine; originalStartLine/originalEndLine keep the model's range
 evidence: [{ kind, path?, startLine?, excerpt?, description? }]
 verifierRationale, memoryMatches, round, createdAt
+lineCorrected: true when at least one anchor was re-located locally from its excerpt
 confidence: verifier self-assessment 0–1 (null when not on record)
+rejectionGround: why a change-mode rejection happened
+  (no-such-code | contradicted-by-code | pre-existing | guarded | speculative | not-introduced-by-change | other;
+  null for kept/uncertain/audit rows and rows recorded before this field)
 ```
 
 Status handling:
@@ -299,6 +363,16 @@ versions), selection and classification counts, and the planned unit count —
 no run, no model. `pir audit coverage [--run <id>|--latest] [--json]` reads
 the per-file ledger of a recorded audit run from the local project database.
 
+Before paying for a change review, `pir find --preview [--json]` returns the
+change set a real find of the same range would review plus the per-file
+selection: `path`, `status`, `additions`/`deletions`, `excluded`,
+`excludedReason` and the filter `gate` (`binary`, `secret`,
+`skip-pattern`, `oversized-diff`, `not-included`) — no run, no model, no
+writes. Run-shaping flags (`--max-rounds`, `--max-tokens`,
+`--max-findings`, `--verify-concurrency`, `--min-confidence`,
+`--fail-on`, `--model`, `--verify-model`, `--angles`, `--plugins`)
+are rejected with exit 2 rather than silently ignored.
+
 `--max-findings unlimited` (#57) removes the report cap: the result envelope
 carries `run.maxFindings: null` and `run.maxFindingsMode: "unlimited"`
 (`"capped"` otherwise). Remote use needs a same-version server.
@@ -326,11 +400,11 @@ submit-time wait), a stderr status line prints on state changes and about
 once a minute (#55) — it reports connection liveness and log growth, never
 review progress.
 
-`find`/`audit --detach` (#53) submits and returns immediately: stdout carries
-a `<command>.detach` envelope with the full job id, origin, project, head and
-follow-up commands; the run id is `null` until pickup. Exit `0` means the
-submission was accepted — never that the review ran or passed. Pick up later
-with `pir jobs wait/fetch`; the local receipt keeps the record.
+In remote mode, `find`/`audit --detach` (#53) submits and returns immediately: stdout carries a `<command>.detach` envelope with the full job id, origin, project, head and follow-up commands; the run id is `null` until pickup. The envelope is JSON when machine output is selected (`--json` or `--format json|sarif`) and human text otherwise. Exit `0` means the submission was accepted — never that the review ran or passed. Pick up later with `pir jobs wait/fetch`; the local receipt keeps the record.
+
+In local mode, the same flag detaches the run from the terminal instead (ADR 0022): the CLI re-executes itself as a background process, prints a `find.detach`/`audit.detach` envelope (`jobId`, `mode: "local"`, `logPath`, `receiptPath`, `followUp`), and exits `0` once the child is accepted. The log is `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`); the receipt settles with the child's final `exitCode`; `--fail-on` cannot gate the parent. `--detach` is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit (exit `2`).
+
+A local detach has no watchdog: an unsettled receipt whose log stopped growing means the child was killed, not that the review is still running, and nothing resumes it. Two concurrent detaches are told apart by their receipts and logs, never by `pir audit coverage --latest` (which names the newest run).
 
 ```bash
 pir jobs list --json
@@ -615,7 +689,7 @@ own 120-second request timeout.
 | `failed to prepare the review bundle locally …` | a LOCAL git error, not server connectivity; bundling itself is read-only since #46, so this now means missing objects or temp-dir problems (the bundle-free `findings list/show` lane needs no bundle unless the server demands full history) |
 | Long audit cost unknown | `pir audit --dry-run --list-files` previews the exact scope and unit count first (#56) |
 | Findings capped too early | rerun with `--max-findings unlimited` (#57); JSON reports `run.maxFindingsMode` |
-| Submit-and-continue | `pir find/audit --detach` returns after acceptance; pick up with `pir jobs wait` (#53) |
+| Submit-and-continue | `pir find/audit --detach` returns after acceptance: remote picks up with `pir jobs wait` (#53); local keeps running with `~/.pir/logs/<jobId>.log` and a receipt whose `exitCode` settles the run (ADR 0022) |
 | Job ID missing after restart | `pir receipts list` — the local receipt names the job, project and run; `pir jobs fetch` still works while the registry lives |
 | Run URL from the web UI | `pir runs status <run-url>` / `pir findings list --run <run-url>` / `pir findings export --run <run-url>` — no checkout needed |
 | Viewer auth required (401 on /api) | pass `--viewer-token` (the server's `PIR_WEB_UI_TOKEN`); it is independent of `--token` |

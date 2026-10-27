@@ -258,8 +258,8 @@ test("legacy blanket applicability cannot suppress multiple matched decisions", 
 
 test("partial usage is labelled incomplete and estimated text is not added to measured usage", () => {
   const budget = new Budget({ maxRounds: 2, maxTokens: 1000 });
-  budget.chargeSession(usage, "not double counted");
-  budget.chargeSession(undefined, "12345678");
+  budget.chargeSession(usage, "reviewer", "not double counted");
+  budget.chargeSession(undefined, "reviewer", "12345678");
   assert.equal(budget.tokenEstimate, 162);
   assert.equal(budget.usage.totalTokens, 160);
   assert.equal(budget.usageComplete, false);

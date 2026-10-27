@@ -38,6 +38,16 @@ provenance and pagination information.
 For deleted or renamed files, old-side reads use the explicit old path. Audit
 reviewers use `list_snapshot_files` to navigate the pinned tree.
 
+A change-mode reviewer also receives the change's file list up front — path,
+status, churn, and the change-mode filter's exclusion reason for a withheld
+file, capped at 60 entries with an explicit remainder line (ADR 0017). The list
+is the projection `data.run.files[]` records, so the prompt cannot disagree with
+the run record. The reviewer is asked to account for every listed file before
+`finish_round` — investigated, or explicitly skipped with a stated reason in
+`coverage` — and a stated skip is a valid pass: no read is enforced, and
+coverage that omits a file is visible to the operator rather than fatal to the
+run.
+
 Built-in filesystem reads and codegraph queries are navigation aids. They can
 reflect a different revision, so pinned reads are needed to support a claim
 about the target. A truncated page or a search with no matches cannot prove
@@ -149,6 +159,8 @@ are also stored as the run progresses, so stored findings and coverage can be
 examined before a long audit ends. There is no automatic restart/resume of an
 interrupted audit.
 
+A long local audit can outlive its terminal with `pir audit --detach` (ADR 0022): the run continues as a detached background process, its log is `~/.pir/logs/<jobId>.log`, and its receipt records the final exit code once it settles. That is durability, not resume — a killed detach is not restarted or continued (ADR 0018's no-go stands), and an unsettled receipt whose log stopped growing is how a killed detach is told apart from a running one; there is no watchdog. Two concurrent detaches are distinguished by their receipts and logs, not by `pir audit coverage --latest`.
+
 Coverage records the work that was completed:
 
 | File state | Meaning |
@@ -203,7 +215,20 @@ verified fix; a reproducing trigger reopens the finding. Inspect
 
 Token budgets are checked between sessions. An in-flight session may exceed
 the remaining budget; pir does not cancel that model turn at the limit.
-`--max-tokens` and other numeric limits must be positive integers.
+`--max-tokens` and other numeric limits must be positive integers, and
+`--max-tokens unlimited` removes every token ceiling.
+
+`find` applies default ceilings of 1.2M reviewer and 0.8M verifier
+prompt-side (input) tokens when `--max-tokens` is absent (ADR 0006). A hit
+starts no new reviewer round, but every candidate already pending is still
+verified — the grace, including backlogs larger than one drain's per-round
+cap — and the stop is reported in `stoppedBecause` (and
+structurally as `budgetStop: {kind, reason}` in the run manifest) while
+`incomplete` is computed exactly as before. An explicit `--max-tokens N`
+replaces those defaults with one hard whole-run ceiling measured on total
+tokens: it also refuses new verifier admissions mid-drain, so pending
+candidates stay unverified exactly as they did before B3. Audit keeps the
+unlimited-until-set semantics.
 
 `data.incomplete` covers pending candidates, verification execution errors,
 unfinished change discovery, and incomplete audit coverage. Audit additionally

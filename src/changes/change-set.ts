@@ -1,9 +1,18 @@
 import { getDiffPatch, getMergeBase, getNameStatus, resolveCommit } from "./git.js";
-import { parseUnifiedDiff, type FileDiff } from "./diff.js";
+import { parseUnifiedDiff, type FileDiff, type FileChangeStatus } from "./diff.js";
 
 export interface ChangedFile extends FileDiff {
   /** File extension derived language hint, e.g. "ts". */
   language: string;
+  /**
+   * Change-mode filter (B1): the file was excluded from diff review. Its
+   * metadata (path/status/churn) stays visible to previews, the reviewer and
+   * the run record, while `hunks` is emptied so the diff body cannot reach a
+   * model.
+   */
+  excluded?: boolean;
+  /** Why the filter excluded it; present exactly when `excluded` is true. */
+  excludedReason?: string;
 }
 
 export interface ChangeSet {
@@ -20,6 +29,33 @@ export interface ChangeSet {
   patch: string;
   /** Total added + removed lines across files. */
   churn: number;
+}
+
+/**
+ * The path/status/churn projection the CLI envelope and the run manifest both
+ * record. B1 adds the exclusion record here, once, so the two surfaces cannot
+ * drift — and so every pre-B1 field keeps its name and value.
+ */
+export interface ChangedFileSummary {
+  path: string;
+  status: FileChangeStatus;
+  additions: number;
+  deletions: number;
+  /** Always present: true when the change-mode filter withheld the diff body. */
+  excluded: boolean;
+  /** Only present when `excluded`: the gate's human-readable reason. */
+  excludedReason?: string;
+}
+
+export function changedFileSummary(file: ChangedFile): ChangedFileSummary {
+  return {
+    path: file.path,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    excluded: Boolean(file.excluded),
+    ...(file.excludedReason ? { excludedReason: file.excludedReason } : {}),
+  };
 }
 
 export async function buildChangeSet(repoRoot: string, base: string, head: string): Promise<ChangeSet> {

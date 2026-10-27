@@ -4,6 +4,7 @@ import type { SessionUsage } from "../agents/types.js";
 import { writeTranscript } from "../agents/transcripts.js";
 import type { RoundInfo } from "../core/review-state.js";
 import type { CoverageSummary } from "../core/coverage.js";
+import type { AnchorLineCorrection } from "../findings/types.js";
 import type { ActivePack } from "../plugins/index.js";
 
 /**
@@ -114,6 +115,26 @@ export type RunEvent =
       sessionId: string;
       error?: string;
       usage?: SessionUsage;
+    }
+  | {
+      /**
+       * Roadmap B2: a record_candidate anchor carried an excerpt whose unique
+       * local match decided its lines. Carries both ranges so consumers can
+       * tell an actual displacement from a no-op confirmation. Observational
+       * only — consumers that do not know the kind must ignore it.
+       */
+      kind: "line-corrected";
+      runId: string;
+      projectId: string;
+      seq: number;
+      ts: number;
+      sessionId: string;
+      displayId: string;
+      path: string;
+      originalStartLine: number;
+      originalEndLine?: number;
+      startLine: number;
+      endLine?: number;
     }
   | {
       kind: "run-end";
@@ -243,6 +264,8 @@ export interface SessionEventEmitter {
   /** Raw SDK session event; irrelevant kinds are dropped, nothing is thrown. */
   sdkEvent(event: unknown): void;
   sessionEnded(error?: string, usage?: SessionUsage): void;
+  /** B2: one anchor's excerpt located locally and overrode the model's range. */
+  lineCorrected(correction: AnchorLineCorrection): void;
 }
 
 export interface RunEndInfo {
@@ -375,6 +398,16 @@ export function createRunEventSink(runId: string, projectId: string): RunEventSi
             });
           }
         },
+        lineCorrected(correction) {
+          emitRunEvent({
+            kind: "line-corrected", runId, projectId, seq: next(), ts: Date.now(), sessionId,
+            displayId: correction.displayId, path: correction.path,
+            originalStartLine: correction.originalStartLine,
+            ...(correction.originalEndLine !== undefined ? { originalEndLine: correction.originalEndLine } : {}),
+            startLine: correction.startLine,
+            ...(correction.endLine !== undefined ? { endLine: correction.endLine } : {}),
+          });
+        },
         sessionEnded(error, usage) {
           // A session that never started (factory failure) still deserves a
           // tombstone so live viewers are not left with an open node.
@@ -449,6 +482,8 @@ export interface RunManifest {
   startedAt: number;
   finishedAt: number;
   stoppedBecause: string;
+  /** B3 (ADR 0006): the token/wall-clock ceiling that ended the run, when one did. */
+  budgetStop?: { kind: import("../core/budget.js").BudgetCeilingKind; reason: string } | null;
   incomplete: boolean;
   /** Deterministic run-level verdict from the verified findings (Q4). */
   runVerdict: "incorrect" | "correct-with-findings" | "needs-review" | "correct";
@@ -464,8 +499,20 @@ export interface RunManifest {
   usage?: SessionUsage;
   durationMs: number;
   estimatedTokens: number;
-  /** Change mode: the reviewed file list. */
-  files?: Array<{ path: string; status: string; additions: number; deletions: number }>;
+  /** Change mode: the reviewed file list (B1 adds the exclusion record). */
+  files?: Array<{ path: string; status: string; additions: number; deletions: number; excluded?: boolean; excludedReason?: string }>;
+  /**
+   * B5 (ADR-0010): applied project rules, their canonical hash and the
+   * reviewer built-in-guidance suppression flag; absent when no rule file was
+   * loaded.
+   */
+  projectRules?: import("../rules/project-rules.js").ProjectRulesSummary;
+  /**
+   * S2 (ADR-0016): provenance for an explicit user background — where it came
+   * from, its canonical sha256 and its sizes. The text itself is never
+   * persisted; absent when the run had no background (the default).
+   */
+  background?: import("../core/user-background.js").UserBackgroundRecord;
   /** Audit mode: coverage ledger summary and work-unit states. */
   coverage?: CoverageSummary;
   units?: Array<{ id: string; module: string; state: string; reason?: string; files: number; attempts: number }>;

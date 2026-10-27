@@ -82,6 +82,12 @@ local configuration is:
 Add `"model": "provider/model"` to choose a default. `--model` has highest
 priority, followed by `PIR_MODEL`, this config value, and Pi settings.
 
+### Long local runs survive their terminal
+
+`pir find --detach` and `pir audit --detach` in local mode re-execute the same CLI as a background process and return as soon as it is accepted (ADR 0022). Exit 0 means *accepted*, not *reviewed*: the review keeps running after the terminal closes, and its outcome lives in the log at `~/.pir/logs/<jobId>.log` (0600, following `PIR_CONFIG_DIR`), in the receipt under `~/.pir/receipts/` whose `exitCode` is the child's final exit code once it settles, and in the project database (`pir findings list`, `pir audit coverage --latest`). With `--json` the submission envelope is `<command>.detach` and carries the job id, `mode: "local"`, the log path, the receipt path and follow-up commands; without it the same facts print as text. `--detach` is opt-in — an ordinary local run is unchanged — and it is refused with `find --preview`, `audit --dry-run`, `audit coverage` and any command other than find/audit, because those lanes produce no run to detach. The parent cannot gate on `--fail-on`: check the receipt's `exitCode` or the findings afterwards.
+
+There is no watchdog. A killed detach (`SIGKILL`, OOM, reboot) leaves an unsettled receipt with no `settledAt`/`exitCode` and a log that stopped growing — a running detach also has an unsettled receipt, so compare log growth, and `pir audit coverage --latest` shows the newest run's status. Two concurrent detaches are told apart by their receipts and logs, never by `--latest`. Nothing resumes a killed detach: `--detach` prevents the terminal-loss failure, it is not audit resume.
+
 ### Remote mode
 
 With an existing `pir serve` instance, the client needs just a connection:
@@ -168,6 +174,8 @@ unavailable even though the image installs the codegraph CLI.
 pir find --json                         # HEAD^..HEAD
 pir find --base origin/main --head HEAD --fail-on P1 --json
 pir find --uncommitted --base HEAD --json # staged, unstaged, and untracked work
+pir find --preview --json               # what a review would select, and what it withholds
+pir find --background-file pr-description.md --base origin/main --json  # state the intent of the change
 
 pir audit --json                        # committed HEAD snapshot
 pir audit --path src/auth --path src/payments --json
@@ -186,6 +194,8 @@ pir memory bootstrap
 pir memory refresh
 pir remember symbol PaymentService.retry invariant --text "..."
 pir memory sync --server https://pir.example:8790 --token "$PIR_SERVER_TOKEN"
+
+pir rules check src/core/supervisor.ts  # which project rule wins for a path
 ```
 
 `--max-findings` is a ceiling, not a target; `--max-findings unlimited`
@@ -193,7 +203,13 @@ removes the cap entirely (#57, needs a same-version server remotely). JSON
 results carry `run.maxFindings` (`null` when unlimited) plus an explicit
 `run.maxFindingsMode` of `capped` or `unlimited`. `--max-rounds` applies to
 change reviews; audits are bounded by work units and the optional
-`--max-tokens` budget. Reviews have no token ceiling unless one is set.
+`--max-tokens` budget, with no default token ceiling. `find` defaults to
+1.2M reviewer + 0.8M verifier input tokens (ADR 0006): hitting a ceiling
+starts no new reviewer round but still verifies everything already found,
+then reports the stop in `stoppedBecause` and leaves the usual
+`incomplete` (exit 3 under `--fail-on`). `--max-tokens N` replaces the
+defaults with one explicit whole-run ceiling and `--max-tokens unlimited`
+removes every token ceiling.
 `--plugins auto` is the default; use `--plugins none` or a comma separated
 list of built-in packs to override detection. The shipped Frontend, Go and
 TypeScript packs support both modes; the frontend pack auto-activates on
@@ -244,6 +260,56 @@ Change reviews compare the merge base of the selected refs to head. An
 explicit `--base HEAD` limits a working-tree review to uncommitted work.
 `verify-fix` checks a finding marked fixed against committed HEAD.
 
+### Project rules
+
+Repository review conventions can be declared instead of remembered: a rule
+file pairs a path glob with guidance, and `find` injects only the rules that
+match the reviewed paths. Three layers are loaded, highest priority first —
+`--rule <path>`, `<repo>/.pir/rule.json`, and `<config-dir>/rule.json`
+(default `~/.pir/rule.json`) — and the first matching rule for a path wins
+(layers in priority order, declaration order within a layer), so matching is a
+deterministic code decision. A layer may also carry `include`/`exclude`
+globs, and `mergeBuiltin: false` makes the project rule authoritative for its
+paths by withholding the built-in language-pack guidance from reviewer sessions for that run (verifier sessions keep their own trusted pack guidance).
+
+```json
+{
+  "schemaVersion": 1,
+  "include": ["src/**"],
+  "exclude": ["**/*.test.ts"],
+  "rules": [
+    { "path": "src/web/**", "guidance": "Never mutate props after mount.", "mergeBuiltin": true },
+    { "path": "src/db/**", "guidanceFile": "docs/db-review.md", "mergeBuiltin": false }
+  ]
+}
+```
+
+Guidance file references are untrusted repository content: repo-relative only,
+`.md`/`.markdown`/`.txt`, at most 64 KiB, resolved through `realpath` and
+required to stay inside the repository. A malformed rule file, an escaping or
+oversized reference, or a rendered section over 48,000 characters fails the
+run before any model session starts. The applied rules and a canonical
+`sha256` hash are recorded in the run manifest (`projectRules`), and `pir
+config show` prints the loaded layers, rules and hash. Rules apply to `find`
+only; `--rule` is a local path and is rejected in remote mode.
+
+`pir rules check <path>` answers the debugging question directly, without a
+run: the winning layer and its label, the matched glob, `mergeBuiltin`, the
+canonical guidance text and the rules hash — or, when nothing matches, one line
+per loaded layer naming the gate that failed (not included, excluded, no rule).
+The path is reported repository-relative and never as a host path; an absolute
+path inside the repository is accepted and reported relative, one outside it is
+a usage error, and a file that does not exist is flagged rather than silently
+matched. `--json` (`command: "rules.check"`) carries the same data plus the
+exact PROJECT RULES prompt block for that path. It reads rule files only: no
+review run, no project database, no model session.
+
+### User background
+
+A review knows the diff but not what the change was meant to do. `--background <text>` and `--background-file <path>` hand the reviewer one explicit, delimited context block — the stated goal, an intentional behaviour change, a migration note — and change nothing else. The input is opt-in, `find`-only, and capped: 1 MiB raw from a file, 8,000 characters of sanitised text in the prompt (longer input is truncated with an explicit marker in the prompt and a warning on stderr), and a 2,000-character soft cap that only warns. Control characters and invisible formatting characters are stripped, blank-line runs collapse, and any occurrence of the reserved `<user_background>` delimiter is rejected outright. `--background-file` wins when both flags are given, and a relative path resolves against the invocation directory like `--rule`.
+
+The reviewer prompt carries the text inside a reserved `<user_background>` section, placed after every process rule and immediately before the evidence block, labelled as user-supplied context that is neither instructions nor evidence: it cannot override provenance rules, severity, the do-not-report list or the reporting cap, and claims in it must be verified against the pinned code. Verifier sessions never see it, `audit` rejects both flags, and the only persisted trace is `background` in `run.json` — source, canonical `sha256`, character counts and the truncation flag, never the text. The surfaces that echo argv (the server's error log, the job registry behind `GET /v1/jobs` / `pir jobs`, and local submission receipts) keep the flag and redact its value as `<background redacted>`. Session transcripts are the session record, not a provenance surface: when enabled they contain the prompt as they do for every other input. `--background` may be forwarded to a remote server (a same-version server is required); `--background-file` is a local path and is rejected in remote mode on both sides — by the CLI and by the server's execution lanes, so a direct API caller cannot read a server file into a prompt.
+
 ## Output contract
 
 Successful `--json` commands write one result envelope to stdout. A shortened
@@ -259,6 +325,24 @@ error, and `3` is a runtime error. With `--fail-on none` (the default), an
 incomplete result can still return `0`; check `data.incomplete`. With a gate
 configured, an incomplete run returns `3` unless a qualifying finding already
 caused `1`.
+
+`find` and `audit` can also write SARIF 2.1.0 instead of the envelope or the
+text report: `--format sarif` (`--format text|json` selects the other two, and
+`--json` is the same choice as `--format json`; asking for both with different
+values is a usage error). One result is emitted per reported finding: `category`
+becomes the `ruleId`, P0/P1 map to `error`, P2 to `warning` and P3 to `note`,
+anchors become physical locations (the first is the primary entry, the rest
+`relatedLocations`), and the finding's canonical identity is
+`partialFingerprints["pirFinding/v1"]`. Each invocation records whether the run
+completed (`executionSuccessful`) and, when it stopped early, a `warning`
+notification carrying `stoppedBecause`; audit invocations also carry the coverage
+summary. No findings yields valid empty `results`. Exit codes are unchanged, and
+the lanes that cannot express findings — `find --preview`, `audit --dry-run`,
+`audit coverage` — refuse `sarif`. Remote mode needs a same-version server.
+
+```bash
+pir find --base origin/main --head HEAD --format sarif > pir.sarif
+```
 
 Audits also return a coverage ledger. Each selected file is accounted for as
 `reviewed`, `partial`, `unreviewed`, `blocked`, or `failed`; excluded and
@@ -277,6 +361,29 @@ pir audit coverage --run <run-id>  # ... or of a specific run
 without creating a run or invoking any model; `coverage` reads the ledger the
 run persisted as it went, from the local project database.
 
+Change mode filters before an agent ever sees the diff. After the change set is
+built, each file passes four gates in order — binary, secret paths (never
+overridable), skip patterns (vendored dependencies, build output, lockfiles,
+minified files), and an oversized single-file diff — and an excluded file keeps
+its path, status and churn metadata but loses its diff body, so no reviewer
+session can page it. Excluded files are reported, not hidden: `files[]` in the
+`find --json` envelope and in the run manifest carries `excluded` (always
+present) and `excludedReason` (only when filtered), additively — every
+pre-existing field keeps its name and value. Secrets are the one absolute gate:
+`.env`, `.ssh` material, SSH key families, `.netrc`/`.npmrc`/`.pypirc`/
+`.dockercfg` are never sent to a model — their diff is withheld and change-mode
+`read_code`/`search_text` refuse the path on every revision, so the gate is not
+bypassed by reading the whole file (checked-in `.env.example`/`.sample`/
+`.template` stay reviewable). The SDK's builtin filesystem tools read the
+working tree rather than the pinned commit and are outside this gate; the
+reviewer prompt already treats them as non-evidence.
+
+`pir find --preview` prints that selection before you pay for a run —
+per-file status/churn plus selected/excluded with the gate's reason, as text or
+`--json`. It calls the same change-set builder and the same pure filter the
+real run uses, creates no run row, opens no model session and writes nothing;
+run-shaping flags are rejected with a usage error instead of being ignored.
+
 ## Service API and jobs
 
 `pir serve` exposes:
@@ -293,8 +400,9 @@ Remote audits sent from a checkout are asynchronous jobs by default.
 `pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
 memory and retains the latest 100 settled jobs; runs and findings remain in
 SQLite. `PIR_REMOTE_ASYNC=1` applies
-job submission to other review commands. `find`/`audit --detach` submits the
-job and returns immediately (#53): stdout carries the submission envelope
+job submission to other review commands. In remote mode, `find`/`audit
+--detach` submits the job and returns immediately (#53): stdout carries the
+submission envelope
 with the full job id and follow-up commands, and the local receipt is the
 durable record — exit 0 means *accepted*, not *reviewed*. While waiting
 (`jobs wait` or the submit-time poll), a status line prints on state changes

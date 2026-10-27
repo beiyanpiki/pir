@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "roadmapItem": "M0",
+  "dataset": {
+    "id": "Alibaba-Aone/aacr-bench",
+    "description": "AACR-Bench reflection test set: comment-level binary ground truth (label 1 = correct, 0 = incorrect) over real PR review comments.",
+    "hfRevision": "47be1d6df1e7faf222cf531587772d92f79fe6b2",
+    "file": "dataset.json",
+    "url": "https://huggingface.co/datasets/Alibaba-Aone/aacr-bench/resolve/47be1d6df1e7faf222cf531587772d92f79fe6b2/dataset.json",
+    "canonicalUrl": "https://huggingface.co/datasets/Alibaba-Aone/aacr-bench/resolve/main/dataset.json",
+    "sha256": "0804505f0a474765ce2840c832cfeaa6c4f0250dd6ccb169fe73c6758b245a86",
+    "bytes": 2101497,
+    "records": 2145,
+    "license": "Apache-2.0",
+    "retrievedAt": "2026-10-19"
+  },
+  "framework": {
+    "repo": "https://github.com/alibaba/aacr-bench",
+    "commit": "ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df",
+    "license": "Apache-2.0",
+    "role": "M1 judging delegation (judge.py / evaluate.py); M0 needs no judge (labels are supplied)."
+  },
+  "fixtures": {
+    "description": "M1 end-to-end fixture: one task per positive_samples PR. Every reference comment is label=1 by construction (the upstream positive split), so this fixture measures precision/recall against known-correct review comments, not verifier kill-rate.",
+    "repo": "https://github.com/alibaba/aacr-bench",
+    "commit": "ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df",
+    "file": "dataset/positive_samples.json",
+    "url": "https://raw.githubusercontent.com/alibaba/aacr-bench/ee9d7fef70ef31acea2ff7ae316ce0a9575fe4df/dataset/positive_samples.json",
+    "sha256": "02c8561f1c3994a26f427d479b2a3f6e6c8e6858161fbc903b45248fa2cb2097",
+    "bytes": 1117816,
+    "records": 196,
+    "comments": 1506,
+    "commentSides": {
+      "right": 1498,
+      "left": 8
+    },
+    "instanceId": "owner__name@<target_commit[:7]> (dots preserved, e.g. FreeCAD__FreeCAD@a050e42)",
+    "baseCommit": "source_commit",
+    "headCommit": "target_commit",
+    "cloneUrl": "https://github.com/<owner>/<name>.git",
+    "license": "Apache-2.0",
+    "citation": "arXiv 2601.19494 (see the top-level citation.bibtex; every generated fixture header repeats it)",
+    "output": "tests/eval/aacr/fixtures/test-set.json (derived upstream data, gitignored; rebuild with fixtures/build-fixture.js)"
+  },
+  "ocr": {
+    "repo": "https://github.com/alibaba/open-code-review",
+    "commit": "8eb83340a487b1150af00701b94f01af97e4b4d6",
+    "license": "Apache-2.0",
+    "reflectionSystemPrompt": "internal/config/template/prompts/review_filter_task_system.md",
+    "reflectionUserPrompt": "internal/config/template/prompts/review_filter_task_user.md",
+    "role": "M0 comparison arm (--arm ocr), ported with attribution into src/agents/ocr-reflection-prompt.ts."
+  },
+  "citation": {
+    "bibtex": "@misc{zhang2026aacrbenchevaluatingautomaticcode,\n  title={AACR-Bench: Evaluating Automatic Code Review with Holistic Repository-Level Context},\n  author={Lei Zhang and Yongda Yu and Minghui Yu and others},\n  year={2026}, eprint={2601.19494}, archivePrefix={arXiv}, primaryClass={cs.SE}\n}",
+    "arxiv": "2601.19494",
+    "notice": "Data and framework are Apache-2.0. Use of AACR-Bench requires citing arXiv 2601.19494; every generated results file and JSONL header carries this notice."
+  },
+  "materialization": {
+    "diffBase": "merge-base reported by the GitHub compare API for (pr_source_commit ... pr_target_commit), fetched with --depth 1",
+    "head": "pr_target_commit (capture-time PR head; the file content the comment was anchored to)",
+    "perCommentDiff": "git diff -U3 <diffBase> <head> -- <path> from a depth-1 fetch of both commits",
+    "cache": "$PIR_AACR_CACHE (default ~/.cache/pir-aacr), never inside the worktree",
+    "failurePolicy": "every failure becomes an error row; a materialization run never aborts"
+  }
+}

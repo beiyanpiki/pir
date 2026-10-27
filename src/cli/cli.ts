@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
+import { machineOutputFromArgv } from "./machine-output.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
+import { settleLocalReceipt } from "./receipts.js";
 import { configPath, isInteractive, loadUserConfig, resolveTransport, runWizard, type UserConfig } from "./config.js";
 
 /** Commands that never leave this process, whatever the configured mode is. */
-const LOCAL_ONLY = new Set(["serve", "config", "skill", "plugins", "help", "version", "runs", "receipts"]);
+const LOCAL_ONLY = new Set(["serve", "config", "skill", "rules", "plugins", "help", "version", "runs", "receipts", "_verify-comment"]);
 
 /**
  * `memory sync` merges the LOCAL db with a server, so it also always runs in
@@ -19,6 +21,16 @@ function isLocalSync(argv: string[]): boolean {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // ADR 0022: a detached local run is this same CLI with PIR_LOCAL_JOB_ID set.
+  // Its exit hook is what makes the receipt durable: it records when the child
+  // ended and with which code. A signal death runs no exit hook, so a killed
+  // detach legitimately stays unsettled — that is how it is told apart from a
+  // running one. A missing receipt makes settlement a no-op.
+  const localJobId = process.env.PIR_LOCAL_JOB_ID;
+  if (localJobId) {
+    process.on("exit", (code) => settleLocalReceipt(localJobId, code));
+  }
+
   // --help is answered locally before anything else (#43): no config load,
   // no wizard, no transport resolution, no git, no network — so help works
   // offline, outside a repository, with a read-only .git and with a missing
@@ -31,6 +43,14 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = firstPositional(argv);
+  // find/audit output selection is validated before any transport or bundle
+  // work — and therefore before a remote forward — so a typo or a
+  // contradictory --json/--format pair fails fast with exit 2 (S6).
+  if (command === "find" || command === "audit") resolveOutputFormat(parseArgs(argv).flags);
+  // Machine output (`--json` or `--format json|sarif`) decides two pre-executor
+  // behaviours: whether the first-run wizard may prompt, and which detach
+  // submission envelope remote.ts prints. Resolve it once here (dogfood F-17).
+  const machineOutput = machineOutputFromArgv(argv);
   let config: UserConfig | null = null;
   const webRoute = webFindingsRoute(argv);
   try {
@@ -42,6 +62,7 @@ async function main(argv: string[]): Promise<number> {
     // and must keep working when the config is the broken part.
     if (
       command === "config" ||
+      command === "rules" ||
       command === "help" ||
       command === undefined ||
       command === "version" ||
@@ -55,7 +76,7 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  if (!config && shouldRunWizard(argv, command, webRoute)) {
+  if (!config && shouldRunWizard(argv, command, webRoute, machineOutput)) {
     config = await runWizard();
     if (command === undefined) {
       process.stdout.write(
@@ -92,6 +113,21 @@ async function main(argv: string[]): Promise<number> {
   // client-side; plugins list inspects the caller's own checkout.
   // memory sync needs the local repo + local db even in remote mode.
   const forwardToServer = command !== undefined && !LOCAL_ONLY.has(command) && !isLocalSync(argv);
+  // B5 (ADR-0010): --rule names a file on the caller's machine. Forwarding the
+  // path would read a server-side file (or fail there) under the same spelling;
+  // the repository and global layers still apply on the server, so reject the
+  // flag rather than resolve it somewhere the user did not mean.
+  if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--rule" || arg.startsWith("--rule="))) {
+    throw new UsageError("--rule is a local file path and is not forwarded to a server; commit .pir/rule.json, use the server's global rule.json, or run with --local");
+  }
+  // S2 (ADR-0016): `--background` is inline text and may be forwarded (a server
+  // running an older build drops it, so remote needs a same-version server),
+  // but `--background-file` names a file on the caller's machine — forwarding
+  // the path would read a server-side file (or fail there) under the same
+  // spelling. Reject it rather than resolve it somewhere the user did not mean.
+  if (transport.mode === "remote" && forwardToServer && argv.some((arg) => arg === "--background-file" || arg.startsWith("--background-file="))) {
+    throw new UsageError("--background-file is a local file path and is not forwarded to a server; pass the text inline with --background, or run with --local");
+  }
   if (command === "jobs") {
     // jobs talks to the server's job registry directly (GET /v1/jobs) —
     // there is nothing to forward through the executor.
@@ -130,6 +166,26 @@ async function main(argv: string[]): Promise<number> {
     });
   }
 
+  // ADR 0022: local --detach re-executes this CLI as a detached background
+  // process with a log and a receipt, then returns once the child is accepted.
+  // Handled AFTER the remote-forward branch so remote detach keeps its
+  // semantics, and the executor's server-lane rejections stay untouched. The
+  // child (PIR_LOCAL_JOB_ID) never re-detaches; anything that is not a
+  // find/audit run has nothing to detach and is a usage error.
+  if (argv.includes("--detach") && !process.env.PIR_LOCAL_JOB_ID) {
+    if (command !== "find" && command !== "audit") {
+      throw new UsageError("--detach applies to `pir find` / `pir audit`; this command has no run to detach");
+    }
+    const { localDetach } = await import("./detach.js");
+    return await localDetach({
+      argv,
+      cwd: process.cwd(),
+      env: process.env,
+      emit: (text) => process.stdout.write(text),
+      log: (message) => process.stderr.write(`${message}\n`),
+    });
+  }
+
   if (command === "serve") {
     const { runServe } = await import("../server/server.js");
     await runServe(argv.slice(1)); // resolves only on shutdown
@@ -148,6 +204,10 @@ async function main(argv: string[]): Promise<number> {
         process.stderr.write(`${message}\n`);
       }
     },
+    // A warning about the run's inputs (a truncated background) must never be
+    // silent: it bypasses the progress gate above, so --json and --quiet
+    // cannot drop it while stdout stays machine-clean (dogfood F-2).
+    onWarn: (message) => process.stderr.write(`${message}\n`),
   });
   process.stdout.write(result.output);
   return result.code;
@@ -194,15 +254,18 @@ function webFindingsRoute(argv: string[]): "list" | "export" | null {
  * must work on an unconfigured machine (#48/#49) — like `runs`/`receipts`
  * (LOCAL_ONLY), it never triggers first-run setup. The wizard otherwise runs
  * before the webRoute dispatch and contradicts that contract (dogfood F-55).
+ * Machine output (`--json` or `--format json|sarif`) skips it for the same
+ * reason: a prompt on stdout would corrupt the envelope (dogfood F-17).
  */
 function shouldRunWizard(
   argv: string[],
   command: string | undefined,
   webRoute: "list" | "export" | null,
+  machineOutput: boolean,
 ): boolean {
   return (
     isInteractive() &&
-    !argv.includes("--json") &&
+    !machineOutput &&
     !argv.includes("--no-wizard") &&
     process.env.PIR_NO_WIZARD !== "1" &&
     webRoute === null &&

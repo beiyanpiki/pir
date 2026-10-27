@@ -89,9 +89,11 @@ target):
 |---|---|
 | Last commit | *(none)* — default `HEAD^..HEAD` |
 | Working tree, untracked included | `--uncommitted` (exclusive with `--repo`/`--head`) |
-| Whole branch incl. current edits | `--uncommitted --base origin/dev` |
-| Committed branch diff | `--base origin/dev` |
+| Whole branch incl. current edits | `--uncommitted --base "$BASE_REF"` |
+| Committed branch diff | `--base "$BASE_REF"` |
 | Other local checkout, this build as engine | `--cwd /path/to/other/worktree` + range flags |
+
+`$BASE_REF` is the git ref the `work-with-pr` lifecycle resolves for the PR's base: `origin/<target-branch>` for an independent PR, the parent branch's ref for a stacked one. It is `origin/dev` only when the target is the default `dev` — the default target branch — so a declared target such as `release/2.0` resolves to `origin/release/2.0` and the review covers the diff the PR will actually land. Set it from the same resolution `work-with-pr` used (or substitute the resolved ref) instead of pasting a branch name into the recipe.
 
 ## Other flags worth passing
 

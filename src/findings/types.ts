@@ -46,6 +46,21 @@ export interface FindingIdentity {
   normalizedTrigger: string;
 }
 
+/**
+ * One anchor whose excerpt located locally and overrode the model's range
+ * (ADR 0005). Carried by the `line-corrected` run event; the anchor itself
+ * keeps the same data as `lineCorrected`/`originalStartLine` fields.
+ */
+export interface AnchorLineCorrection {
+  /** Reviewer-assigned runtime id, e.g. F-101 (before persistence). */
+  displayId: string;
+  path: string;
+  originalStartLine: number;
+  originalEndLine?: number;
+  startLine: number;
+  endLine?: number;
+}
+
 export interface CandidateFinding {
   /** Runtime id assigned when collected (F-1, F-2, ...). */
   displayId?: string;
@@ -98,6 +113,25 @@ export interface DecisionAssessment {
 
 export type UncertaintyReason = "missing-evidence" | "tool-limit" | "provider-error" | "missing-verdict";
 
+/**
+ * Why the verifier rejected a candidate (ADR 0008). A rejection must name
+ * one of these, because the reason is what the reviewer — and the benchmark —
+ * can audit later: an invariant the code contradicts is not the same claim as
+ * a patch that simply predates the change. `other` is the normalized bucket
+ * for any value the tool could not place, never a silent drop.
+ */
+export const REJECTION_GROUNDS = [
+  "no-such-code",
+  "contradicted-by-code",
+  "pre-existing",
+  "guarded",
+  "speculative",
+  "not-introduced-by-change",
+  "other",
+] as const;
+
+export type RejectionGround = (typeof REJECTION_GROUNDS)[number];
+
 export interface VerifierResult {
   verdict: VerifierVerdict;
   rationale: string;
@@ -106,6 +140,8 @@ export interface VerifierResult {
   decisionAssessments?: DecisionAssessment[];
   /** Code-only follow-up, never historical decisions or their rationale. */
   codeFeedback?: string;
+  /** Present on a change-mode rejection: the audited reason the candidate died. */
+  rejectionGround?: RejectionGround;
   uncertaintyReason?: UncertaintyReason;
   confidence: number;
   usage?: SessionUsage;
@@ -114,6 +150,8 @@ export interface VerifierResult {
 export interface VerifiedFinding extends CandidateFinding {
   status: FindingStatus;
   verifierRationale?: string;
+  /** Change-mode rejection ground; absent for non-rejected verdicts and audits. */
+  rejectionGround?: RejectionGround;
   memoryMatches: MemoryMatch[];
   /** Verifier self-assessed 0–1 (submit_verdict; fallback verdicts use 0). */
   confidence?: number;

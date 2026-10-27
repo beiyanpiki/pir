@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { redactUserBackgroundArgv } from "../core/user-background.js";
 
 /**
  * In-memory job registry for /v1/review work (#38). A review request becomes
@@ -67,7 +68,10 @@ export class JobRegistry {
     const record: JobRecord = {
       jobId,
       command: input.command,
-      argv: input.argv,
+      // The registry is readable through GET /v1/jobs and printed by
+      // `pir jobs`; an inline user background is model input, not job
+      // metadata (ADR-0016, dogfood F-2).
+      argv: redactUserBackgroundArgv(input.argv),
       status: "queued",
       createdAt: Date.now(),
       startedAt: null,

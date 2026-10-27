@@ -43,6 +43,7 @@ The main boundaries are:
 | `src/findings` | finding identity, statuses, deduplication |
 | `src/memory` | SQLite repositories, feedback, bootstrap, refresh, synchronization |
 | `src/plugins` | built-in language guidance and activation |
+| `src/rules` | layered project rule files: loading, glob matching, prompt rendering, hash |
 | `src/server` | HTTPS execution, jobs, read-only web access, live observation |
 | `src/observability` | run events and manifests |
 | `src/extension` | Pi commands and their lifecycle |
@@ -67,6 +68,16 @@ untracked content, using a temporary index. The user's index and branches are
 preserved. For a review limited to uncommitted work, an explicit `--base HEAD`
 also makes the intended comparison consistent across local and remote runs.
 
+A change-mode reviewer also receives the change's file list before its first
+read (ADR 0017): path, status, churn, and the filter's exclusion reason for a
+withheld file, capped at 60 entries with an explicit remainder line. It is the
+same projection `data.run.files[]` records, so the prompt cannot disagree with
+the run. The prompt asks the reviewer to account for every listed file before
+`finish_round` — investigated, or explicitly skipped with a stated reason in
+`coverage` — and a stated skip is a valid pass: reads are never enforced, and
+a run whose coverage omits a file is visible to the operator, not marked
+failed.
+
 ### Audits
 
 `buildRepoSnapshot` inventories the committed tree with git, recording blob
@@ -85,7 +96,9 @@ The planner groups files by module, using exact snapshot line counts. The
 current planner allows up to five owned ranges and 1,200 lines per unit;
 files over 800 lines are divided into 500-line chunks. These are scheduling
 limits, not separate model token budgets. One run-wide budget, finding limit,
-and deduplication state span every unit.
+and deduplication state span every unit; the audit budget is unlimited
+unless `--max-tokens` is set, while `find` applies the default ceilings of
+ADR 0006.
 
 `pir audit --dry-run` (#56) runs the same snapshot and planner and reports
 head/tree ids, per-selection and per-classification counts, and the planned
@@ -121,6 +134,15 @@ Repository content, tool output, and retrieved memory enter these sessions as
 untrusted evidence. Installed pir language packs are a separate source of
 review guidance. Agents have structured submission tools but no source-edit,
 shell-execution, or decision-memory-write tools.
+
+The reviewer prompt can additionally carry one explicit, user-supplied
+background block (`--background` / `--background-file`, ADR 0016). It is
+sanitised, hard-capped, delimited, and labelled as context rather than
+instruction; it is injected after every process rule and immediately before
+the evidence block, and every verifier session keeps its prompt unchanged.
+Only its provenance is persisted: `run.json.background` records the source,
+the canonical sha256 of the supplied text, the character counts, and the
+truncation flag — never the text itself.
 
 ## Findings and durable state
 
@@ -248,11 +270,9 @@ Every queued `/v1/review` request has a job. With `async: true`, the service
 responds with HTTP 202 and a job ID; clients poll `/v1/jobs/<id>` for the
 result. A synchronous client's disconnect also leaves the job running and its
 result available. Bundled remote audits use asynchronous submission by default.
-`--detach` makes any find/audit submission asynchronous and returns right
-after acceptance (#53): stdout carries a submission envelope with the full
-job id; exit 0 attests acceptance, never review success. Wait paths render a
-poll-liveness line on state changes and about once a minute (#55) —
-connection alive and log growth, explicitly not review progress.
+In remote mode, `--detach` makes any find/audit submission asynchronous and returns right after acceptance (#53): stdout carries a submission envelope with the full job id; exit 0 attests acceptance, never review success. Wait paths render a poll-liveness line on state changes and about once a minute (#55) — connection alive and log growth, explicitly not review progress.
+
+In local mode the same flag keeps the run alive without a server (ADR 0022). The CLI re-executes itself with `detached: true` and `stdio: ["ignore", logFd, logFd]` bound to `~/.pir/logs/<jobId>.log` (0600, directory 0700), writes a schemaVersion-1 receipt before the spawn, and the child settles that receipt from its exit hook (`settledAt`, `exitCode`). A signal death runs no exit hook, so an unsettled receipt plus a log that stopped growing is exactly how a killed detach is identified; there is no watchdog and nothing resumes it. The local receipt reuses the #52 layer instead of introducing a second record: `mode: "local"` carries `logPath`, no origin and no run id, and `pir receipts show` prints local follow-up commands instead of the remote jobs lane.
 
 Jobs are process-local delivery records. They keep 2,000 recent log lines,
 cap retained output at 32 MiB, and retain the latest 100 settled jobs. A restart
@@ -356,6 +376,43 @@ paths; a leading `**/` matches at any depth (root included) and a whole-segment
 `*` matches one directory level. Each provides separate reviewer and
 verifier guidance for change and audit modes. A pack without audit variants
 can be detected for an audit but its change guidance is withheld.
+
+## Project rules
+
+Project rules are the declared counterpart to the learned memory pack: a rule
+file pairs a path glob with review guidance, so a repository can carry review
+conventions that are versioned with the code and applied only where they
+belong. Three layers are loaded independently, highest priority first: the
+`--rule <path>` flag, the repository file `<root>/.pir/rule.json`, and the
+global `<config-dir>/rule.json` (default `~/.pir/rule.json`). For each
+reviewed, non-excluded changed path the first matching rule wins — layers in
+priority order, declaration order within a layer — which makes matching a
+deterministic code decision rather than an instruction for the model to sort
+out. Each layer may also carry its own `include`/`exclude` globs (exclude
+wins), applied before rule matching.
+
+A rule has a `path` glob and exactly one of inline `guidance` or a
+repo-relative `guidanceFile` (`.md`, `.markdown` or `.txt`, at most 64 KiB,
+resolved through `realpath` and required to stay inside the repository). The
+reference is untrusted repository content: absolute paths, `..`, symlink
+escapes, unknown extensions and oversized files fail the run before any
+session exists. `mergeBuiltin` defaults to `true`; `false` makes the project
+rule authoritative for its paths and withholds the built-in language-pack
+guidance from reviewer sessions for that run (verifiers keep theirs), because a pack is rendered once for the whole session.
+The winning rules render into one `PROJECT RULES` section placed after the
+process rules and before the built-in language guidance and the memory pack,
+with an explicit evidence-not-instructions preamble. Groups are sorted by
+glob and file lists are sorted, so the section is byte-stable. A canonical
+hash of the effective rules (canonicalized text, globs, include/exclude and
+`mergeBuiltin`; never absolute paths) is recorded in `run.json` under
+`projectRules`, and `pir config show` prints the loaded layers and rules.
+`pir rules check <path>` answers the per-path question — winning layer and
+glob, `mergeBuiltin`, canonical guidance and rules hash, or the gate that
+stopped each layer — from the same matcher the prompt uses
+(`matchProjectRule`); it opens no project database and starts no session
+(ADR 0019). Rules are allowed in change-mode `find` only: audit has no diff to
+scope them, and `--rule` is a local path, so remote mode rejects it while the
+repository and global layers keep working from the bundle.
 
 ## Related decisions
 

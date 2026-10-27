@@ -41,10 +41,20 @@ export function renderFinding(finding: FindingView): string {
     `  category: ${finding.category}${finding.entityKey ? ` | entity: ${finding.entityKey}` : ""}${finding.featureKey ? ` | feature: ${finding.featureKey}` : ""}`,
   ];
   for (const anchor of finding.anchors.slice(0, 3)) {
-    lines.push(`  at: ${anchor.path}:${anchor.startLine}${anchor.endLine ? `-${anchor.endLine}` : ""}`);
+    // ADR-0005: `lineCorrected` means "the excerpt match decided the lines", not
+    // "the lines moved". It is set for every uniquely located excerpt, including
+    // drift 0, so announce a correction only when the located range differs from
+    // the model's own numbers (dogfood F-184).
+    const moved = anchor.lineCorrected && anchor.originalStartLine !== undefined
+      && (anchor.originalStartLine !== anchor.startLine || anchor.originalEndLine !== anchor.endLine);
+    const corrected = moved
+      ? ` (line corrected from ${anchor.originalStartLine}${anchor.originalEndLine === undefined ? "" : `-${anchor.originalEndLine}`})`
+      : "";
+    lines.push(`  at: ${anchor.path}:${anchor.startLine}${anchor.endLine ? `-${anchor.endLine}` : ""}${corrected}`);
   }
   if (finding.verifierRationale) {
-    lines.push(`  verifier: ${finding.verifierRationale.slice(0, 300)}`);
+    const ground = finding.rejectionGround ? ` [ground: ${finding.rejectionGround}]` : "";
+    lines.push(`  verifier: ${finding.verifierRationale.slice(0, 300)}${ground}`);
   }
   for (const match of finding.memoryMatches.slice(0, 3)) {
     const m = match as { decision?: string; stillApplies?: boolean; source?: string };

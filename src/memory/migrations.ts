@@ -291,11 +291,21 @@ export const MIGRATIONS: Migration[] = [
   {
     version: 7,
     statements: [
-      // Verifier confidence (roadmap Q4): the verifier's 0–1 self-assessment
+      // Verifier confidence (ADR 0003): the verifier's 0–1 self-assessment
       // survives applyVerdict and persists with the finding, so reporting can
       // bucket on it (--min-confidence). Nullable: rows persisted before this
       // column have no confidence on record.
       `ALTER TABLE findings ADD COLUMN confidence REAL`,
+    ],
+  },
+  {
+    version: 8,
+    statements: [
+      // Verifier rejection ground (ADR 0008): the audited reason a
+      // change-mode rejection gave, so a false-kill cluster can be traced to a
+      // ground instead of a rationale archive. Nullable: kept/uncertain rows,
+      // audit rows and rows persisted before this column have no ground.
+      `ALTER TABLE findings ADD COLUMN rejection_ground TEXT`,
     ],
   },
 ];

@@ -1,6 +1,8 @@
 import { Type } from "typebox";
 import { buildIdentity } from "../findings/identity.js";
-import { FINDING_CATEGORIES, type CandidateFinding, type DecisionAssessment, type VerifierResult } from "../findings/types.js";
+import { FINDING_CATEGORIES, REJECTION_GROUNDS, type AnchorLineCorrection, type CandidateFinding, type DecisionAssessment, type RejectionGround, type VerifierResult } from "../findings/types.js";
+import { locateSnippetExcerpt } from "../findings/snippet-locate.js";
+import { duplicateMatch, type DuplicateMatch } from "../findings/dedup.js";
 import type { ReviewTool } from "../agents/types.js";
 import { matchIssueHistory } from "../memory/retrieval.js";
 import { readReviewFile, safeResolve, type ToolContext } from "./context.js";
@@ -31,13 +33,82 @@ function member<T extends string>(value: unknown, values: readonly T[], label: s
 
 const errorOutput = (error: unknown) => ({ text: `ERROR: ${error instanceof Error ? error.message : String(error)}` });
 
-export interface CandidateCollector { candidates: CandidateFinding[] }
+/** An anchor excerpt is a snippet, not a paste of the whole file. */
+const MAX_ANCHOR_EXCERPT = 4000;
+
+export interface CandidateCollector {
+  candidates: CandidateFinding[];
+  /**
+   * Prior-round knowledge the duplicate hint compares against (ADR-0014).
+   * Read-only by contract: the tool never mutates it, never adds this round's
+   * output to it, and never runs dedup against it. Absent means "no earlier
+   * rounds", which is also the case for every angle session of round 1.
+   */
+  known?: readonly CandidateFinding[];
+  /**
+   * Optional tap for the `line-corrected` observability event (ADR 0005).
+   * Fired once per anchor whose excerpt located locally, and only after the
+   * whole candidate validated — a rejected submission never reports one.
+   */
+  onLineCorrected?: (correction: AnchorLineCorrection) => void;
+}
+
+interface DuplicateOverlap {
+  of: CandidateFinding;
+  match: DuplicateMatch;
+}
+
+/**
+ * Read-only overlap lookup for the `record_candidate` duplicate hint
+ * (ADR-0014). The baseline is prior-round knowledge plus this session's own
+ * earlier candidates, in that order — the same order dedup scans. A parallel
+ * angle session's same-round candidates are deliberately invisible here: the
+ * supervisor's cross-angle pass stays the only place those collapse.
+ *
+ * The predicate is the exact rule dedup applies against prior-round knowledge,
+ * so the hint can never promise a different outcome than dedup produces.
+ */
+function findOverlap(candidate: CandidateFinding, collector: CandidateCollector): DuplicateOverlap | undefined {
+  for (const existing of collector.known ?? []) {
+    const match = duplicateMatch(candidate, existing);
+    if (match) return { of: existing, match };
+  }
+  for (const existing of collector.candidates) {
+    const match = duplicateMatch(candidate, existing);
+    if (match) return { of: existing, match };
+  }
+  return undefined;
+}
+
+/**
+ * Visibility-only wording (ADR-0014): the candidate was already accepted and
+ * stored, and the sentence says exactly that. It never claims the finding will
+ * not count, never asks for fewer findings, and never blocks the submission —
+ * a materially different defect is still welcome as long as the difference is
+ * stated. Severity stays the model's own call; a more severe occurrence still
+ * survives dedup as before.
+ */
+function duplicateNotice(overlap: DuplicateOverlap): string {
+  const id = overlap.of.displayId ?? "an earlier candidate";
+  const criterion = overlap.match === "fingerprint" ? "fingerprint" : "claim similarity";
+  return `Accepted and recorded for deduplication. It overlaps an existing finding (${id}) by ${criterion}. If it is materially different, state the difference in the claim/trigger. Do not resubmit the same finding.`;
+}
+
+/** Anchor location resolution: the pinned path plus the range to use. */
+interface ResolvedLocation {
+  path: string | undefined;
+  startLine?: number;
+  endLine?: number;
+  excerpt?: string;
+  /** Present when an excerpt's unique match overrode the model's range. */
+  correction?: { originalStartLine: number; originalEndLine?: number };
+}
 
 export function createRecordCandidateTool(ctx: ToolContext, collector: CandidateCollector, round: number): ReviewTool {
   let seq = 0;
   return {
     name: "record_candidate",
-    description: "Record one distinct, grounded defect. Severity is impact, not confidence. Locations use pinned head lines; ONLY entirely deleted files fall back to merge-base lines, documented in evidence. Unchanged relevant files are valid anchors.",
+    description: "Record one distinct, grounded defect. Severity is impact, not confidence. Locations use pinned head lines; ONLY entirely deleted files fall back to merge-base lines, documented in evidence. Unchanged relevant files are valid anchors. An optional anchor excerpt (a few verbatim lines from the pinned file) re-locates that anchor locally and overrides its line numbers; an excerpt that does not match exactly once is rejected.",
     promptSnippet: "record_candidate: submit a grounded candidate finding",
     parameters: Type.Object({
       title: Type.String({ minLength: 1, maxLength: 80 }),
@@ -46,6 +117,7 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
       featureKey: Type.Optional(nonemptySchema()), entityKey: Type.Optional(nonemptySchema()),
       anchors: Type.Array(Type.Object({
         path: nonemptySchema(), startLine: Type.Integer({ minimum: 1 }), endLine: Type.Optional(Type.Integer({ minimum: 1 })),
+        excerpt: Type.Optional(nonemptySchema()),
       }), { minItems: 1 }),
       evidence: Type.Array(Type.Object({
         kind: enumSchema(EVIDENCE_KINDS), path: Type.Optional(nonemptySchema()),
@@ -55,6 +127,9 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
     }),
     async execute(params) {
       try {
+        // Assigned before validation so an excerpt correction can be reported
+        // under the id this candidate will get; seq only advances on success.
+        const displayId = `F-${round}${String(seq + 1).padStart(2, "0")}`;
         const title = text(params.title, "title", 80);
         const claim = text(params.claim, "claim");
         const trigger = text(params.trigger, "trigger");
@@ -66,10 +141,10 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
         if (!Array.isArray(params.evidence) || !params.evidence.length) throw new Error("evidence must be a nonempty array.");
         const snapshots = new Map<string, Awaited<ReturnType<typeof readReviewFile>>>();
         const deleted = new Map<string, string>();
-        async function validateLocation(location: Record<string, unknown>, required: boolean): Promise<string | undefined> {
+        async function validateLocation(location: Record<string, unknown>, required: boolean, locateExcerpt = false): Promise<ResolvedLocation> {
           if (location.path === undefined) {
             if (required || location.startLine !== undefined || location.endLine !== undefined) throw new Error("A repository-relative path is required for line locations.");
-            return undefined;
+            return { path: undefined };
           }
           const rel = text(location.path, "path", 4096);
           if (rel !== location.path || rel.includes("\\") || !safeResolve(ctx.repoRoot, rel)) throw new Error("path must be repository-relative without traversal.");
@@ -85,22 +160,60 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           }
           const start = location.startLine;
           const end = location.endLine;
+          const excerpt = locateExcerpt && location.excerpt !== undefined ? text(location.excerpt, "excerpt", MAX_ANCHOR_EXCERPT) : undefined;
           if (required || start !== undefined || end !== undefined) {
             if (!Number.isSafeInteger(start) || (start as number) < 1 || (end !== undefined && (!Number.isSafeInteger(end) || (end as number) < (start as number)))) {
               throw new Error("Line ranges require positive integer startLine and endLine >= startLine.");
+            }
+            if (excerpt !== undefined) {
+              // B2: the excerpt decides the range. The model's numbers are a
+              // hint (kept as original*), so they are deliberately NOT
+              // bounds-checked against the file: drift may push them past EOF.
+              const match = locateSnippetExcerpt(snapshot.content!, excerpt);
+              if (match.kind === "none") throw new Error(`Anchor excerpt was not found in ${rel} at ${snapshot.revision}: copy the snippet verbatim from the pinned file, or omit excerpt to use the supplied line numbers.`);
+              if (match.kind === "ambiguous") throw new Error(`Anchor excerpt matches ${match.occurrences} locations in ${rel} at ${snapshot.revision}: include more surrounding lines so the snippet is unique, or omit excerpt to use the supplied line numbers.`);
+              if (snapshot.revision === "merge-base") deleted.set(snapshot.path, snapshot.commit);
+              return {
+                path: snapshot.path,
+                startLine: match.startLine,
+                ...(match.endLine === match.startLine ? {} : { endLine: match.endLine }),
+                excerpt,
+                correction: { originalStartLine: start as number, ...(end === undefined ? {} : { originalEndLine: end as number }) },
+              };
             }
             const content = snapshot.content!;
             const count = content.length === 0 ? 0 : content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
             if ((end ?? start) as number > count) throw new Error(`Line range exceeds ${snapshot.revision} file length (${count}): ${rel}`);
           }
           if (snapshot.revision === "merge-base") deleted.set(snapshot.path, snapshot.commit);
-          return snapshot.path;
+          return { path: snapshot.path, startLine: start as number | undefined, endLine: end as number | undefined, ...(excerpt === undefined ? {} : { excerpt }) };
         }
         const anchors: CandidateFinding["anchors"] = [];
+        const corrections: AnchorLineCorrection[] = [];
         for (const raw of params.anchors) {
           if (!object(raw)) throw new Error("Each anchor must be an object.");
-          const path = (await validateLocation(raw, true))!;
-          anchors.push({ path, startLine: raw.startLine as number, ...(raw.endLine === undefined ? {} : { endLine: raw.endLine as number }) });
+          const resolved = await validateLocation(raw, true, true);
+          anchors.push({
+            path: resolved.path!,
+            startLine: resolved.startLine!,
+            ...(resolved.endLine === undefined ? {} : { endLine: resolved.endLine }),
+            ...(resolved.excerpt === undefined ? {} : { excerpt: resolved.excerpt }),
+            ...(resolved.correction === undefined ? {} : {
+              lineCorrected: true,
+              originalStartLine: resolved.correction.originalStartLine,
+              ...(resolved.correction.originalEndLine === undefined ? {} : { originalEndLine: resolved.correction.originalEndLine }),
+            }),
+          });
+          if (resolved.correction) {
+            corrections.push({
+              displayId,
+              path: resolved.path!,
+              originalStartLine: resolved.correction.originalStartLine,
+              ...(resolved.correction.originalEndLine === undefined ? {} : { originalEndLine: resolved.correction.originalEndLine }),
+              startLine: resolved.startLine!,
+              ...(resolved.endLine === undefined ? {} : { endLine: resolved.endLine }),
+            });
+          }
         }
         const evidence: CandidateFinding["evidence"] = [];
         for (const raw of params.evidence) {
@@ -109,20 +222,29 @@ export function createRecordCandidateTool(ctx: ToolContext, collector: Candidate
           const excerpt = raw.excerpt === undefined ? undefined : text(raw.excerpt, "evidence.excerpt");
           const description = raw.description === undefined ? undefined : text(raw.description, "evidence.description");
           if (!excerpt && !description) throw new Error("Evidence requires a useful excerpt or description.");
-          const path = await validateLocation(raw, false);
+          const { path } = await validateLocation(raw, false);
           evidence.push({ kind, path, excerpt, description, startLine: raw.startLine as number | undefined, endLine: raw.endLine as number | undefined });
         }
         // SourceAnchor stays compatible: an explicit evidence note records the
         // only permitted old-side fallback, for files entirely absent at head.
         for (const [path, commit] of deleted) evidence.push({ kind: "diff", path, description: `Entirely deleted file: locations for ${path} use merge-base ${commit}, not head.` });
-        const displayId = `F-${round}${String(seq + 1).padStart(2, "0")}`;
         const candidate: CandidateFinding = {
           displayId, title, claim, trigger, category, severity, featureKey, entityKey, anchors, evidence, round,
           identity: buildIdentity({ featureKey, entityKey, category, claim, trigger }),
         };
+        // ADR-0014: looked up before the push so the candidate never matches
+        // itself, and only after full validation so a rejected submission
+        // reports no hint and leaves the collector untouched.
+        const overlap = findOverlap(candidate, collector);
         collector.candidates.push(candidate);
+        for (const correction of corrections) collector.onLineCorrected?.(correction);
         seq += 1;
-        return { text: `Recorded candidate ${displayId}: ${title}` };
+        const recorded = `Recorded candidate ${displayId}: ${title}`;
+        if (!overlap) return { text: recorded };
+        return {
+          text: `${recorded}\n${duplicateNotice(overlap)}`,
+          ...(overlap.of.displayId === undefined ? {} : { duplicateOf: overlap.of.displayId }),
+        };
       } catch (error) { return errorOutput(error); }
     },
   };
@@ -196,7 +318,29 @@ function citesReadPath(rationale: string, readPath: string): boolean {
   return false;
 }
 
-export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence): ReviewTool {
+/**
+ * Normalize a rejected verdict's ground (ADR 0008). The enum is the model's
+ * vocabulary, not a gate: an unknown or differently-spelled value collapses to
+ * `other` so a rejection is never lost to a vocabulary mismatch. A *missing*
+ * ground on a change-mode rejection is still a tool-boundary error, which the
+ * model can correct in the same session.
+ */
+export function normalizeRejectionGround(value: unknown): RejectionGround {
+  if (typeof value !== "string") return "other";
+  const normalized = value.trim().toLowerCase();
+  return (REJECTION_GROUNDS as readonly string[]).includes(normalized) ? (normalized as RejectionGround) : "other";
+}
+
+export interface SubmitVerdictOptions {
+  /**
+   * Change mode only: a rejection must name its ground. Audit mode has no
+   * change attribution, so half the enum (pre-existing / not-introduced) is
+   * meaningless there and the requirement stays off.
+   */
+  requireRejectionGround?: boolean;
+}
+
+export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?: string[], evidence?: () => VerifierEvidence, options: SubmitVerdictOptions = {}): ReviewTool {
   const known = new Set(matchedIds ?? []);
   return {
     name: "submit_verdict",
@@ -208,6 +352,7 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
       priorDecisionStillApplies: Type.Optional(Type.Boolean({ description: "Legacy field: only valid for exactly one matched decision." })),
       decisionAssessments: Type.Optional(Type.Array(Type.Object({ memoryId: nonemptySchema(), stillApplies: Type.Boolean(), rationale: Type.Optional(nonemptySchema()) }))),
       codeFeedback: Type.Optional(Type.String({ minLength: 1, maxLength: 2000, description: "Code-only follow-up, never historical decision text or memory rationale." })),
+      rejectionGround: Type.Optional(Type.String({ description: "Required when verdict is rejected: one of no-such-code, contradicted-by-code, pre-existing, guarded, speculative, not-introduced-by-change, other. An unrecognized value is recorded as other." })),
       uncertaintyReason: Type.Optional(enumSchema(UNCERTAINTY_REASONS)),
     }),
     async execute(params) {
@@ -233,6 +378,16 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
         const codeFeedback = params.codeFeedback === undefined ? undefined : text(params.codeFeedback, "codeFeedback", 2000);
         const uncertaintyReason = params.uncertaintyReason === undefined ? undefined : member(params.uncertaintyReason, UNCERTAINTY_REASONS, "uncertaintyReason");
         if (uncertaintyReason && verdict !== "uncertain") throw new Error("uncertaintyReason requires an uncertain verdict.");
+        // Roadmap B4: a rejection is only useful if its reason survives the
+        // session. Required in change mode, normalized (never rejected) on
+        // vocabulary drift, ignored for non-rejected verdicts.
+        if (params.rejectionGround !== undefined && typeof params.rejectionGround !== "string") throw new Error("rejectionGround must be a string.");
+        const rejectionGroundText = typeof params.rejectionGround === "string" ? params.rejectionGround.trim() : undefined;
+        if (verdict === "rejected" && rejectionGroundText === "") throw new Error("rejectionGround must be nonempty when provided.");
+        if (verdict === "rejected" && rejectionGroundText === undefined && options.requireRejectionGround) {
+          throw new Error(`rejectionGround is required when verdict is rejected: name the ground that disproves the candidate (${REJECTION_GROUNDS.join(", ")}).`);
+        }
+        const rejectionGround = verdict === "rejected" && rejectionGroundText !== undefined ? normalizeRejectionGround(rejectionGroundText) : undefined;
         let decisionAssessments: DecisionAssessment[] | undefined;
         if (params.decisionAssessments !== undefined) {
           if (!Array.isArray(params.decisionAssessments)) throw new Error("decisionAssessments must be an array.");
@@ -261,6 +416,7 @@ export function createSubmitVerdictTool(collector: VerdictCollector, matchedIds?
           ...(legacy === undefined ? {} : { priorDecisionStillApplies: legacy as boolean }),
           ...(decisionAssessments === undefined ? {} : { decisionAssessments }),
           ...(codeFeedback === undefined ? {} : { codeFeedback }),
+          ...(rejectionGround === undefined ? {} : { rejectionGround }),
           ...(verdict === "uncertain" ? { uncertaintyReason: uncertaintyReason ?? "missing-evidence" } : {}),
         };
         return { text: "Verdict recorded.", terminate: true };
