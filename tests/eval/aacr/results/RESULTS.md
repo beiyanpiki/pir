@@ -83,7 +83,6 @@ The full corpus replaced the 50-PR subset as the baseline because the user reque
 - **M0 fixture normalization:** a few upstream comments carry an inverted line range (`to_line < from_line`); `run-m0.js` clamps `to_line` to `from_line` when writing the verifier task. The comment text, buckets and scoring are unchanged, and the row stays in the 2,012 denominator.
 - **Judge error propagation:** the local judge clone raises on persistent provider 429/quota errors instead of swallowing them as no-match, so a quota-hit round fails visibly and is retried rather than scored as zero.
 - **Judge semaphore lifecycle:** the module-level `asyncio.Semaphore` is recreated when the running event loop changes; upstream `pipeline.py` calls `asyncio.run` per evaluation round, so the pristine semaphore is bound to round 1's closed loop and round 2 raises "bound to a different event loop". The patch fixes only that lifecycle bug.
-- **Judge view resumability:** `run-aacr.js` preserves a judge view whose real 3-round average already succeeded and skips it on the next invocation, so a quota window that fits one view accumulates instead of redoing the other.
 
 The judge framework pin (`ee9d7fe`), judge model (`glm-5.3`), 3-round averaging, prompts and scoring code are unchanged; the patches are environment/lifecycle fixes only.
 
