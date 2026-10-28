@@ -47,7 +47,8 @@ The main boundaries are:
 | `src/server` | HTTPS execution, jobs, read-only web access, live observation |
 | `src/observability` | run events and manifests |
 | `src/extension` | Pi commands and their lifecycle |
-| `web` | the React run explorer, built into `dist/web` |
+| `web` | the legacy React run explorer, built into `dist/web` |
+| `web-next` | the Ant Design X review workspace, built into `dist/web-next` and mounted at `/next` |
 
 ## Two review targets
 
@@ -336,7 +337,10 @@ metadata, and usage. They are not raw provider requests; compaction can replace
 earlier messages and thinking appears only when the provider/SDK supplies it.
 
 The optional web explorer uses `PIR_WEB_UI_TOKEN`, separate from executor
-authentication. It is read-only and uses SQLite WAL readers. Without a viewer
+authentication. It is read-only and uses SQLite WAL readers. Two builds share
+that API and credential: the legacy explorer at `/` (`dist/web`) and the Ant
+Design X workspace at `/next` (`dist/web-next`), with
+`PIR_WEB_NEXT_ROOT` overriding the latter's static directory. Without a viewer
 token it opens only on a loopback bind. Enabling it sets `PIR_TRANSCRIPTS=1`
 only if that variable is unset. Compose passes an empty value by default,
 so recording there requires an explicit `PIR_TRANSCRIPTS=1`.

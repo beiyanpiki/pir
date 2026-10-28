@@ -42,7 +42,7 @@ PIR_STATE_ROOT=/path/to/state node ../dist/cli/cli.js serve --host 127.0.0.1 --p
 npm run dev -w web-next
 ```
 
-Production output is `dist/web-next`; `npm run build` from the repository root builds both workspaces, and `pir serve` mounts this build at `/next/`.
+Production output is `dist/web-next`; `npm run build` from the repository root builds both workspaces, and `pir serve` mounts this build at `/next/`. Set `PIR_WEB_NEXT_ROOT` to serve a different built directory.
 
 ## Browser regressions
 
