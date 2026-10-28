@@ -1,13 +1,12 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath, URL } from "node:url";
 
-// The SPA builds to the pir package's dist/web, which `pir serve --web`
-// serves statically; dev mode proxies the API to a local serve instance.
-// AI Elements / shadcn components resolve "@/..." via the alias below.
+// The review workspace is built into the pir package's dist/web, which
+// `pir serve --web` serves statically; dev mode proxies the API to a local
+// serve instance.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -17,6 +16,7 @@ export default defineConfig({
     outDir: "../dist/web",
     emptyOutDir: true,
     sourcemap: false,
+    chunkSizeWarningLimit: 2500,
   },
   server: {
     port: 5173,

@@ -42,7 +42,7 @@ test("run filters and search live in the URL and cross-project navigation resets
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
 
   await page.getByRole("link", { name: "Project A" }).first().click();
-  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectA}$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}$`));
 
   await page.locator(".ant-segmented-item").filter({ hasText: "Completed" }).click();
   await expect(page).toHaveURL(/status=completed/);
@@ -61,9 +61,9 @@ test("run filters and search live in the URL and cross-project navigation resets
 
   // Cross-project navigation must not carry Project A's offset into Project B.
   await page.goto(`projects/${projectA}?offset=50`);
-  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectA}`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}`));
   await page.locator(".pir-sider-project").filter({ hasText: "Project B" }).first().click();
-  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectB}$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectB}$`));
   await expect.poll(() => [...requests].reverse().find((url) => url.pathname.includes(projectB))?.searchParams.get("offset")).toBe("0");
 });
 test("mobile project cards are real links and the run filters fit the viewport", async ({ page }) => {
@@ -73,7 +73,7 @@ test("mobile project cards are real links and the run filters fit the viewport",
   const projectLink = page.getByRole("link", { name: "Project A" }).first();
   await expect(projectLink).toBeVisible();
   await projectLink.click();
-  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectA}$`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}$`));
   // The mobile status control is a select, so the five-status segmented row that
   // overflowed 390px in the first cut is not rendered.
   await expect(page.getByText("All runs", { exact: true })).toBeVisible();

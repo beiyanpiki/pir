@@ -1,4 +1,4 @@
-// Shared API fixtures for the /next workspace browser suite.
+// Shared API fixtures for the review workspace browser suite.
 
 export const projectA = "a".repeat(64);
 export const projectB = "b".repeat(64);

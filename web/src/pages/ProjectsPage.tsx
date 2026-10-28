@@ -1,31 +1,64 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Activity, ArrowUpRight, Boxes, ChevronLeft, ChevronRight, FolderGit2, Gauge, ShieldAlert } from "lucide-react";
-import { apiGet } from "../api";
-import { fmtCount, relTime } from "../format";
-import { useApi } from "../hooks";
-import { StatusBadge } from "../components/badges";
-import { PageError, RefreshButton, SearchField } from "../components/page-controls";
-import type { ActiveRunView, ProjectSummary } from "../types";
+import {
+  Button,
+  Card,
+  Empty,
+  Grid,
+  Input,
+  List,
+  Segmented,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Tooltip,
+  Typography,
+} from "antd";
+import { Welcome } from "@ant-design/x";
+import type { ColumnsType } from "antd/es/table";
+import {
+  ArrowRightOutlined,
+  FolderOpenOutlined,
+  ReloadOutlined,
+  SafetyCertificateOutlined,
+  ThunderboltOutlined,
+} from "@ant-design/icons";
+import { apiGet } from "../lib/api";
+import { fmtCount, fmtTime, relTime, shortSha } from "../lib/format";
+import { useApi } from "../lib/hooks";
+import type { ActiveRunView, ProjectSummary } from "../lib/types";
+import { RunStatusTag } from "../components/StatusTags";
+import { PageError, PageLoading, PageSkeleton } from "../components/PageState";
+import { PageHeader } from "../components/PageHeader";
 
-interface Overview { projects: ProjectSummary[]; active: ActiveRunView[] }
+interface Overview {
+  projects: ProjectSummary[];
+  active: ActiveRunView[];
+}
+
 type ProjectFilter = "all" | "reviewed" | "findings";
-const PAGE_SIZE = 50;
 
 export function ProjectsPage() {
+  const navigate = useNavigate();
+  const screens = Grid.useBreakpoint();
+  const mobile = screens.md === false;
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ProjectFilter>("all");
-  const [sort, setSort] = useState("recent");
-  const [page, setPage] = useState(0);
-  const navigate = useNavigate();
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), []);
-  const projects = overview.data?.projects ?? [];
-  const active = overview.data?.active ?? [];
 
   useEffect(() => {
     const timer = setInterval(overview.reload, 15_000);
     return () => clearInterval(timer);
   }, [overview.reload]);
+
+  const projects = overview.data?.projects ?? [];
+  const active = overview.data?.active ?? [];
+  const activeProjects = useMemo(() => new Set(active.map((run) => run.projectId)), [active]);
+  const totals = useMemo(() => ({
+    runs: projects.reduce((sum, project) => sum + project.runsTotal, 0),
+    findings: projects.reduce((sum, project) => sum + project.openFindings, 0),
+  }), [projects]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -33,90 +66,189 @@ export function ProjectsPage() {
       (filter !== "reviewed" || project.runsTotal > 0) &&
       (filter !== "findings" || project.openFindings > 0) &&
       (!needle || [project.name, project.remote ?? "", project.projectId].some((value) => value.toLowerCase().includes(needle))),
-    ).sort((a, b) => {
-      if (sort === "name") return a.name.localeCompare(b.name);
-      if (sort === "findings") return b.openFindings - a.openFindings || a.name.localeCompare(b.name);
-      return (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0) || a.name.localeCompare(b.name);
-    });
-  }, [projects, query, filter, sort]);
-  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pages - 1);
-  const visible = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
-  const activeProjects = new Set(active.map((run) => run.projectId));
-  const totals = useMemo(() => ({
-    runs: projects.reduce((sum, project) => sum + project.runsTotal, 0),
-    findings: projects.reduce((sum, project) => sum + project.openFindings, 0),
-  }), [projects]);
-  const resetFilters = (): void => { setQuery(""); setFilter("all"); setPage(0); };
+    ).sort((a, b) => (b.lastRunAt ?? 0) - (a.lastRunAt ?? 0) || a.name.localeCompare(b.name));
+  }, [projects, query, filter]);
+
+  const columns: ColumnsType<ProjectSummary> = [
+    {
+      title: "Project",
+      dataIndex: "name",
+      key: "name",
+      render: (_value, project) => (
+        <Space size={10} align="start">
+          <FolderOpenOutlined style={{ fontSize: 18, marginTop: 3, color: "var(--pir-accent)" }} />
+          <div style={{ minWidth: 0 }}>
+            <Link to={`/projects/${project.projectId}`} onClick={(event) => event.stopPropagation()}>
+              <Typography.Text strong>{project.name}</Typography.Text>
+            </Link>
+            <div className="pir-muted pir-break" style={{ fontSize: 12 }}>{project.remote ?? project.projectId}</div>
+          </div>
+        </Space>
+      ),
+      sorter: (a, b) => a.name.localeCompare(b.name),
+    },
+    {
+      title: "Last review",
+      key: "lastRun",
+      width: 170,
+      render: (_value, project) => {
+        const status = activeProjects.has(project.projectId) ? "running" : project.lastRunStatus === "running" ? "interrupted" : project.lastRunStatus ?? "unknown";
+        return <Space size={6} wrap><RunStatusTag status={status} />{project.lastRunAt && <span className="pir-muted" style={{ fontSize: 12 }}>{relTime(project.lastRunAt)}</span>}</Space>;
+      },
+      sorter: (a, b) => (a.lastRunAt ?? 0) - (b.lastRunAt ?? 0),
+    },
+    {
+      title: "Runs",
+      dataIndex: "runsTotal",
+      key: "runsTotal",
+      align: "right",
+      width: 90,
+      sorter: (a, b) => a.runsTotal - b.runsTotal,
+    },
+    {
+      title: "Open findings",
+      dataIndex: "openFindings",
+      key: "openFindings",
+      align: "right",
+      width: 120,
+      render: (value: number) => <Tag color={value > 0 ? "warning" : "default"}>{fmtCount(value)}</Tag>,
+      sorter: (a, b) => a.openFindings - b.openFindings,
+    },
+    {
+      title: "Last activity",
+      key: "lastAt",
+      width: 180,
+      render: (_value, project) => (
+        <Tooltip title={project.lastRunAt ? fmtTime(project.lastRunAt) : "No review runs"}>
+          <span className="pir-muted">{project.lastRunAt ? relTime(project.lastRunAt) : "Never"}</span>
+        </Tooltip>
+      ),
+    },
+    {
+      title: "",
+      key: "open",
+      width: 54,
+      render: (_value, project) => <Link to={`/projects/${project.projectId}`} onClick={(event) => event.stopPropagation()} aria-label={`Open ${project.name}`}><ArrowRightOutlined /></Link>,
+    },
+  ];
 
   return (
-    <div className="page-shell">
-      <header className="page-header">
-        <div><div className="page-eyebrow">Workspace</div><h1>Projects <span className="heading-count">{projects.length}</span></h1></div>
-        <div className="page-header-actions">
-          <SearchField value={query} onChange={(value) => { setQuery(value); setPage(0); }} label="Search projects" />
-          <RefreshButton loading={overview.loading} onClick={overview.reload} />
-        </div>
-      </header>
+    <div>
+      <PageHeader
+        eyebrow="Workspace"
+        title="Projects"
+        subtitle="Read-only inventory of repositories with review state."
+        actions={<Button icon={<ReloadOutlined />} loading={overview.loading} onClick={overview.reload}>Refresh</Button>}
+      />
 
-      <section className="overview-strip" aria-label="Review totals">
-        <div className="overview-stat"><span className="overview-stat-icon"><Boxes size={18} /></span><span><small>Projects</small><strong>{fmtCount(projects.length)}</strong></span></div>
-        <div className="overview-stat"><span className="overview-stat-icon is-blue"><Gauge size={18} /></span><span><small>Review runs</small><strong>{fmtCount(totals.runs)}</strong></span></div>
-        <div className="overview-stat"><span className="overview-stat-icon is-warning"><ShieldAlert size={18} /></span><span><small>Open findings</small><strong>{fmtCount(totals.findings)}</strong></span></div>
-        <div className="overview-stat"><span className="overview-stat-icon is-live"><Activity size={18} /></span><span><small>Active now</small><strong>{fmtCount(active.length)}</strong></span></div>
-      </section>
+      <div className="pir-metrics">
+        <Card size="small" className="pir-metric-card"><Statistic title="Projects" value={projects.length} /></Card>
+        <Card size="small" className="pir-metric-card"><Statistic title="Review runs" value={totals.runs} /></Card>
+        <Card size="small" className="pir-metric-card"><Statistic title="Open findings" value={totals.findings} styles={{ content: { color: totals.findings > 0 ? "var(--pir-warning)" : undefined } }} /></Card>
+        <Card size="small" className="pir-metric-card"><Statistic title="Active now" value={active.length} prefix={active.length > 0 ? <ThunderboltOutlined /> : undefined} /></Card>
+      </div>
 
       {active.length > 0 && (
-        <section className="active-strip" aria-label="Active reviews">
-          <div className="section-label"><Activity size={15} /> Active reviews</div>
-          <div className="active-run-list">{active.map((run) => (
-            <Link key={run.runId} to={`/runs/${run.projectId}/${run.runId}`} className="active-run-link">
-              <span className="live-dot" /><strong>{projects.find((project) => project.projectId === run.projectId)?.name ?? run.projectId.slice(0, 12)}</strong>
-              <span className="active-run-meta">{run.mode} · {run.sessions} sessions · {relTime(run.startedAt)}</span><ArrowUpRight size={15} />
-            </Link>
-          ))}</div>
-        </section>
+        <Card size="small" style={{ marginBottom: 18 }} title={<span><span className="pir-live-dot" /> Active reviews</span>}>
+          <Space orientation="vertical" size={6} style={{ width: "100%" }}>
+            {active.map((run) => (
+              <Button key={run.runId} type="text" style={{ width: "100%", justifyContent: "space-between" }} onClick={() => navigate(`/runs/${run.projectId}/${run.runId}`)}>
+                <Space wrap>
+                  <Typography.Text strong>{projects.find((project) => project.projectId === run.projectId)?.name ?? run.projectId.slice(0, 12)}</Typography.Text>
+                  <Tag>{run.mode}</Tag>
+                  <span className="pir-muted">{run.sessions} sessions · started {relTime(run.startedAt)}</span>
+                  <span className="pir-mono pir-muted">{shortSha(run.head, 10)}</span>
+                </Space>
+                <ArrowRightOutlined />
+              </Button>
+            ))}
+          </Space>
+        </Card>
       )}
 
-      <section className="data-section" aria-label="Project inventory">
-        <div className="run-toolbar">
-          <div className="segmented-control" role="group" aria-label="Filter projects">
-            {([["all", "All projects"], ["reviewed", "With reviews"], ["findings", "Open findings"]] as const).map(([value, label]) => (
-              <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? "is-active" : ""} onClick={() => { setFilter(value); setPage(0); }}>{label}</button>
-            ))}
+      {overview.loading && !overview.data && <PageLoading label="Loading projects…" />}
+      {overview.error && !overview.data && <PageError error={overview.error} status={overview.errorStatus} onRetry={overview.reload} />}
+      {overview.data && projects.length === 0 && (
+        <Welcome
+          icon={<SafetyCertificateOutlined style={{ fontSize: 42, color: "var(--pir-accent)" }} />}
+          title="No review runs yet"
+          description="Projects appear here after a review writes its state. Start one with the pir CLI, then refresh this page."
+          extra={<Button icon={<ReloadOutlined />} loading={overview.loading} onClick={overview.reload}>Refresh</Button>}
+        />
+      )}
+
+      {projects.length > 0 && (
+        <Card size="small" style={{ marginTop: 8 }}>
+          <div className="pir-toolbar" style={{ justifyContent: "space-between" }}>
+            <Segmented
+              value={filter}
+              onChange={(value) => setFilter(value as ProjectFilter)}
+              options={[
+                { label: "All projects", value: "all" },
+                { label: "With reviews", value: "reviewed" },
+                { label: "Open findings", value: "findings" },
+              ]}
+            />
+            <Input.Search
+              allowClear
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search projects"
+              style={{ width: 280, maxWidth: "100%" }}
+            />
           </div>
-          <label className="sort-control"><span>Sort</span><select aria-label="Sort projects" value={sort} onChange={(event) => { setSort(event.target.value); setPage(0); }}><option value="recent">Latest review</option><option value="name">Name</option><option value="findings">Open findings</option></select></label>
-        </div>
-        {overview.loading && !overview.data && <div className="loading-state" role="status"><span className="pir-mini-spinner" /> Loading projects…</div>}
-        {overview.error && <PageError error={overview.error} retry={overview.reload} />}
-        {!overview.loading && !overview.error && filtered.length === 0 && (
-          <div className="empty-state"><FolderGit2 size={26} /><strong>{projects.length === 0 ? "No projects yet" : "No matching projects"}</strong>
-            {(query || filter !== "all") && <button className="text-command" type="button" onClick={resetFilters}>Clear filters</button>}
-          </div>
-        )}
-        {visible.length > 0 && (
-          <div className="table-scroll" aria-busy={overview.loading}>
-            <table className="data-table project-table"><thead><tr><th scope="col">Project</th><th scope="col">Last run</th><th scope="col" className="num">Runs</th><th scope="col" className="num">Open findings</th><th scope="col">Last review</th><th scope="col" aria-label="Open project" /></tr></thead>
-              <tbody>{visible.map((project) => {
-                const status = activeProjects.has(project.projectId) ? "running" : project.lastRunStatus === "running" ? "interrupted" : project.lastRunStatus ?? "idle";
+          {overview.loading && <PageSkeleton />}
+          {!overview.loading && overview.error && <PageError error={overview.error} status={overview.errorStatus} onRetry={overview.reload} />}
+          {!overview.loading && !overview.error && (mobile ? (
+            <List
+              dataSource={filtered}
+              pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
+              locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={projects.length === 0 ? "No projects" : "No matching projects"} /> }}
+              renderItem={(project) => {
+                const status = activeProjects.has(project.projectId) ? "running" : project.lastRunStatus === "running" ? "interrupted" : project.lastRunStatus ?? "unknown";
                 return (
-                  <tr key={project.projectId} className="table-row-clickable" onClick={() => navigate(`/projects/${project.projectId}`)}>
-                    <td className="project-primary"><Link className="project-name-cell table-primary-link" to={`/projects/${project.projectId}`}>
-                      <span className="file-type-icon"><FolderGit2 size={17} /></span><span><strong title={project.name}>{project.name}</strong><small title={project.remote ?? project.projectId}>{project.remote ?? project.projectId.slice(0, 16)}</small></span>
-                    </Link></td>
-                    <td data-label="Last run"><StatusBadge status={status} /></td>
-                    <td className="num" data-label="Runs">{fmtCount(project.runsTotal)}</td>
-                    <td className="num" data-label="Open findings"><span className={project.openFindings > 0 ? "metric-warning" : "metric-muted"}>{fmtCount(project.openFindings)}</span></td>
-                    <td className="muted-cell" data-label="Last review" title={project.lastRunAt ? new Date(project.lastRunAt).toLocaleString() : undefined}>{project.lastRunAt ? relTime(project.lastRunAt) : "Never"}</td>
-                    <td className="row-action"><Link className="icon-button" to={`/projects/${project.projectId}`} aria-label={`Open ${project.name}`} title="Open project"><ArrowUpRight size={16} /></Link></td>
-                  </tr>
+                  <List.Item style={{ paddingInline: 0 }}>
+                    <Card size="small" className="pir-clickable" style={{ width: "100%" }} onClick={() => navigate(`/projects/${project.projectId}`)}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+                        <div style={{ minWidth: 0 }}>
+                          <Space size={6} wrap>
+                            <FolderOpenOutlined style={{ color: "var(--pir-accent)" }} />
+                            <Link className="pir-card-link" to={`/projects/${project.projectId}`} onClick={(event) => event.stopPropagation()}>
+                              <Typography.Text strong ellipsis style={{ maxWidth: 220 }}>{project.name}</Typography.Text>
+                            </Link>
+                          </Space>
+                          <div className="pir-muted pir-break" style={{ marginTop: 2, fontSize: 12 }}>{project.remote ?? project.projectId}</div>
+                        </div>
+                        <Space orientation="vertical" align="end" size={4}>
+                          <RunStatusTag status={status} />
+                          <ArrowRightOutlined />
+                        </Space>
+                      </div>
+                      <Space size={12} wrap style={{ marginTop: 8, fontSize: 12 }}>
+                        <span><strong>{project.runsTotal}</strong> runs</span>
+                        <span><strong style={{ color: project.openFindings > 0 ? "var(--pir-warning)" : undefined }}>{project.openFindings}</strong> open findings</span>
+                        <span className="pir-muted">{project.lastRunAt ? relTime(project.lastRunAt) : "No reviews"}</span>
+                      </Space>
+                    </Card>
+                  </List.Item>
                 );
-              })}</tbody>
-            </table>
-          </div>
-        )}
-        {filtered.length > 0 && <div className="pagination"><span className="pagination-range">{currentPage * PAGE_SIZE + 1}-{Math.min((currentPage + 1) * PAGE_SIZE, filtered.length)} of {filtered.length} projects</span><button className="icon-button" type="button" disabled={currentPage === 0} aria-label="Previous page" title="Previous page" onClick={() => setPage(currentPage - 1)}><ChevronLeft size={17} /></button><span>{currentPage + 1} / {pages}</span><button className="icon-button" type="button" disabled={currentPage + 1 >= pages} aria-label="Next page" title="Next page" onClick={() => setPage(currentPage + 1)}><ChevronRight size={17} /></button></div>}
-      </section>
+              }}
+            />
+          ) : (
+            <Table
+              rowKey="projectId"
+              columns={columns}
+              dataSource={filtered}
+              size="middle"
+              scroll={{ x: 820 }}
+              pagination={{ pageSize: 20, hideOnSinglePage: true, showSizeChanger: false }}
+              rowClassName="pir-clickable"
+              onRow={(project) => ({ onClick: () => navigate(`/projects/${project.projectId}`) })}
+              locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={projects.length === 0 ? "No projects" : "No matching projects"} /> }}
+            />
+          ))}
+        </Card>
+      )}
     </div>
   );
 }

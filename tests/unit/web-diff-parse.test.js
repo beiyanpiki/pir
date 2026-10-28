@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 // Type-stripped import: diff-parse.ts is the pure (React-free) parser for
 // get_change tool results, kept out of diff-view.tsx so this suite can drive
 // the exact response formats the tool emits (see src/tools/review-tools.ts).
-import { parseDiff } from "../../web/src/components/session/diff-parse.ts";
+import { parseDiff } from "../../web/src/lib/diff-parse.ts";
 
 // get_change response shapes, condensed from real reviewer transcripts.
 

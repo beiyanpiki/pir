@@ -5,7 +5,7 @@ import {
   reduceLiveRunProjection,
   mergeSessionIdentities,
   sessionIdentity,
-} from "../../web/src/live-projection.ts";
+} from "../../web/src/lib/live-projection.ts";
 
 const base = { runId: "r1", projectId: "p", seq: 1, ts: 10 };
 
@@ -46,7 +46,7 @@ test("REST calibration enriches live sessions and cannot revive a terminal run",
 });
 
 test("runtime identity reconciliation gives stream and rail the same durable anchor", async () => {
-  const { sessionAnchor, workflowSessions } = await import("../../web/src/live-projection.ts");
+  const { sessionAnchor, workflowSessions } = await import("../../web/src/lib/live-projection.ts");
   const start = { ...base, kind: "session-start", sessionId: "s", sessionKind: "verifier", role: "v", model: null, prompt: "p", displayId: "F-1" };
   const ref = { file: "v.json", sessionId: "s", sessionKind: "verifier", displayId: "F-1", findingIdMap: [{ from: "F-1", to: "F-201" }] };
   const identities = mergeSessionIdentities([start], [ref, ref]);
@@ -62,7 +62,7 @@ test("runtime identity reconciliation gives stream and rail the same durable anc
 });
 
 test("angle collector IDs resolve through runtime IDs to durable findings", async () => {
-  const { workflowSessions } = await import("../../web/src/live-projection.ts");
+  const { workflowSessions } = await import("../../web/src/lib/live-projection.ts");
   const result = workflowSessions(null, [{ file: "reviewer.json", sessionKind: "reviewer", angle: "correctness", idMap: [{ from: "F-1", to: "F-3" }], findingIdMap: [{ from: "F-3", to: "F-99" }] }]);
   assert.deepEqual(result[0].findingMappings, [{ from: "F-1", to: "F-99" }]);
   assert.deepEqual(workflowSessions([{ ...base, kind: "session-start", sessionId: "s", sessionKind: "verifier", role: "v", model: null, prompt: "p", displayId: "F-1" }], [])[0].findingIds, []);
