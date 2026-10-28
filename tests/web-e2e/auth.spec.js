@@ -16,11 +16,11 @@ test("a 401 preserves the full deep link through login", async ({ page }) => {
   });
 
   await page.goto(`projects/${projectA}?status=completed#run-list`);
-  await expect(page).toHaveURL(/\/next\/login/);
+  await expect(page).toHaveURL(/\/login/);
 
   await page.locator('input[type="password"]').fill("secret");
   await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectA}\\?status=completed#run-list`));
+  await expect(page).toHaveURL(new RegExp(`/projects/${projectA}\\?status=completed#run-list`));
   await expect(page.getByRole("heading", { name: "Project A" })).toBeVisible();
   expect(authorized).toBe(true);
 });

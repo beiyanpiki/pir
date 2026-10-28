@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 // Type-stripped import: live-fold.ts is the pure (React-free) half of the
 // live pipeline, kept out of the .tsx component file precisely so this suite
 // can drive the flush/fold contract end to end.
-import { createLiveFold, mergeEvents } from "../../web/src/live-fold.ts";
+import { createLiveFold, mergeEvents } from "../../web/src/lib/live-fold.ts";
 
 // The pipeline under test, mirroring RunDetailPage: SSE events buffer up and
 // every 80ms flush runs mergeEvents(previous, pending), then SessionTimeline's

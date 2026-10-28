@@ -36,7 +36,7 @@ test("the same session file under a different run never reuses the previous tran
   await page.getByRole("button", { name: "Transcript" }).first().click();
   await expect(page.locator(".pir-bubble-list")).toContainText("SESSION BODY RUN A");
 
-  await page.evaluate((url) => { history.pushState({}, "", url); dispatchEvent(new PopStateEvent("popstate")); }, `/next/runs/${projectA}/${runB}?tab=workflow`);
+  await page.evaluate((url) => { history.pushState({}, "", url); dispatchEvent(new PopStateEvent("popstate")); }, `/runs/${projectA}/${runB}?tab=workflow`);
   await expect(page.getByText("reviewer-r1.json").first()).toBeVisible();
   await page.getByRole("button", { name: "Transcript" }).first().click();
   await expect(page.locator(".pir-bubble-list")).toContainText("SESSION BODY RUN B");

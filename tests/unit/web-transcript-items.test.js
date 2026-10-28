@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 // Type-stripped import: transcript-items.ts is the pure (React-free) half of
 // TranscriptView, so this suite drives message flattening without a DOM.
-import { buildItems } from "../../web/src/components/session/transcript-items.ts";
+import { buildItems } from "../../web/src/lib/transcript-items.ts";
 
 const messages = [
   { role: "system", content: "", sections: { preamble: "You are a code reviewer…" } },
