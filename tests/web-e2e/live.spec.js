@@ -81,3 +81,21 @@ test("a failed observation stream does not mark a running review interrupted", a
   await expect(page.getByText("Running", { exact: true })).toBeVisible();
   await expect(page.getByText("In progress", { exact: false }).first()).toBeVisible();
 });
+test("live sessions stream into the workflow timeline", async ({ page }) => {
+  await page.goto(`runs/${projectA}/${liveRun}?tab=workflow`);
+  await expect(page.getByText("No review sessions recorded for this run")).toBeVisible();
+
+  send(0, { kind: "session-start", seq: 1, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", sessionKind: "reviewer", role: "code reviewer", model: "zai/glm-5.3", round: 1, angle: "navigation", prompt: "Review the live diff." });
+  await expect(page.locator(".wf-session")).toHaveCount(1);
+  await expect(page.locator(".wf-prompt")).toContainText("Review the live diff.");
+
+  send(0, { kind: "session-delta", seq: 2, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", deltaType: "text", text: "Reading the change now." });
+  await expect(page.locator(".wf-thread")).toContainText("Reading the change now.");
+
+  send(0, { kind: "session-block", seq: 3, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", block: { type: "toolCall", id: "live-call", name: "read_file", arguments: { path: "web/src/App.tsx" } } });
+  send(0, { kind: "session-tool-result", seq: 4, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", toolCallId: "live-call", name: "read_file", isError: false, result: "export const app = true", truncated: false });
+  await expect(page.locator(".wf-tools")).toContainText("1 file read");
+
+  send(0, { kind: "session-end", seq: 5, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", usage: { totalTokens: 100, cost: 0.01 } });
+  await expect(page.locator(".wf-end")).toContainText("Session complete");
+});
