@@ -12,14 +12,16 @@ The browser workspace served by `pir serve --web` (or `PIR_WEB_UI=1`) at **`/`**
 - **The URL is the state.** Project, run, tab, finding, session, filters, search, and pagination survive reload, back/forward, and sharing.
 - **Responsive by construction.** Lists become cards on phones, the project navigation becomes a drawer, workflow filters move above the sessions, and wide tables scroll inside their own container.
 
+## Workflow timeline
+
+The Workflow tab is a session browser, not a transcript log: a compact left rail groups reviewer/verifier sessions by round, and the right canvas renders exactly one session. The prompt sits in a quiet, right-aligned bubble; assistant text is plain prose; reasoning, tool activity and raw blocks are disclosures. Consecutive context tools collapse into one summary row ("3 files read", "2 searches"), outcome tools (`record_candidate`, `submit_verdict`, `finish_round`) stay as their own artifacts, and the session ends with a completion/usage footer. The layout is inspired by OpenCode v2's session view: one canvas, restrained chrome, and evidence available on demand.
+
 ## Ant Design X usage
 
 - `XProvider` supplies the light/dark theme and Ant Design tokens.
-- `Bubble.List` renders persisted and live session messages.
-- `ThoughtChain` renders tool calls and results, with diff-aware output for `get_change`.
-- `Conversations` is the desktop session index, grouped by round.
+- `XMarkdown` renders streamed assistant prose safely; its streaming tail drives live responses.
 - `Welcome` covers empty workspaces; `Prompts` offers the run page's next navigation steps.
-- `XMarkdown` renders streamed assistant prose safely.
+- The workflow timeline is intentionally custom: a session rail, a single conversation canvas, grouped tool activity and an evidence footer, inspired by OpenCode v2's session view. `Bubble`/`ThoughtChain`/`Conversations` were removed after the redesign because the nested chat cards obscured the review evidence.
 
 ## Layout
 
