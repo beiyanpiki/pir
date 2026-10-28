@@ -165,6 +165,11 @@ test("web ui: /next deep links redirect to the promoted workspace", async (t) =>
     ["/next?tab=projects", "/?tab=projects"],
     ["/next/projects/abc", "/projects/abc"],
     ["/next/runs/abc/def?tab=workflow&session=persisted%3Ar.json", "/runs/abc/def?tab=workflow&session=persisted%3Ar.json"],
+    // Open-redirect regression: extra leading slashes must not produce a
+    // protocol-relative Location (dogfood F-203).
+    ["/next//attacker.example", "/attacker.example"],
+    ["/next///attacker.example?x=1", "/attacker.example?x=1"],
+    ["/next/\\attacker.example", "/attacker.example"],
   ]) {
     const response = await fetch(`${base}${from}`, { redirect: "manual" });
     assert.equal(response.status, 308, `${from} redirects`);

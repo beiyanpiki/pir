@@ -426,8 +426,14 @@ export function createWebUi(config: WebUiConfig): WebUi {
       if (url.pathname === "/next" || url.pathname.startsWith("/next/")) {
         if (method !== "GET" && method !== "HEAD") return false;
         // The rewrite was evaluated at /next before it replaced the legacy app.
-        // Keep old deep links working instead of answering a bare 404.
-        const suffix = url.pathname.slice("/next".length) || "/";
+        // Keep old deep links working instead of answering a bare 404. The
+        // target must stay a single-rooted path: /next//evil.example would
+        // otherwise emit a protocol-relative Location and turn this into an
+        // open redirect (dogfood F-203). Backslashes are normalized because
+        // clients treat them as slashes before resolving protocol-relative
+        // URLs.
+        const raw = url.pathname.slice("/next".length) || "/";
+        const suffix = `/${raw.replace(/\\/g, "/").replace(/^\/+/, "")}`;
         res.writeHead(308, { location: `${suffix}${url.search}` });
         res.end();
         return true;
