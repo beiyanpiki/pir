@@ -21,10 +21,11 @@ function summarizeArgs(args: unknown): string | undefined {
   return undefined;
 }
 
-export function ToolResultView({ name, args, result }: {
+export function ToolResultView({ name, args, result, running = false }: {
   name: string;
   args: unknown;
   result?: { text: string; isError: boolean; truncated?: boolean };
+  running?: boolean;
 }) {
   const argText = prettyArgs(args);
   const diffFiles = result && !result.isError ? parseDiff(result.text) : [];
@@ -37,7 +38,7 @@ export function ToolResultView({ name, args, result }: {
           <pre className="pir-code-block" style={{ marginTop: 6 }}>{argText}</pre>
         </details>
       )}
-      {!result && <Typography.Text type="secondary">Running…</Typography.Text>}
+      {!result && <Typography.Text type="secondary">{running ? "Running…" : "No result recorded for this tool call."}</Typography.Text>}
       {result?.isError && <Alert type="error" showIcon title="Tool call failed" description={<pre className="pir-code-block" style={{ marginTop: 8 }}>{result.text}</pre>} />}
       {result && !result.isError && isDiff && <DiffView files={diffFiles} />}
       {result && !result.isError && !isDiff && (
