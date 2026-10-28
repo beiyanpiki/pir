@@ -423,8 +423,9 @@ The optional read-only explorer is enabled with `--web` or `PIR_WEB_UI=1`.
 UI enabled, an unset `PIR_TRANSCRIPTS` defaults to `1`; set it to `0` to disable
 recording. Compose supplies this variable, so set `PIR_TRANSCRIPTS=1` in `.env`
 to record timelines there. Live timelines cover runs in the serve process; historical
-transcripts also show prompts, tool traffic, and available thinking. See the
-[web guide](web/README.md) for development of the explorer.
+transcripts also show prompts, tool traffic, and available thinking.
+
+The Ant Design X rewrite is being evaluated at **`/next`** while the legacy explorer stays at **`/`**. Both are read-only, share the same `/api` surface and viewer credential, and are built from the root with `npm run build` (`dist/web` and `dist/web-next`). See the [web-next guide](web-next/README.md) for development; the [legacy web guide](web/README.md) still describes the original app.
 
 Run list filters, search, and pagination stay in the URL so reloads and browser navigation restore the view. Signing in restores the full deep link, including its query and fragment. Failed page loads offer Retry; the run inspector becomes a keyboard-accessible drawer below 1280px and can be closed on desktop to expand the timeline.
 
