@@ -9,7 +9,7 @@ import { sha256 } from "../core/types.js";
 import { MEMORY_WIRE_SCHEMA_VERSION, applySnapshot, emptySnapshot, exportSnapshot, mergeSnapshots, openSyncTargetStore, syncTargetDbPath, type MemorySnapshot } from "../memory/sync.js";
 import { SqliteStore } from "../memory/sqlite-store.js";
 import { USAGE, UsageError, executePirCommand, parseArgs, pinRefsToShas, readVersion } from "../cli/executor.js";
-import { createWebUi, defaultWebNextRoot, defaultWebRoot } from "./web.js";
+import { createWebUi, defaultWebRoot } from "./web.js";
 import { LiveRegistry } from "./live-registry.js";
 import { JobRegistry } from "./jobs.js";
 import { redactUserBackgroundArgv } from "../core/user-background.js";
@@ -93,13 +93,13 @@ export async function runServe(argv: string[]): Promise<void> {
   // view access decoupled from executor access; without one the UI only opens
   // on loopback binds.
   const webEnabled = options.web ?? ["1", "true"].includes(process.env.PIR_WEB_UI ?? "");
-  let webUi: { token?: string; stateRoot: string; webRoot: string; webNextRoot: string } | undefined;
+  let webUi: { token?: string; stateRoot: string; webRoot: string } | undefined;
   if (webEnabled) {
     process.env.PIR_TRANSCRIPTS ??= "1";
     const loopback = ["127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1"].includes(host);
     const webToken = process.env.PIR_WEB_UI_TOKEN;
     if (webToken || loopback) {
-      webUi = { ...(webToken ? { token: webToken } : {}), stateRoot: pirStateBase(), webRoot: defaultWebRoot(), webNextRoot: defaultWebNextRoot() };
+      webUi = { ...(webToken ? { token: webToken } : {}), stateRoot: pirStateBase(), webRoot: defaultWebRoot() };
     }
   }
   const handle = await startServer({ host, port, token, workspace, tls: await resolveTls(options), ...(webUi ? { webUi } : {}) });
@@ -110,7 +110,7 @@ export async function runServe(argv: string[]): Promise<void> {
   );
   if (webEnabled) {
     if (webUi) {
-      log(`web ui on at / (legacy) and /next (Ant Design X workspace) (auth ${webUi.token ? "PIR_WEB_UI_TOKEN" : "loopback open — set PIR_WEB_UI_TOKEN to require a token"}) | transcripts default on`);
+      log(`web ui on at / (auth ${webUi.token ? "PIR_WEB_UI_TOKEN" : "loopback open — set PIR_WEB_UI_TOKEN to require a token"}) | transcripts default on`);
     } else {
       log("WARNING: web ui disabled — PIR_WEB_UI_TOKEN is not set and the bind address is not loopback");
     }
@@ -147,7 +147,7 @@ export async function startServer(input: {
   workspace: string;
   tls: TlsMaterial | null;
   /** Read-only web UI configuration; absent keeps the classic JSON-only server. */
-  webUi?: { token?: string; stateRoot: string; webRoot: string; webNextRoot?: string };
+  webUi?: { token?: string; stateRoot: string; webRoot: string };
 }): Promise<ServerHandle> {
   const log = (message: string): void => {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] ${message}\n`);
