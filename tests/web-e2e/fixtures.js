@@ -51,7 +51,10 @@ export function detail(runId, extra = {}) {
     run: run({ runId }),
     findings: { items: [finding()], total: 1 },
     manifest: null,
-    sessions: [{ file: "reviewer-r1.json", sessionKind: "reviewer", round: 1 }],
+    sessions: [
+      { file: "reviewer-r1.json", sessionKind: "reviewer", round: 1, angle: "navigation" },
+      { file: "verifier-r1-F-101.json", sessionKind: "verifier", round: 1, displayId: "F-101" },
+    ],
     transcriptsAvailable: true,
     ...extra,
   };
@@ -59,11 +62,18 @@ export function detail(runId, extra = {}) {
 
 export function transcript(label) {
   return {
-    role: "code reviewer", model: "fixture/model", startedAt: "2026-10-28T00:00:00Z", endedAt: "2026-10-28T00:01:00Z",
+    role: "code reviewer", model: "fixture/model", startedAt: "2026-10-28T00:00:00Z", endedAt: "2026-10-28T00:04:18Z",
     prompt: `Review prompt ${label}`,
+    usage: { totalTokens: 24_100, cost: 0.12, durationMs: 258_000 },
     messages: [
       { role: "user", content: `Review prompt ${label}`, timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: `SESSION BODY ${label}` }], model: "fixture/model", timestamp: 2 },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "Start with the session identity and route key." },
+        { type: "text", text: `Inspecting the workspace for ${label}.` },
+        { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "web/src/session.ts" } },
+      ], model: "fixture/model", timestamp: 2 },
+      { role: "toolResult", toolCallId: "call-1", toolName: "read_file", content: [{ type: "text", text: "export const session = true" }], isError: false, timestamp: 3 },
+      { role: "assistant", content: [{ type: "text", text: `SESSION BODY ${label}` }], model: "fixture/model", timestamp: 4 },
     ],
   };
 }
