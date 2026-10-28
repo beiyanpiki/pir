@@ -31,8 +31,10 @@ export interface WebUiConfig {
   /** PIR_WEB_UI_TOKEN; undefined means loopback-open mode (logged loudly). */
   token?: string;
   stateRoot: string;
-  /** Static SPA directory (dist/web). */
+  /** Static SPA directory for the legacy app at "/" (dist/web). */
   webRoot: string;
+  /** Static SPA directory for the Ant Design X app at "/next" (dist/web-next). */
+  webNextRoot?: string;
   registry: LiveRegistry;
 }
 
@@ -41,6 +43,17 @@ export function defaultWebRoot(): string {
   if (override) return override;
   // dist/server/web.js -> dist/web
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web");
+}
+
+/**
+ * The /next workspace is a separate build (web-next) mounted beside the legacy
+ * SPA while the rewrite is under evaluation. Keeping its root separate means
+ * the legacy app can be removed without changing this serving path.
+ */
+export function defaultWebNextRoot(): string {
+  const override = process.env.PIR_WEB_NEXT_ROOT;
+  if (override) return override;
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "web-next");
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -249,6 +262,7 @@ export function createWebUi(config: WebUiConfig): WebUi {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] web: ${message}\n`);
   };
   const stateRoot = config.stateRoot;
+  const webNextRoot = config.webNextRoot ?? defaultWebNextRoot();
 
   const handleApi = (req: http.IncomingMessage, res: http.ServerResponse, url: URL, method: string): boolean => {
     if (!url.pathname.startsWith("/api/")) return false;
@@ -422,6 +436,18 @@ export function createWebUi(config: WebUiConfig): WebUi {
     handle(req, res, url, method) {
       if (url.pathname.startsWith("/api/")) {
         return handleApi(req, res, url, method);
+      }
+      if (url.pathname === "/next" || url.pathname.startsWith("/next/")) {
+        if (method !== "GET" && method !== "HEAD") return false;
+        if (url.pathname === "/next") {
+          // The SPA build uses "/next/" as its asset base; a slashless shell
+          // would resolve those assets against "/" and render an empty page.
+          res.writeHead(308, { location: `/next/${url.search}` });
+          res.end();
+          return true;
+        }
+        void serveStatic(webNextRoot, url.pathname.slice("/next".length) || "/", req, res);
+        return true;
       }
       if (method === "GET" || method === "HEAD") {
         void serveStatic(config.webRoot, url.pathname, req, res);

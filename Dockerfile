@@ -11,11 +11,14 @@ WORKDIR /build
 # Workspaces: npm ci needs the web workspace manifest next to the root one.
 COPY package.json package-lock.json ./
 COPY web/package.json ./web/package.json
+COPY web-next/package.json ./web-next/package.json
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
 COPY web ./web
-# tsc (server) + vite (web SPA into dist/web, served by `pir serve --web`)
+COPY web-next ./web-next
+# tsc (server) + vite (legacy SPA into dist/web and the Ant Design X
+# workspace into dist/web-next, both served by `pir serve --web`)
 RUN npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim

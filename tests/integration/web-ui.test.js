@@ -76,16 +76,26 @@ function buildWebFixture(root) {
   return webRoot;
 }
 
+function buildNextWebFixture(root) {
+  const webRoot = path.join(root, "web-next");
+  mkdirSync(path.join(webRoot, "assets"), { recursive: true });
+  writeFileSync(path.join(webRoot, "index.html"), "<!doctype html><title>pir next web fixture</title><script type=\"module\" src=\"/next/assets/app.js\"></script>");
+  writeFileSync(path.join(webRoot, "assets", "app.js"), "console.log('next fixture')");
+  writeFileSync(path.join(webRoot, "assets", "app.css"), "body{color:red}");
+  return webRoot;
+}
+
 async function withWebServer(t, { token = WEB_TOKEN } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "pir-web-ui-"));
   buildStateFixture(root);
   const webRoot = buildWebFixture(root);
+  const webNextRoot = buildNextWebFixture(root);
   const handle = await startServer({
     host: "127.0.0.1",
     port: 0,
     workspace: root,
     tls: null,
-    webUi: { ...(token ? { token } : {}), stateRoot: root, webRoot },
+    webUi: { ...(token ? { token } : {}), stateRoot: root, webRoot, webNextRoot },
   });
   const base = handle.url;
   t.after(() => {
@@ -155,6 +165,45 @@ test("web ui: bearer token gates the api, static shell stays public", async (t) 
   }
   const afterMalformed = await fetch(`${base}/api/overview`, { headers: { authorization: `Bearer ${WEB_TOKEN}` } });
   assert.equal(afterMalformed.status, 200, "server stays alive after malformed paths");
+});
+
+test("web ui: /next serves the Ant Design X workspace beside the legacy app", async (t) => {
+  const { base } = await withWebServer(t);
+
+  // The build's asset base is /next/, so the slashless mount redirects
+  // without dropping the query and without inventing an extra slash.
+  const redirect = await fetch(`${base}/next?tab=projects`, { redirect: "manual" });
+  assert.equal(redirect.status, 308);
+  assert.equal(redirect.headers.get("location"), "/next/?tab=projects");
+
+  const shell = await fetch(`${base}/next/`);
+  assert.equal(shell.status, 200);
+  assert.match(shell.headers.get("content-type"), /text\/html/);
+  assert.match(await shell.text(), /pir next web fixture/);
+
+  const spaRoute = await fetch(`${base}/next/projects/abc/runs/def`);
+  assert.equal(spaRoute.status, 200);
+  assert.match(await spaRoute.text(), /pir next web fixture/);
+
+  const asset = await fetch(`${base}/next/assets/app.js`);
+  assert.equal(asset.status, 200);
+  assert.match(asset.headers.get("content-type"), /text\/javascript/);
+
+  const stylesheet = await fetch(`${base}/next/assets/app.css`);
+  assert.equal(stylesheet.status, 200);
+  assert.match(stylesheet.headers.get("content-type"), /text\/css/);
+
+  // The legacy app keeps the root; /next never falls through to it.
+  const legacy = await fetch(`${base}/`);
+  assert.equal(legacy.status, 200);
+  assert.match(await legacy.text(), /pir web fixture/);
+
+  const traversal = await fetch(`${base}/next/..%2f..%2fpackage.json`);
+  assert.notEqual(traversal.status, 200);
+  for (const malformed of ["/next/%", "/next/%zz", "/next/assets/%E0%A4%A"]) {
+    const response = await fetch(`${base}${malformed}`);
+    assert.equal(response.status, 400, `${malformed} answers 400`);
+  }
 });
 
 test("web ui: runs, run detail and transcripts are served read-only", async (t) => {
