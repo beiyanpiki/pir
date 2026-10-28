@@ -202,6 +202,11 @@ export function WorkspaceLayout() {
 
   useEffect(() => setNavOpen(false), [location.pathname]);
 
+  // A new route starts at the top; in-page tab/search changes keep position.
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0 });
+  }, [location.pathname]);
+
   const match = /^\/runs\/([^/]+)\/([^/]+)/.exec(location.pathname);
   const projectMatch = /^\/projects\/([^/]+)/.exec(location.pathname);
   const projectId = match?.[1] ?? projectMatch?.[1];
