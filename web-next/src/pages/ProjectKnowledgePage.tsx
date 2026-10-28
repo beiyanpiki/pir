@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Button, Card, Empty, Input, Result, Select, Space, Statistic, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -33,6 +33,10 @@ export function ProjectKnowledgePage({ kind }: { kind: "findings" | "memory" | "
   const severity = get("severity");
   const runId = get("runId");
   const draft = get("q");
+  const [searchDraft, setSearchDraft] = useState(draft);
+  const [runDraft, setRunDraft] = useState(runId);
+  useEffect(() => setSearchDraft(draft), [draft]);
+  useEffect(() => setRunDraft(runId), [runId]);
   const overview = useApi<Overview>((signal) => apiGet<Overview>("/api/overview", signal), [projectId]);
   const project = overview.data?.projects.find((candidate) => candidate.projectId === projectId);
   const payload = useMemo(() => {
@@ -59,7 +63,11 @@ export function ProjectKnowledgePage({ kind }: { kind: "findings" | "memory" | "
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.data, total, offset]);
 
-  const reset = (): void => update({ q: null, status: null, severity: null, runId: null, offset: null });
+  const reset = (): void => {
+    setSearchDraft("");
+    setRunDraft("");
+    update({ q: null, status: null, severity: null, runId: null, offset: null });
+  };
 
   const findingColumns: ColumnsType<ProjectFinding> = [
     {
@@ -140,8 +148,9 @@ export function ProjectKnowledgePage({ kind }: { kind: "findings" | "memory" | "
           <Space wrap>
             <Input.Search
               allowClear
-              defaultValue={draft}
-              onSearch={(value) => update({ q: value || null, offset: null })}
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              onSearch={(value) => update({ q: value.trim() || null, offset: null })}
               placeholder={`Search project ${kind}`}
               style={{ width: 280, maxWidth: "100%" }}
             />
@@ -160,8 +169,10 @@ export function ProjectKnowledgePage({ kind }: { kind: "findings" | "memory" | "
                   options={[{ value: "all", label: "All severities" }, ...["P0", "P1", "P2", "P3"].map((value) => ({ value, label: value }))]}
                 />
                 <Input
-                  defaultValue={runId}
-                  onBlur={(event) => { const value = event.target.value.trim(); if (value !== runId) update({ runId: value || null, offset: null }); }}
+                  value={runDraft}
+                  onChange={(event) => setRunDraft(event.target.value)}
+                  onPressEnter={() => update({ runId: runDraft.trim() || null, offset: null })}
+                  onBlur={() => { const value = runDraft.trim(); if (value !== runId) update({ runId: value || null, offset: null }); }}
                   placeholder="Run ID filter"
                   style={{ width: 220, maxWidth: "100%" }}
                 />

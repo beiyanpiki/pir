@@ -66,3 +66,18 @@ test("run filters and search live in the URL and cross-project navigation resets
   await expect(page).toHaveURL(new RegExp(`/next/projects/${projectB}$`));
   await expect.poll(() => [...requests].reverse().find((url) => url.pathname.includes(projectB))?.searchParams.get("offset")).toBe("0");
 });
+test("mobile project cards are real links and the run filters fit the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("projects");
+  await expect(page.locator(".ant-table")).toHaveCount(0);
+  const projectLink = page.getByRole("link", { name: "Project A" }).first();
+  await expect(projectLink).toBeVisible();
+  await projectLink.click();
+  await expect(page).toHaveURL(new RegExp(`/next/projects/${projectA}$`));
+  // The mobile status control is a select, so the five-status segmented row that
+  // overflowed 390px in the first cut is not rendered.
+  await expect(page.getByText("All runs", { exact: true })).toBeVisible();
+  await expect(page.locator(".ant-segmented").filter({ hasText: "Completed" })).toHaveCount(0);
+  const overflow = await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth }));
+  expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
+});

@@ -266,6 +266,16 @@ pre {
   cursor: pointer;
 }
 
+.pir-card-link {
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+
+.pir-card-link:hover {
+  color: var(--pir-accent);
+}
+
 .pir-clickable:hover td {
   background: var(--pir-surface-raised) !important;
 }

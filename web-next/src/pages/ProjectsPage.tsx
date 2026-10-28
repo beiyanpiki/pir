@@ -213,7 +213,9 @@ export function ProjectsPage() {
                         <div style={{ minWidth: 0 }}>
                           <Space size={6} wrap>
                             <FolderOpenOutlined style={{ color: "var(--pir-accent)" }} />
-                            <Typography.Text strong ellipsis style={{ maxWidth: 220 }}>{project.name}</Typography.Text>
+                            <Link className="pir-card-link" to={`/projects/${project.projectId}`} onClick={(event) => event.stopPropagation()}>
+                              <Typography.Text strong ellipsis style={{ maxWidth: 220 }}>{project.name}</Typography.Text>
+                            </Link>
                           </Space>
                           <div className="pir-muted pir-break" style={{ marginTop: 2, fontSize: 12 }}>{project.remote ?? project.projectId}</div>
                         </div>

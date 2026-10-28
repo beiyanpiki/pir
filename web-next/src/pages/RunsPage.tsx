@@ -251,7 +251,9 @@ export function RunsPage() {
                 <List.Item style={{ paddingInline: 0 }}>
                   <Card size="small" className="pir-clickable" style={{ width: "100%" }} onClick={() => navigate(`/runs/${projectId}/${run.runId}`)}>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                      <Typography.Text strong className="pir-mono">{run.base ? `${shortSha(run.base, 7)}…${shortSha(run.head, 7)}` : `Snapshot ${shortSha(run.head, 8)}`}</Typography.Text>
+                      <Link to={`/runs/${projectId}/${run.runId}`} className="pir-card-link" onClick={(event) => event.stopPropagation()}>
+                        <Typography.Text strong className="pir-mono">{run.base ? `${shortSha(run.base, 7)}…${shortSha(run.head, 7)}` : `Snapshot ${shortSha(run.head, 8)}`}</Typography.Text>
+                      </Link>
                       <RunStatusTag status={display} />
                     </div>
                     <Space size={6} wrap style={{ marginTop: 6 }}><ModeTag mode={run.mode} /><VerdictTag verdict={run.runVerdict} /><span className="pir-muted" style={{ fontSize: 12 }}>{run.model ?? "pi default"}</span></Space>
