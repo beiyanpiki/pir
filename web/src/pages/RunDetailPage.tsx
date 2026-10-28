@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   Alert,
@@ -19,7 +19,7 @@ import { apiGet } from "../lib/api";
 import { fmtCost, fmtCount, fmtDuration, relTime, shortSha } from "../lib/format";
 import { useApi, useNow } from "../lib/hooks";
 import { useQueryState } from "../lib/query";
-import { sessionAnchor, workflowSessions } from "../lib/live-projection";
+import { workflowSessions } from "../lib/live-projection";
 import { useLiveRun } from "../lib/use-live-run";
 import { useLiveSessions } from "../lib/use-live-sessions";
 import type { ActiveRunView, CoverageView, ProjectSummary, RunDetail, RunSummary } from "../lib/types";
@@ -102,16 +102,6 @@ export function RunDetailPage() {
     );
     return match?.key ?? sessionParam;
   }, [sessionParam, workflow]);
-
-  // Selecting a session in the evidence drawer or the rail must land on the
-  // exact card, including after a live replay has re-keyed the same session.
-  useEffect(() => {
-    if (tab !== "workflow" || !selectedSessionKey) return;
-    const timer = setTimeout(() => {
-      document.getElementById(sessionAnchor(selectedSessionKey))?.scrollIntoView({ block: "start", behavior: "smooth" });
-    }, 80);
-    return () => clearTimeout(timer);
-  }, [tab, selectedSessionKey, workflow.length]);
 
   const openTab = (next: Tab): void => {
     update({ tab: next, ...(next === "findings" ? {} : { finding: null }), ...(next === "workflow" ? {} : { session: null }) });
@@ -227,12 +217,12 @@ export function RunDetailPage() {
           description={
             <span>
               The review may still be executing; this view is showing the last REST snapshot. Connection trouble is not execution failure.{" "}
-              <a role="button" tabIndex={0} onClick={refreshAll}>Refresh snapshot</a>
+              <button type="button" className="wf-text-action" onClick={refreshAll}>Refresh snapshot</button>
             </span>
           }
         />
       )}
-      {detail.error && <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="Background refresh failed" description={<span>{detail.error} <a role="button" tabIndex={0} onClick={detail.reload}>Retry</a></span>} />}
+      {detail.error && <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="Background refresh failed" description={<span>{detail.error} <button type="button" className="wf-text-action" onClick={detail.reload}>Retry</button></span>} />}
       {!run.transcriptsAvailable && <Alert type="info" showIcon style={{ marginBottom: 12 }} title="Transcripts were not captured for this run" description="Run metadata, findings, and coverage remain available." />}
       {projection.end?.status === "incomplete" && (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }} title="This review stopped before completion" description={`Stop reason: ${projection.end.stoppedBecause || "not recorded"}. Confirmed findings remain valid; pending candidates and unread coverage are not a clean result.`} />
@@ -288,7 +278,7 @@ export function RunDetailPage() {
                 status={sessionStatus}
                 query={sessionQuery}
                 onSelect={(key) => update({ session: key })}
-                onFilter={(key, value) => update({ [key]: value === "all" || value === "" ? null : value })}
+                onFilter={(key, value) => update({ [key]: value === "all" || value === "" ? null : value }, key === "q")}
                 onFinding={openFinding}
               />
             ),

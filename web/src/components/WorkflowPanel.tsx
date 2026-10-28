@@ -1,36 +1,126 @@
-import { useMemo, useState } from "react";
-import { Button, Card, Col, Empty, Grid, Input, Row, Segmented, Select, Space, Tag, Tooltip, Typography } from "antd";
-import { Conversations } from "@ant-design/x";
-import { BranchesOutlined, FileTextOutlined, LinkOutlined, RobotOutlined, SafetyCertificateOutlined } from "@ant-design/icons";
-import type { ConversationItemType } from "@ant-design/x";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { App as AntApp, Empty, Grid, Input, Select } from "antd";
+import {
+  CheckCircleFilled,
+  CloseCircleFilled,
+  LoadingOutlined,
+  RobotOutlined,
+  SafetyCertificateOutlined,
+  SearchOutlined,
+  SafetyOutlined,
+} from "@ant-design/icons";
 import type { DerivedSession } from "../lib/live-fold";
 import { sessionAnchor, type WorkflowSession } from "../lib/live-projection";
-import { CopyButton } from "./CopyButton";
-import { SessionTranscript } from "./SessionTranscript";
-
-function SessionFilters({ role, status, query, onFilter }: {
-  role: string; status: string; query: string; onFilter: (key: "role" | "status" | "q", value: string) => void;
-}) {
-  return (
-    <Space orientation="vertical" size={8} style={{ width: "100%", marginBottom: 10 }}>
-      <Segmented block size="small" value={role} onChange={(value) => onFilter("role", String(value))} options={[{ label: "All", value: "all" }, { label: "Reviewer", value: "reviewer" }, { label: "Verifier", value: "verifier" }]} />
-      <Select size="small" value={status} onChange={(value) => onFilter("status", value)} style={{ width: "100%" }} options={[{ value: "all", label: "All statuses" }, { value: "running", label: "Running" }, { value: "completed", label: "Completed" }, { value: "failed", label: "Failed" }, { value: "archived", label: "Persisted" }]} />
-      <Input.Search size="small" allowClear value={query} onChange={(event) => onFilter("q", event.target.value)} placeholder="Search unit, angle, finding or file" />
-    </Space>
-  );
-}
+import { SessionTimeline } from "./SessionTimeline";
 
 function basename(file: string): string {
   const normalized = file.replace(/\\/g, "/");
   return normalized.slice(normalized.lastIndexOf("/") + 1);
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  running: "processing",
-  completed: "success",
-  failed: "error",
-  archived: "default",
-};
+function SessionStatus({ status }: { status: string }) {
+  if (status === "running") return <LoadingOutlined spin className="wf-session-status is-running" />;
+  if (status === "failed") return <CloseCircleFilled className="wf-session-status is-failed" />;
+  if (status === "completed") return <CheckCircleFilled className="wf-session-status is-completed" />;
+  return <SafetyOutlined className="wf-session-status is-persisted" />;
+}
+
+function SessionRow({ session, active, onSelect }: { session: WorkflowSession; active: boolean; onSelect: () => void }) {
+  return (
+    <button
+      type="button"
+      id={sessionAnchor(session.key)}
+      className={`wf-session${active ? " is-active" : ""}`}
+      aria-current={active ? "true" : undefined}
+      onClick={onSelect}
+    >
+      <span className={`wf-session-icon is-${session.kind}`}>
+        {session.kind === "verifier" ? <SafetyCertificateOutlined /> : <RobotOutlined />}
+      </span>
+      <span className="wf-session-copy">
+        <span className="wf-session-label" title={session.label}>{session.label}</span>
+        <span className="wf-session-meta">
+          {session.kind}
+          {session.round !== undefined ? ` · R${session.round}` : ""}
+          {session.status === "archived" ? " · persisted" : ` · ${session.status}`}
+        </span>
+      </span>
+      <SessionStatus status={session.status} />
+    </button>
+  );
+}
+
+function RailFilters({
+  role,
+  status,
+  query,
+  onFilter,
+  compact = false,
+}: {
+  role: string;
+  status: string;
+  query: string;
+  onFilter: (key: "role" | "status" | "q", value: string) => void;
+  compact?: boolean;
+}) {
+  const [draft, setDraft] = useState(query);
+  const pushed = useRef(query);
+  const onFilterRef = useRef(onFilter);
+  onFilterRef.current = onFilter;
+  useEffect(() => {
+    if (query === pushed.current) return;
+    pushed.current = query;
+    setDraft(query);
+  }, [query]);
+  useEffect(() => {
+    if (draft === pushed.current) return;
+    const timer = setTimeout(() => {
+      pushed.current = draft;
+      onFilterRef.current("q", draft);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [draft]);
+
+  return (
+    <div className={`wf-filters${compact ? " is-compact" : ""}`}>
+      <div className="wf-filter-buttons" role="group" aria-label="Filter sessions by role">
+        {(["all", "reviewer", "verifier"] as const).map((value) => (
+          <button
+            key={value}
+            type="button"
+            className={`wf-filter${role === value ? " is-active" : ""}`}
+            aria-pressed={role === value}
+            onClick={() => onFilter("role", value)}
+          >
+            {value === "all" ? "All" : value === "reviewer" ? "Reviewer" : "Verifier"}
+          </button>
+        ))}
+      </div>
+      <select
+        className="wf-status-select"
+        aria-label="Filter sessions by status"
+        value={status}
+        onChange={(event) => onFilter("status", event.target.value)}
+      >
+        <option value="all">Any status</option>
+        <option value="running">Running</option>
+        <option value="completed">Completed</option>
+        <option value="failed">Failed</option>
+        <option value="archived">Persisted</option>
+      </select>
+      <Input
+        className="wf-search"
+        size="small"
+        allowClear
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        prefix={<SearchOutlined />}
+        placeholder="Find a session"
+        aria-label="Search sessions"
+      />
+    </div>
+  );
+}
 
 export function WorkflowPanel({
   projectId,
@@ -57,9 +147,9 @@ export function WorkflowPanel({
   onFilter: (key: "role" | "status" | "q", value: string) => void;
   onFinding: (displayId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(selected ? [selected] : []));
   const screens = Grid.useBreakpoint();
   const mobile = screens.lg === false;
+  const { message } = AntApp.useApp();
 
   const liveBySession = useMemo(() => {
     const map = new Map<string, DerivedSession>();
@@ -81,143 +171,110 @@ export function WorkflowPanel({
     });
   }, [sessions, role, status, query]);
 
+  const active = useMemo(() => {
+    if (visible.length === 0) return null;
+    if (!selected) return visible[0]!;
+    return visible.find((session) => session.key === selected || session.aliases.includes(selected)) ?? visible[0]!;
+  }, [selected, visible]);
+
+  const activeIndex = active ? visible.findIndex((session) => session.key === active.key) : -1;
   const groups = useMemo(() => {
-    const byRound = new Map<number, ConversationItemType[]>();
+    const byRound = new Map<number, WorkflowSession[]>();
     for (const session of visible) {
       const round = session.round ?? 0;
-      const items = byRound.get(round) ?? [];
-      items.push({
-        key: session.key,
-        group: round === 0 ? "Sessions" : `Round ${round}`,
-        label: (
-          <span>
-            <span style={{ fontWeight: 500 }}>{session.label}</span>
-            <span className="pir-muted" style={{ display: "block", fontSize: 11 }}>
-              {session.kind} · {session.status}{session.file ? ` · ${basename(session.file)}` : ""}
-            </span>
-          </span>
-        ),
-        icon: session.kind === "verifier" ? <SafetyCertificateOutlined /> : <RobotOutlined />,
-      });
-      byRound.set(round, items);
+      byRound.set(round, [...(byRound.get(round) ?? []), session]);
     }
-    return byRound;
+    return [...byRound.entries()].sort(([a], [b]) => a - b);
   }, [visible]);
 
-  const conversationItems = useMemo(() => {
-    const ordered: ConversationItemType[] = [];
-    for (const [, items] of [...groups.entries()].sort(([a], [b]) => a - b)) ordered.push(...items);
-    return ordered;
-  }, [groups]);
+  const liveFor = (session: WorkflowSession): DerivedSession | undefined => {
+    const runtime = session.aliases.find((alias) => alias.startsWith("runtime:"))?.slice(8);
+    return (runtime ? liveBySession.get(`runtime:${runtime}`) : undefined)
+      ?? (session.file ? liveBySession.get(`file:${basename(session.file)}`) : undefined);
+  };
 
-  const toggle = (key: string): void => {
-    setExpanded((previous) => {
-      const next = new Set(previous);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-    onSelect(key);
+  const copyLink = async (): Promise<void> => {
+    if (!active) return;
+    const url = `${window.location.origin}${window.location.pathname}?tab=workflow&session=${encodeURIComponent(active.key)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      void message.success("Session link copied");
+    } catch {
+      void message.error("The clipboard is unavailable in this browser");
+    }
   };
 
   if (sessions.length === 0) {
-    return (
-      <Empty
-        image={Empty.PRESENTED_IMAGE_SIMPLE}
-        description="No review sessions recorded for this run"
-        style={{ padding: 48 }}
-      />
-    );
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No review sessions recorded for this run" className="wf-empty" />;
   }
 
   return (
-    <Row gutter={[20, 16]}>
-      {!mobile && <Col xs={24} lg={8} xl={7}>
-        <Card size="small" title={<span><BranchesOutlined /> Sessions <span className="pir-muted">({visible.length}/{sessions.length})</span></span>}>
-          <SessionFilters role={role} status={status} query={query} onFilter={onFilter} />
-          <div style={{ maxHeight: "calc(100vh - 320px)", overflow: "auto" }}>
-            {conversationItems.length > 0 ? (
-              <Conversations
-                items={conversationItems}
-                activeKey={selected ?? undefined}
-                groupable
-                onActiveChange={(key) => {
-                  const session = sessions.find((candidate) => candidate.key === key);
-                  if (session) toggle(session.key);
-                }}
-              />
-            ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No matching sessions" />
-            )}
-          </div>
-        </Card>
-      </Col>}
-      <Col xs={24} lg={16} xl={17}>
-        {mobile && <Card size="small" style={{ marginBottom: 12 }}><SessionFilters role={role} status={status} query={query} onFilter={onFilter} /></Card>}
-        {visible.length === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No matching sessions" />}
-        {visible.map((session) => {
-          const live = liveBySession.get(`runtime:${session.aliases.find((alias) => alias.startsWith("runtime:"))?.slice(8) ?? ""}`)
-            ?? (session.file ? liveBySession.get(`file:${basename(session.file)}`) : undefined);
-          const open = expanded.has(session.key) || selected === session.key;
-          return (
-            <Card
-              key={session.key}
-              size="small"
-              className="pir-session-card"
-              id={sessionAnchor(session.key)}
-              title={
-                <div className="pir-session-title">
-                  <Space size={6} wrap>
-                    <Tag color={session.kind === "verifier" ? "cyan" : "blue"}>{session.kind}</Tag>
-                    <Tag color={STATUS_COLOR[session.status] ?? "default"}>{session.status === "archived" ? "persisted" : session.status}</Tag>
-                    <Typography.Text strong>{session.label}</Typography.Text>
-                    {session.round !== undefined && <Tag>Round {session.round}</Tag>}
-                  </Space>
-                  <Space size={4}>
-                    <Button size="small" type="text" icon={<FileTextOutlined />} onClick={() => toggle(session.key)}>
-                      {open ? "Hide transcript" : "Transcript"}
-                    </Button>
-                    <Tooltip title="Copy a link to this session">
-                      <CopyButton size="small" type="text" icon={<LinkOutlined />} label="" text={`${window.location.origin}${window.location.pathname}?tab=workflow&session=${encodeURIComponent(session.key)}`} />
-                    </Tooltip>
-                  </Space>
-                </div>
-              }
-            >
-              <div className="pir-session-meta">
-                {session.file && <span className="pir-inline-code">{session.file}</span>}
-                {session.status === "running" && <span className="pir-live-dot" style={{ marginLeft: 8 }} />}
-                {live?.model && <span style={{ marginLeft: 8 }}>{live.model}</span>}
-                {live?.unitId && <span style={{ marginLeft: 8 }}>unit {live.unitId}</span>}
-                {live?.attempt !== undefined && <span style={{ marginLeft: 8 }}>attempt {live.attempt}</span>}
-                {live?.angle && <span style={{ marginLeft: 8 }}>angle {live.angle}</span>}
+    <div className="wf-page">
+      {mobile && (
+        <div className="wf-mobile-tools">
+          <Select
+            className="wf-session-select"
+            value={active?.key}
+            onChange={(value) => onSelect(value)}
+            placeholder="Choose a session"
+            options={visible.map((session) => ({
+              value: session.key,
+              label: `${session.label} · ${session.kind}${session.round !== undefined ? ` · R${session.round}` : ""}`,
+            }))}
+          />
+          <RailFilters role={role} status={status} query={query} onFilter={onFilter} compact />
+        </div>
+      )}
+
+      <div className="wf-shell">
+        {!mobile && (
+          <aside className="wf-rail" aria-label="Review sessions">
+            <div className="wf-rail-head">
+              <div className="wf-rail-title">
+                <span>Sessions</span>
+                <span className="wf-rail-count">{visible.length} / {sessions.length}</span>
               </div>
-              {session.findingMappings.length > 0 && (
-                <Space size={4} wrap style={{ marginTop: 8 }}>
-                  <span className="pir-muted" style={{ fontSize: 12 }}>Findings:</span>
-                  {session.findingMappings.map((mapping) => (
-                    <Button key={`${mapping.from}->${mapping.to}`} size="small" type="link" onClick={() => onFinding(mapping.to)}>
-                      {mapping.from === mapping.to ? mapping.to : `${mapping.from} → ${mapping.to}`}
-                    </Button>
+              <RailFilters role={role} status={status} query={query} onFilter={onFilter} />
+            </div>
+            <div className="wf-rail-list">
+              {groups.map(([round, roundSessions]) => (
+                <div className="wf-round" key={round}>
+                  <div className="wf-round-label">{round === 0 ? "Sessions" : `Round ${round}`}</div>
+                  {roundSessions.map((session) => (
+                    <SessionRow
+                      key={session.key}
+                      session={session}
+                      active={active?.key === session.key}
+                      onSelect={() => onSelect(session.key)}
+                    />
                   ))}
-                </Space>
-              )}
-              {open && (
-                <div style={{ marginTop: 10 }}>
-                  <SessionTranscript
-                    key={`${projectId}/${runId}/${session.key}`}
-                    projectId={projectId}
-                    runId={runId}
-                    live={live}
-                    file={session.file}
-                    settled={session.status !== "running"}
-                  />
                 </div>
-              )}
-            </Card>
-          );
-        })}
-      </Col>
-    </Row>
+              ))}
+              {visible.length === 0 && <div className="wf-rail-empty">No sessions match these filters.</div>}
+            </div>
+          </aside>
+        )}
+
+        {active ? (
+          <SessionTimeline
+            key={`${projectId}/${runId}/${active.key}`}
+            session={active}
+            live={liveFor(active)}
+            projectId={projectId}
+            runId={runId}
+            position={activeIndex + 1}
+            total={visible.length}
+            onPrev={activeIndex > 0 ? () => onSelect(visible[activeIndex - 1]!.key) : undefined}
+            onNext={activeIndex >= 0 && activeIndex < visible.length - 1 ? () => onSelect(visible[activeIndex + 1]!.key) : undefined}
+            onFinding={onFinding}
+            onCopy={() => void copyLink()}
+          />
+        ) : (
+          <div className="wf-main wf-no-session">
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No sessions match these filters." />
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
