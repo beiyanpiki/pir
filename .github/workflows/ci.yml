@@ -39,10 +39,14 @@ jobs:
           # Still no sudo/apt — a genuinely missing system library must fail
           # the browser test itself, not this privileged-free step.
           npx playwright install chromium --only-shell
-      - name: Web browser regression tests
+      - name: Web browser regression tests (legacy explorer)
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.tool_cache }}/ms-playwright
         run: npm run test:web:e2e
+      - name: Web browser regression tests (/next workspace)
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.tool_cache }}/ms-playwright
+        run: npm run test:web-next:e2e
       - name: Upload web browser artifacts
         if: failure()
         uses: actions/upload-artifact@v4
@@ -51,6 +55,8 @@ jobs:
           path: |
             test-results/web-artifacts
             test-results/web-report
+            test-results/web-next-artifacts
+            test-results/web-next-report
           if-no-files-found: ignore
 
   # The npm package behind `npx github:beiyanpiki/pir` and
