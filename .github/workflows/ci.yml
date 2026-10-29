@@ -42,7 +42,14 @@ jobs:
       - name: Web browser regression tests
         env:
           PLAYWRIGHT_BROWSERS_PATH: ${{ runner.tool_cache }}/ms-playwright
-        run: npm run test:web:e2e
+        run: |
+          # A cancelled or killed job can strand its vite dev server on this
+          # shared runner. The suite now asks the kernel for a free port, so a
+          # stranded server no longer fails the next run; reaping it here keeps
+          # them from accumulating instead. Scoped to this checkout's own vite
+          # binary so no unrelated process on the host is touched.
+          pkill -f "$GITHUB_WORKSPACE/(node_modules/.bin/vite|node_modules/vite/bin/vite.js)" || true
+          npm run test:web:e2e
       - name: Upload web browser artifacts
         if: failure()
         uses: actions/upload-artifact@v4

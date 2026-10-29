@@ -53,4 +53,4 @@ npx playwright install chromium
 npm run test:web:e2e
 ```
 
-The suite mocks the API, so no pir server or model credentials are needed. It covers deep-link auth recovery, URL-backed list state, cross-project reset, mobile card links and overflow, live count recalibration, connection loss vs. execution failure, same-file transcript isolation across runs, the finding drawer's Escape/focus behavior, and the audit coverage schema. Set `PIR_WEB_E2E_PORT` (default 5174) to change the dev-server port.
+The suite mocks the API, so no pir server or model credentials are needed. It covers deep-link auth recovery, URL-backed list state, cross-project reset, mobile card links and overflow, live count recalibration, connection loss vs. execution failure, same-file transcript isolation across runs, the finding drawer's Escape/focus behavior, and the audit coverage schema. The dev-server port is picked fresh by the OS on every run, so a stranded server from an earlier run cannot fail the suite; set `PIR_WEB_E2E_PORT` to pin it (for example when debugging against a fixed URL).
