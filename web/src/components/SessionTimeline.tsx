@@ -203,7 +203,12 @@ export function SessionTimeline({
   const [rendered, setRendered] = useState(() => (followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE));
   useEffect(() => {
     setRendered(followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE);
-  }, [session.key, followTail]);
+  }, [session.key]);
+  // A session that finishes keeps whatever is already mounted: collapsing a
+  // fully rendered thread back to one slice only to grow it again is churn.
+  useEffect(() => {
+    if (followTail) setRendered(Number.POSITIVE_INFINITY);
+  }, [followTail]);
   useEffect(() => {
     if (!Number.isFinite(rendered)) return;
     setRendered((value) => Math.min(value, Math.max(FIRST_SLICE, blocks.length)));
