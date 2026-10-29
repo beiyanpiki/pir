@@ -337,8 +337,7 @@ earlier messages and thinking appears only when the provider/SDK supplies it.
 
 The optional web explorer uses `PIR_WEB_UI_TOKEN`, separate from executor
 authentication. It is read-only and uses SQLite WAL readers. The Ant Design X
-workspace in `dist/web` is served at `/`; the former `/next` paths redirect
-there so saved deep links keep working. Without a viewer
+workspace in `dist/web` is served at `/`. Without a viewer
 token it opens only on a loopback bind. Enabling it sets `PIR_TRANSCRIPTS=1`
 only if that variable is unset. Compose passes an empty value by default,
 so recording there requires an explicit `PIR_TRANSCRIPTS=1`.
