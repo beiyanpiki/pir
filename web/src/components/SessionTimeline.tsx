@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Empty, Skeleton, Tooltip } from "antd";
 import {
   ArrowDownOutlined,
@@ -78,14 +78,18 @@ function durationMs(start: string | number | null | undefined, end: string | num
   return from !== null && to !== null && to >= from ? to - from : null;
 }
 
+/** Review prompts run to tens of kilobytes; only the head is mounted until asked. */
+const PROMPT_PREVIEW = 4_000;
+
 function PromptCard({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
   const long = text.length > 900 || text.split("\n").length > 14;
+  const body = long && !open ? `${text.slice(0, PROMPT_PREVIEW)}\n…` : text;
   return (
     <div className="wf-prompt-row">
       <div className="wf-prompt">
         <div className="wf-prompt-label">Prompt</div>
-        <pre className={`wf-prompt-text${long && !open ? " is-clamped" : ""}`}>{text}</pre>
+        <pre className={`wf-prompt-text${long && !open ? " is-clamped" : ""}`}>{body}</pre>
         {long && (
           <button type="button" className="wf-text-action" onClick={() => setOpen((value) => !value)}>
             {open ? "Show less" : `Show full prompt · ${text.length.toLocaleString()} chars`}
@@ -125,13 +129,16 @@ function RawBlock({ block }: { block: Extract<TimelineBlock, { kind: "raw" }> })
   );
 }
 
-function Block({ block }: { block: TimelineBlock }) {
+function BlockView({ block }: { block: TimelineBlock }) {
   if (block.kind === "text") return <div className="wf-response"><Markdown content={block.text} streaming={block.streaming} /></div>;
   if (block.kind === "thinking") return <Reasoning block={block} />;
   if (block.kind === "tools") return <WorkflowToolList tools={block.tools} />;
   if (block.kind === "user") return <div className="wf-user-inline"><Markdown content={block.text} /></div>;
   return <RawBlock block={block} />;
 }
+
+/** Blocks come from a memoized projection, so their identity is stable. */
+const Block = memo(BlockView);
 
 function StatusPill({ status }: { status: string }) {
   if (status === "running") return <span className="wf-status is-running"><span className="wf-pulse" />running</span>;
@@ -185,6 +192,45 @@ export function SessionTimeline({
     return [];
   }, [live, persisted, usingPersisted]);
 
+  // A long session mounts its thread in slices: the first screenful paints
+  // immediately and the rest follows in idle time, so a 49-block, 240 kB thread
+  // never blocks the main thread for half a second (see dogfood F-222).
+  const FIRST_SLICE = 8;
+  const SLICE = 6;
+  // A running session follows its tail, so it mounts whole; a settled one can
+  // afford to appear progressively.
+  const followTail = session.status === "running";
+  const [rendered, setRendered] = useState(() => (followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE));
+  useEffect(() => {
+    setRendered(followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE);
+  }, [session.key]);
+  // A session that finishes keeps whatever is already mounted: collapsing a
+  // fully rendered thread back to one slice only to grow it again is churn.
+  useEffect(() => {
+    if (followTail) setRendered(Number.POSITIVE_INFINITY);
+  }, [followTail]);
+  useEffect(() => {
+    if (!Number.isFinite(rendered)) return;
+    setRendered((value) => Math.min(value, Math.max(FIRST_SLICE, blocks.length)));
+  }, [blocks.length, rendered]);
+  useEffect(() => {
+    if (!Number.isFinite(rendered) || rendered >= blocks.length) return;
+    let cancelled = false;
+    const step = (): void => {
+      if (cancelled) return;
+      setRendered((value) => Math.min(blocks.length, value + SLICE));
+    };
+    const idle = typeof requestIdleCallback === "function"
+      ? requestIdleCallback(step, { timeout: 200 })
+      : window.setTimeout(step, 80);
+    return () => {
+      cancelled = true;
+      if (typeof cancelIdleCallback === "function" && typeof idle === "number") cancelIdleCallback(idle);
+      else window.clearTimeout(idle as number);
+    };
+  }, [rendered, blocks.length]);
+  const visibleBlocks = rendered >= blocks.length ? blocks : blocks.slice(0, rendered);
+
   const prompt = usingPersisted && persisted ? persisted.prompt : live?.prompt;
   const usage = (usingPersisted ? persisted?.usage : live?.usage) ?? persisted?.usage ?? live?.usage;
   const model = live?.model ?? persisted?.model;
@@ -208,9 +254,14 @@ export function SessionTimeline({
   };
 
   const jump = (): void => {
-    const element = scrollRef.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    // Mount the rest first: scrolling to the current scrollHeight would stop at
+    // the slice that happens to be rendered.
+    setRendered(Number.POSITIVE_INFINITY);
     setStick(true);
+    requestAnimationFrame(() => {
+      const element = scrollRef.current;
+      if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    });
   };
 
   const meta: string[] = [];
@@ -296,8 +347,14 @@ export function SessionTimeline({
           ) : (
             <>
               {prompt && <PromptCard text={prompt} />}
-              {blocks.map((block) => <Block key={block.key} block={block} />)}
+              {visibleBlocks.map((block) => <Block key={block.key} block={block} />)}
               {blocks.length === 0 && !prompt && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No transcript content recorded" />}
+              {rendered < blocks.length && (
+                <div className="wf-slice-note">
+                  <LoadingOutlined spin /> Rendering the rest of the transcript… {rendered} / {blocks.length}
+                  <button type="button" className="wf-text-action" onClick={() => setRendered(blocks.length)}>Show all now</button>
+                </div>
+              )}
               {running ? (
                 <div className="wf-end is-running"><LoadingOutlined spin /> Session running{duration !== null ? ` · ${fmtDuration(duration)}` : ""}</div>
               ) : (
