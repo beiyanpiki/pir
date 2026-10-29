@@ -46,9 +46,14 @@ test("the workflow timeline lists tool rows directly and expands reasoning", asy
   await page.goto(`runs/${projectA}/${runA}?tab=workflow`);
   await expect(page.locator(".wf-thread")).toContainText("SESSION BODY RUN A");
   await expect(page.locator(".wf-reasoning")).toContainText("Reasoning");
-  // Tool rows are listed directly; no "N reads" summary wrapper in between.
-  await expect(page.locator(".wf-tools-title")).toHaveCount(0);
+  // Reasoning is expanded on arrival, not hidden behind a click.
+  await expect(page.locator(".wf-reasoning").first()).toHaveAttribute("open", "");
+  // Tool rows are listed directly: the call is visible without opening a group,
+  // and its body is mounted only once the row is opened.
   const tool = page.locator(".wf-tool").first();
+  await expect(tool.locator(".wf-tool-body")).toHaveCount(0);
+  await tool.locator(".wf-tool-summary").click();
+  await expect(tool.locator(".wf-tool-body")).toHaveCount(1);
   await expect(tool.locator(".wf-tool-name")).toHaveText("read_file");
   await expect(tool.locator(".wf-tool-hint")).toContainText("session.ts");
 

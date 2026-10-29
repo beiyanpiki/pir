@@ -74,6 +74,7 @@ test("tool rows carry a user-facing target and outcome summary", () => {
   assert.equal(toolHint({ name: "search_text", args: { query: "sessionAnchor" } }), "sessionAnchor");
   assert.equal(outcomeTitle({ name: "record_candidate", args: { title: "Off-by-one" } }), "Candidate: Off-by-one");
   assert.equal(outcomeTitle({ name: "submit_verdict", args: { verdict: "confirmed" } }), "Verdict: confirmed");
+  assert.equal(outcomeTitle({ name: "finish_round", args: { summary: "Round complete" } }), "Round finished: Round complete");
 });
 
 test("consecutive same-category tools keep their order inside one block", () => {

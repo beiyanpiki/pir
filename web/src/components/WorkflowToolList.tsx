@@ -9,8 +9,10 @@ import {
   SearchOutlined,
   ToolOutlined,
 } from "@ant-design/icons";
+import { useState } from "react";
 import {
   classifyTool,
+  outcomeTitle,
   toolHint,
   type TimelineTool,
   type ToolCategory,
@@ -36,28 +38,41 @@ function ToolStatus({ tool }: { tool: TimelineTool }) {
  * Tool activity is listed row by row — no "N searches" summary wrapper. Each
  * row carries its own status, target and disclosure, so the reader scans the
  * actual calls instead of a count.
+ *
+ * The body is mounted only while a row is open: a long session holds dozens of
+ * calls, and eagerly rendering every argument block, diff parse and output <pre>
+ * made the timeline pay for evidence nobody had asked to see yet (dogfood F-214).
  */
 export function WorkflowToolList({ tools }: { tools: TimelineTool[] }) {
   return (
     <div className="wf-tools">
-      {tools.map((tool) => {
-        const category = classifyTool(tool.name);
-        const hint = toolHint(tool);
-        return (
-          <details className={`wf-tool${tool.result?.isError ? " is-error" : ""}`} key={tool.key} open={tool.running}>
-            <summary className="wf-tool-summary">
-              <span className="wf-tool-icon"><CategoryIcon category={category} /></span>
-              <ToolStatus tool={tool} />
-              <span className="wf-tool-name">{tool.name}</span>
-              {hint && <span className="wf-tool-hint" title={hint}>{hint}</span>}
-              <span className="wf-tool-chevron" aria-hidden>›</span>
-            </summary>
-            <div className="wf-tool-body">
-              <ToolResultView name={tool.name} args={tool.args} result={tool.result} running={tool.running} />
-            </div>
-          </details>
-        );
-      })}
+      {tools.map((tool) => <ToolRow key={tool.key} tool={tool} />)}
     </div>
+  );
+}
+
+function ToolRow({ tool }: { tool: TimelineTool }) {
+  const category = classifyTool(tool.name);
+  const [open, setOpen] = useState(tool.running);
+  const hint = category === "outcome" ? outcomeTitle(tool) : toolHint(tool);
+  return (
+    <details
+      className={`wf-tool${tool.result?.isError ? " is-error" : ""}`}
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="wf-tool-summary">
+        <span className="wf-tool-icon"><CategoryIcon category={category} /></span>
+        <ToolStatus tool={tool} />
+        <span className="wf-tool-name">{tool.name}</span>
+        {hint && <span className="wf-tool-hint" title={hint}>{hint}</span>}
+        <span className="wf-tool-chevron" aria-hidden>›</span>
+      </summary>
+      {open && (
+        <div className="wf-tool-body">
+          <ToolResultView name={tool.name} args={tool.args} result={tool.result} running={tool.running} />
+        </div>
+      )}
+    </details>
   );
 }
