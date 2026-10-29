@@ -53,13 +53,18 @@ export function WorkflowToolList({ tools }: { tools: TimelineTool[] }) {
 
 function ToolRow({ tool }: { tool: TimelineTool }) {
   const category = classifyTool(tool.name);
-  const [open, setOpen] = useState(tool.running);
+  // Until the reader toggles, the row follows the call's live state: a running
+  // call shows its progress, then folds away when it settles, and a failed call
+  // reveals its error. A user toggle pins the choice (dogfood F-217/F-218/F-219).
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const autoOpen = tool.running || tool.result?.isError === true;
+  const open = userOpen ?? autoOpen;
   const hint = category === "outcome" ? outcomeTitle(tool) : toolHint(tool);
   return (
     <details
       className={`wf-tool${tool.result?.isError ? " is-error" : ""}`}
       open={open}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onToggle={(event) => setUserOpen(event.currentTarget.open)}
     >
       <summary className="wf-tool-summary">
         <span className="wf-tool-icon"><CategoryIcon category={category} /></span>

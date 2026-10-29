@@ -99,3 +99,14 @@ test("live sessions stream into the workflow timeline", async ({ page }) => {
   send(0, { kind: "session-end", seq: 5, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", usage: { totalTokens: 100, cost: 0.01 } });
   await expect(page.locator(".wf-end")).toContainText("Session complete");
 });
+test("a live failed tool opens its error output by itself", async ({ page }) => {
+  await page.goto(`runs/${projectA}/${liveRun}?tab=workflow`);
+  // Wait for the observation stream to attach before publishing.
+  await expect(page.getByText("No review sessions recorded for this run")).toBeVisible();
+  send(0, { kind: "session-start", seq: 1, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "err-session", sessionKind: "reviewer", role: "code reviewer", model: "zai/glm-5.3", round: 1, prompt: "Review." });
+  send(0, { kind: "session-block", seq: 2, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "err-session", block: { type: "toolCall", id: "err-call", name: "read_file", arguments: { path: "missing.ts" } } });
+  send(0, { kind: "session-tool-result", seq: 3, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "err-session", toolCallId: "err-call", name: "read_file", isError: true, result: "read_file failed: ENOENT", truncated: false });
+  const row = page.locator(".wf-tool").first();
+  await expect(row).toHaveClass(/is-error/);
+  await expect(row.locator(".wf-tool-body")).toContainText("ENOENT");
+});
