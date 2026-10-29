@@ -1147,6 +1147,16 @@ pre {
 .wf-tool-status.is-error { color: var(--pir-danger); }
 .wf-tool-status.is-running { color: var(--pir-accent); }
 
+/* Plain-text stand-in for prose whose markdown has not been parsed yet. */
+.wf-plain-text {
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: var(--pir-text);
+}
+
 .wf-slice-note {
   display: flex;
   align-items: center;

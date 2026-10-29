@@ -97,6 +97,16 @@ test("a long transcript mounts in slices and defers offscreen markdown", async (
   for (let i = 0; i < 40; i++) {
     messages.push({ role: "assistant", content: [{ type: "text", text: `Paragraph ${i}. ${bulk}` }], model: "fixture/model", timestamp: i + 2 });
   }
+  // Sample the mounted thread from the first frame so the growth is observable
+  // even though the slices finish within a second.
+  await page.addInitScript(() => {
+    window.__counts = [];
+    const sample = () => {
+      window.__counts.push(document.querySelectorAll(".wf-response").length);
+      if (window.__counts.length < 600) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   await page.route("**/api/runs/**/transcript/**", (route) =>
     route.fulfill({ json: { prompt: "Review this change.", messages, model: "fixture/model", startedAt: "2026-10-28T00:00:00Z", endedAt: "2026-10-28T00:05:00Z" } }),
   );
@@ -109,4 +119,13 @@ test("a long transcript mounts in slices and defers offscreen markdown", async (
   expect(mounted).toBeGreaterThan(0);
   expect(mounted).toBeLessThan(12);
   expect(deferred).toBeGreaterThan(3);
+  // The deferred prose is still real text: find-in-page and assistive tech can
+  // read it before the markdown is parsed.
+  await expect(page.locator(".wf-plain-text").first()).toContainText("Paragraph");
+  // Slicing is observable: the thread grows from a first screenful to the whole.
+  await expect.poll(() => page.locator(".wf-response").count()).toBe(40);
+  const counts = await page.evaluate(() => window.__counts);
+  const smallest = Math.min(...counts.filter((value) => value > 0));
+  expect(smallest).toBeLessThan(40);
+  expect(Math.max(...counts)).toBe(40);
 });

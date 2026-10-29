@@ -23,14 +23,18 @@ function MarkdownView({ content, streaming = false }: { content: string; streami
 
 const MemoMarkdown = memo(MarkdownView);
 
-/** Large blocks mount their markdown only when the reader is near them. */
+/** Large blocks mount their rich markdown only when the reader is near them. */
 const DEFER_ABOVE = 1_500;
 const NEAR_VIEWPORT = "1200px 0px";
 
 /**
- * Parses markdown only when it is about to be read. A long review thread can
- * carry physiques of prose (this one has 240 kB across 49 blocks); parsing all
+ * Renders a long block as plain text until it is near the viewport, then swaps
+ * in XMarkdown. A 49-block thread here carries 240 kB of prose, and parsing all
  * of it up front blocked the main thread for hundreds of milliseconds.
+ *
+ * The text stays in the DOM while deferred, so browser find, Ctrl+End and
+ * assistive technology still see the content (dogfood F-223); only the markdown
+ * parsing is postponed.
  */
 function Deferred({ content, streaming }: { content: string; streaming?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -57,15 +61,10 @@ function Deferred({ content, streaming }: { content: string; streaming?: boolean
   }, [visible, streaming]);
 
   if (visible || streaming) return <MarkdownView content={content} streaming={streaming} />;
-  // An empty, intrinsically-sized slot keeps the scrollbar honest until the
-  // real block materialises; the estimate is only a placeholder.
   return (
-    <div
-      ref={ref}
-      className="pir-markdown is-deferred"
-      style={{ minHeight: Math.min(2_400, Math.round(content.length / 90) * 22) }}
-      aria-hidden
-    />
+    <div ref={ref} className="pir-markdown is-deferred">
+      <p className="wf-plain-text">{content}</p>
+    </div>
   );
 }
 
