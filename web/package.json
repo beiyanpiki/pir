@@ -1,7 +1,7 @@
 {
   "name": "pir-web",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Read-only Ant Design X review workspace for pir review runs (served by pir serve --web)",
   "type": "module",
   "scripts": {
