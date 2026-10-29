@@ -157,29 +157,18 @@ test("web ui: bearer token gates the api, static shell stays public", async (t) 
   assert.equal(afterMalformed.status, 200, "server stays alive after malformed paths");
 });
 
-test("web ui: /next deep links redirect to the promoted workspace", async (t) => {
+test("web ui: the retired /next prefix is no longer special-cased", async (t) => {
   const { base } = await withWebServer(t);
 
-  for (const [from, to] of [
-    ["/next", "/"],
-    ["/next?tab=projects", "/?tab=projects"],
-    ["/next/projects/abc", "/projects/abc"],
-    ["/next/runs/abc/def?tab=workflow&session=persisted%3Ar.json", "/runs/abc/def?tab=workflow&session=persisted%3Ar.json"],
-    // Open-redirect regression: extra leading slashes must not produce a
-    // protocol-relative Location (dogfood F-203).
-    ["/next//attacker.example", "/attacker.example"],
-    ["/next///attacker.example?x=1", "/attacker.example?x=1"],
-    ["/next/\\attacker.example", "/attacker.example"],
-  ]) {
-    const response = await fetch(`${base}${from}`, { redirect: "manual" });
-    assert.equal(response.status, 308, `${from} redirects`);
-    assert.equal(response.headers.get("location"), to, `${from} keeps its path and query`);
+  // The legacy app is gone, so /next is an ordinary SPA route: the shell is
+  // served and the client router renders not-found. No redirect, and no
+  // Location header that could be turned into an open redirect.
+  for (const path of ["/next", "/next/projects/abc", "/next//attacker.example", "/next/\\attacker.example?x=1"]) {
+    const response = await fetch(`${base}${path}`, { redirect: "manual" });
+    assert.equal(response.status, 200, `${path} serves the shell`);
+    assert.equal(response.headers.get("location"), null, `${path} does not redirect`);
+    assert.match(await response.text(), /pir web fixture/);
   }
-
-  // The promoted build owns the root; /next is only a compatibility redirect.
-  const shell = await fetch(`${base}/`);
-  assert.equal(shell.status, 200);
-  assert.match(await shell.text(), /pir web fixture/);
 });
 
 test("web ui: runs, run detail and transcripts are served read-only", async (t) => {

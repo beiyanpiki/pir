@@ -425,7 +425,7 @@ recording. Compose supplies this variable, so set `PIR_TRANSCRIPTS=1` in `.env`
 to record timelines there. Live timelines cover runs in the serve process; historical
 transcripts also show prompts, tool traffic, and available thinking.
 
-The explorer is an Ant Design X workspace built from `web/` into `dist/web`; old `/next` deep links redirect to the same routes at the root. See the [web guide](web/README.md) for development.
+The explorer is an Ant Design X workspace built from `web/` into `dist/web` and served at the root. See the [web guide](web/README.md) for development.
 
 Run list filters, search, and pagination stay in the URL so reloads and browser navigation restore the view. Signing in restores the full deep link, including its query and fragment. Failed page loads offer Retry; the run inspector becomes a keyboard-accessible drawer below 1280px and can be closed on desktop to expand the timeline.
 
