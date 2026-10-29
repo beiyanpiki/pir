@@ -14,7 +14,7 @@ The browser workspace served by `pir serve --web` (or `PIR_WEB_UI=1`) at **`/`**
 
 ## Workflow timeline
 
-The Workflow tab is a session browser, not a transcript log: a compact left rail groups reviewer/verifier sessions by round, and the right canvas renders exactly one session. The prompt sits in a quiet, right-aligned bubble; assistant text is plain prose; reasoning, tool activity and raw blocks are disclosures. Consecutive context tools collapse into one summary row ("3 files read", "2 searches"), outcome tools (`record_candidate`, `submit_verdict`, `finish_round`) stay as their own artifacts, and the session ends with a completion/usage footer. The layout is inspired by OpenCode v2's session view: one canvas, restrained chrome, and evidence available on demand.
+The Workflow tab is a session browser, not a transcript log: a compact left rail groups reviewer/verifier sessions by round, and the right canvas renders exactly one session. The prompt sits in a quiet, right-aligned bubble; assistant text is plain prose; reasoning, tool activity and raw blocks are disclosures. Tool calls are listed one row per call — name, target and status — with the arguments and output behind each row's disclosure; there is no "3 files read" summary wrapper, because the calls themselves are the evidence. Reasoning starts expanded. The session ends with a completion/usage footer. The layout is inspired by OpenCode v2's session view: one canvas, restrained chrome, and evidence available on demand.
 
 ## Ant Design X usage
 

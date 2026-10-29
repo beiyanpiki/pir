@@ -94,7 +94,8 @@ test("live sessions stream into the workflow timeline", async ({ page }) => {
 
   send(0, { kind: "session-block", seq: 3, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", block: { type: "toolCall", id: "live-call", name: "read_file", arguments: { path: "web/src/App.tsx" } } });
   send(0, { kind: "session-tool-result", seq: 4, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", toolCallId: "live-call", name: "read_file", isError: false, result: "export const app = true", truncated: false });
-  await expect(page.locator(".wf-tools")).toContainText("1 file read");
+  await expect(page.locator(".wf-tool-name")).toContainText("read_file");
+  await expect(page.locator(".wf-tools-title")).toHaveCount(0);
 
   send(0, { kind: "session-end", seq: 5, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", usage: { totalTokens: 100, cost: 0.01 } });
   await expect(page.locator(".wf-end")).toContainText("Session complete");

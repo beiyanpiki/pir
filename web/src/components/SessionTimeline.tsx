@@ -21,7 +21,7 @@ import type { SessionTranscript as SessionTranscriptData } from "../lib/types";
 import { buildItems } from "../lib/transcript-items";
 import { blocksFromLive, blocksFromTranscript, type TimelineBlock } from "../lib/workflow-timeline";
 import { Markdown } from "./Markdown";
-import { WorkflowToolGroup } from "./WorkflowToolGroup";
+import { WorkflowToolList } from "./WorkflowToolList";
 
 type Phase =
   | { kind: "idle" }
@@ -97,8 +97,10 @@ function PromptCard({ text }: { text: string }) {
 }
 
 function Reasoning({ block }: { block: Extract<TimelineBlock, { kind: "thinking" }> }) {
+  // Reasoning is part of the review evidence, so it starts expanded; the
+  // summary stays clickable to fold it away.
   return (
-    <details className="wf-reasoning" open={block.streaming}>
+    <details className="wf-reasoning" open>
       <summary className="wf-reasoning-summary">
         <BulbOutlined />
         <span>Reasoning</span>
@@ -126,7 +128,7 @@ function RawBlock({ block }: { block: Extract<TimelineBlock, { kind: "raw" }> })
 function Block({ block }: { block: TimelineBlock }) {
   if (block.kind === "text") return <div className="wf-response"><Markdown content={block.text} streaming={block.streaming} /></div>;
   if (block.kind === "thinking") return <Reasoning block={block} />;
-  if (block.kind === "tools") return <WorkflowToolGroup tools={block.tools} category={block.category} />;
+  if (block.kind === "tools") return <WorkflowToolList tools={block.tools} />;
   if (block.kind === "user") return <div className="wf-user-inline"><Markdown content={block.text} /></div>;
   return <RawBlock block={block} />;
 }
