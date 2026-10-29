@@ -27,7 +27,7 @@ const DECLARED_REQUIRED_ORDER = ["verdict", "rationale"];
 // The zai-coding-cn/glm-5.3 registry entry sets compat.supportsStrictMode true,
 // the branch where pi-ai's convertTools emits an explicit `strict: false` for a
 // tool without constrainedSampling. A provider without that flag omits the key
-// and receives the same parameters object (pi-ai 0.87.1 convertTools).
+// and receives the same parameters object (pi-ai 1.4.0 convertTools).
 const model = {
   id: "test-model", name: "Offline test model", provider: "offline-test",
   api: "openai-completions", baseUrl: "http://127.0.0.1:1", reasoning: true,
@@ -39,8 +39,8 @@ const model = {
 // createAgentSession routes the turn through `modelRuntime.streamSimple`. To
 // capture the real provider payload we hand it pi-ai's own openai-completions
 // stream function — the module convertTools builds the wire request in — taken
-// from the SDK's pinned dependency (pi-ai 0.87.1 is a dependency of
-// pi-coding-agent 0.87.1, so it resolves next to it, hoisted or nested).
+// from the SDK's pinned dependency (pi-ai 1.4.0 is a dependency of
+// pi-coding-agent 1.4.0, so it resolves next to it, hoisted or nested).
 function openAiCompletionsStreamSimple() {
   const sdkEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
   const candidates = [
