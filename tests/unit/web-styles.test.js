@@ -25,12 +25,15 @@ function walk(dir) {
 
 /** Every selector in the sheet, split on commas and stripped of whitespace. */
 function ruleSubjects(css) {
+  // Comments are removed first: a comma inside prose would otherwise be split
+  // into a bogus selector (dogfood F-211).
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const subjects = [];
-  for (const match of css.matchAll(/([^{}]+)\{/g)) {
+  for (const match of stripped.matchAll(/([^{}]+)\{/g)) {
     const block = match[1];
     if (block.includes(";") && !block.includes(",")) continue;
     for (const part of block.split(",")) {
-      const selector = part.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      const selector = part.trim();
       if (selector && !selector.startsWith("@") && !selector.startsWith(":")) subjects.push(selector);
     }
   }
@@ -52,7 +55,9 @@ function hasBaseRule(className) {
     if (selector === className) return true;
     if (!selector.startsWith(className)) return false;
     const next = selector.slice(className.length, className.length + 1);
-    return next === " " || next === ":" || next === "." || next === "[";
+    // ".cls.other" is a state/compound selector on top of another class, not a
+    // base rule for .cls (dogfood F-212).
+    return next === " " || next === ":" || next === "[";
   });
 }
 
