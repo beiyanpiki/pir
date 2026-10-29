@@ -197,11 +197,19 @@ export function SessionTimeline({
   // never blocks the main thread for half a second (see dogfood F-222).
   const FIRST_SLICE = 8;
   const SLICE = 6;
-  const [rendered, setRendered] = useState(FIRST_SLICE);
-  useEffect(() => { setRendered(FIRST_SLICE); }, [session.key]);
-  useEffect(() => { setRendered((value) => Math.min(value, Math.max(FIRST_SLICE, blocks.length))); }, [blocks.length]);
+  // A running session follows its tail, so it mounts whole; a settled one can
+  // afford to appear progressively.
+  const followTail = session.status === "running";
+  const [rendered, setRendered] = useState(() => (followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE));
   useEffect(() => {
-    if (rendered >= blocks.length) return;
+    setRendered(followTail ? Number.POSITIVE_INFINITY : FIRST_SLICE);
+  }, [session.key, followTail]);
+  useEffect(() => {
+    if (!Number.isFinite(rendered)) return;
+    setRendered((value) => Math.min(value, Math.max(FIRST_SLICE, blocks.length)));
+  }, [blocks.length, rendered]);
+  useEffect(() => {
+    if (!Number.isFinite(rendered) || rendered >= blocks.length) return;
     let cancelled = false;
     const step = (): void => {
       if (cancelled) return;
@@ -241,9 +249,14 @@ export function SessionTimeline({
   };
 
   const jump = (): void => {
-    const element = scrollRef.current;
-    if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    // Mount the rest first: scrolling to the current scrollHeight would stop at
+    // the slice that happens to be rendered.
+    setRendered(Number.POSITIVE_INFINITY);
     setStick(true);
+    requestAnimationFrame(() => {
+      const element = scrollRef.current;
+      if (element) element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    });
   };
 
   const meta: string[] = [];
