@@ -57,6 +57,21 @@ test("the config does not reuse the port a stranded dev server still holds", asy
   }
 });
 
+test("re-evaluating the config keeps the port (Playwright reloads it per worker)", async () => {
+  // The first version of this fix computed a fresh free port on every module
+  // evaluation. Playwright re-evaluates the config in each worker process, so
+  // the workers' baseURL pointed at a port the dev server never listened on and
+  // CI died with net::ERR_CONNECTION_REFUSED on 13 of 15 tests.
+  delete process.env.PIR_WEB_E2E_PORT;
+  const url = pathToFileURL(configPath).href;
+  const first = (await import(`${url}?worker=1`)).default;
+  const pinned = process.env.PIR_WEB_E2E_PORT;
+  const second = (await import(`${url}?worker=2`)).default;
+  assert.ok(pinned, "the config must pin the port it chose for later evaluations");
+  assert.equal(new URL(second.use.baseURL).port, new URL(first.use.baseURL).port);
+  assert.equal(second.webServer.url, first.webServer.url);
+});
+
 test("PIR_WEB_E2E_PORT still pins the port for debugging", () => {
   const script = `import config from ${JSON.stringify(pathToFileURL(configPath).href)};
     process.stdout.write(config.use.baseURL);`;
