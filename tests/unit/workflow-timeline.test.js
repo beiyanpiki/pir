@@ -5,7 +5,6 @@ import {
   blocksFromTranscript,
   classifyTool,
   outcomeTitle,
-  toolGroupTitle,
   toolHint,
 } from "../../web/src/lib/workflow-timeline.ts";
 
@@ -70,13 +69,19 @@ test("live blocks carry streaming and tool status", () => {
   assert.equal(blocks[2].tools[0].running, true);
 });
 
-test("group labels and hints are user-facing", () => {
+test("tool rows carry a user-facing target and outcome summary", () => {
   assert.equal(toolHint({ name: "read_code", args: { path: "web/src/App.tsx" } }), "web/src/App.tsx");
-  assert.equal(toolGroupTitle([{ key: "1", name: "read_code", args: {}, running: false }]), "1 file read");
-  assert.equal(toolGroupTitle([
-    { key: "1", name: "read_code", args: {}, running: false },
-    { key: "2", name: "read_code", args: {}, running: false },
-  ]), "2 files read");
+  assert.equal(toolHint({ name: "search_text", args: { query: "sessionAnchor" } }), "sessionAnchor");
   assert.equal(outcomeTitle({ name: "record_candidate", args: { title: "Off-by-one" } }), "Candidate: Off-by-one");
   assert.equal(outcomeTitle({ name: "submit_verdict", args: { verdict: "confirmed" } }), "Verdict: confirmed");
+  assert.equal(outcomeTitle({ name: "finish_round", args: { summary: "Round complete" } }), "Round finished: Round complete");
+});
+
+test("consecutive same-category tools keep their order inside one block", () => {
+  const blocks = blocksFromTranscript([
+    tool("1", "search_text", { query: "a" }, { text: "x", isError: false }),
+    tool("2", "search_text", { query: "b" }, { text: "y", isError: false }),
+  ]);
+  assert.equal(blocks.length, 1);
+  assert.deepEqual(blocks[0].tools.map((item) => item.args.query), ["a", "b"]);
 });

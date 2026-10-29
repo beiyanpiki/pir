@@ -67,32 +67,6 @@ export function outcomeTitle(tool: Pick<TimelineTool, "name" | "args">): string 
   return tool.name;
 }
 
-const NOUNS: Record<Exclude<ToolCategory, "outcome">, [string, string]> = {
-  read: ["file read", "files read"],
-  search: ["search", "searches"],
-  memory: ["memory lookup", "memory lookups"],
-  change: ["diff inspected", "diffs inspected"],
-  other: ["tool call", "tool calls"],
-};
-
-export function toolGroupTitle(tools: TimelineTool[]): string {
-  if (tools.length === 0) return "Tools";
-  const category = classifyTool(tools[0]!.name);
-  if (category === "outcome") {
-    return tools.length === 1 ? outcomeTitle(tools[0]!) : `${tools.length} results recorded`;
-  }
-  const [one, many] = NOUNS[category];
-  return `${tools.length} ${tools.length === 1 ? one : many}`;
-}
-
-export function toolGroupFailed(tools: TimelineTool[]): boolean {
-  return tools.some((tool) => tool.result?.isError === true);
-}
-
-export function toolGroupRunning(tools: TimelineTool[]): boolean {
-  return tools.some((tool) => tool.running);
-}
-
 function pushTool(blocks: TimelineBlock[], tool: TimelineTool): void {
   const category = classifyTool(tool.name);
   const last = blocks.at(-1);

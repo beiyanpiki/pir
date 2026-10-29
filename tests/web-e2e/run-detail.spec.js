@@ -33,21 +33,29 @@ test.beforeEach(async ({ page }) => {
 test("the same session file under a different run never reuses the previous transcript", async ({ page }) => {
   await page.goto(`runs/${projectA}/${runA}?tab=workflow`);
   await expect(page.locator(".wf-thread")).toContainText("SESSION BODY RUN A");
-  await expect(page.locator(".wf-thread")).toContainText("1 file read");
+  await expect(page.locator(".wf-tool")).toHaveCount(1);
+  await expect(page.locator(".wf-tool-name")).toContainText("read_file");
+  await expect(page.locator(".wf-tools-title")).toHaveCount(0);
 
   await page.evaluate((url) => { history.pushState({}, "", url); dispatchEvent(new PopStateEvent("popstate")); }, `/runs/${projectA}/${runB}?tab=workflow`);
   await expect(page.locator(".wf-thread")).toContainText("SESSION BODY RUN B");
   await expect(page.locator(".wf-thread")).not.toContainText("SESSION BODY RUN A");
 });
 
-test("the workflow timeline groups tools, keeps reasoning quiet, and searches without polluting history", async ({ page }) => {
+test("the workflow timeline lists tool rows directly and expands reasoning", async ({ page }) => {
   await page.goto(`runs/${projectA}/${runA}?tab=workflow`);
   await expect(page.locator(".wf-thread")).toContainText("SESSION BODY RUN A");
   await expect(page.locator(".wf-reasoning")).toContainText("Reasoning");
-  const tools = page.locator(".wf-tools").first();
-  await expect(tools).toContainText("1 file read");
-  await tools.locator(".wf-tools-head").click();
-  await expect(tools.getByText("read_file").first()).toBeVisible();
+  // Reasoning is expanded on arrival, not hidden behind a click.
+  await expect(page.locator(".wf-reasoning").first()).toHaveAttribute("open", "");
+  // Tool rows are listed directly: the call is visible without opening a group,
+  // and its body is mounted only once the row is opened.
+  const tool = page.locator(".wf-tool").first();
+  await expect(tool.locator(".wf-tool-body")).toHaveCount(0);
+  await tool.locator(".wf-tool-summary").click();
+  await expect(tool.locator(".wf-tool-body")).toHaveCount(1);
+  await expect(tool.locator(".wf-tool-name")).toHaveText("read_file");
+  await expect(tool.locator(".wf-tool-hint")).toContainText("session.ts");
 
   const before = await page.evaluate(() => history.length);
   await page.getByLabel("Search sessions").fill("nav");
