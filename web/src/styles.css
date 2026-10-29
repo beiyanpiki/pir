@@ -999,6 +999,8 @@ pre {
 }
 
 .wf-response {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
   margin: 4px 0 20px;
   color: var(--pir-text);
   font-size: 15px;
@@ -1030,6 +1032,8 @@ pre {
 }
 
 .wf-reasoning {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
   margin: 8px 0 12px;
   padding-left: 12px;
   border-left: 2px solid var(--pir-border);
@@ -1064,6 +1068,8 @@ pre {
 }
 
 .wf-tools {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
   margin: 10px 0;
   overflow: hidden;
   border: 1px solid var(--pir-border);
@@ -1140,6 +1146,15 @@ pre {
 .wf-tool-status.is-ok { color: var(--pir-success); }
 .wf-tool-status.is-error { color: var(--pir-danger); }
 .wf-tool-status.is-running { color: var(--pir-accent); }
+
+.wf-slice-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  color: var(--pir-text-muted);
+  font-size: 12px;
+}
 
 .wf-raw {
   margin: 10px 0;

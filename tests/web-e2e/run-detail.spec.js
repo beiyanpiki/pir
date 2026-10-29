@@ -91,3 +91,22 @@ test("the session rail switches the timeline to the verifier", async ({ page }) 
   await expect(page.locator(".wf-meta")).toContainText("verifier-r1-F-101.json");
   await expect(page).toHaveURL(/session=/);
 });
+test("a long transcript mounts in slices and defers offscreen markdown", async ({ page }) => {
+  const bulk = "The reviewer read the workspace and compared the change against the recorded baseline. ".repeat(60);
+  const messages = [{ role: "user", content: "Review this change.", timestamp: 1 }];
+  for (let i = 0; i < 40; i++) {
+    messages.push({ role: "assistant", content: [{ type: "text", text: `Paragraph ${i}. ${bulk}` }], model: "fixture/model", timestamp: i + 2 });
+  }
+  await page.route("**/api/runs/**/transcript/**", (route) =>
+    route.fulfill({ json: { prompt: "Review this change.", messages, model: "fixture/model", startedAt: "2026-10-28T00:00:00Z", endedAt: "2026-10-28T00:05:00Z" } }),
+  );
+  await page.goto(`runs/${projectA}/${runA}?tab=workflow`);
+  await expect(page.locator(".wf-response").first()).toBeVisible();
+  // Prose outside the viewport is not parsed, and the thread mounts in slices:
+  // only a handful of the 40 blocks are real markdown at any moment.
+  const mounted = await page.locator(".pir-markdown:not(.is-deferred)").count();
+  const deferred = await page.locator(".pir-markdown.is-deferred").count();
+  expect(mounted).toBeGreaterThan(0);
+  expect(mounted).toBeLessThan(12);
+  expect(deferred).toBeGreaterThan(3);
+});
