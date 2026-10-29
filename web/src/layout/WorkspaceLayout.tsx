@@ -137,8 +137,8 @@ function ProjectSider({ projectId, runId, onNavigate }: { projectId: string | un
         placeholder="Filter projects"
         style={{ marginBottom: 6, paddingInline: 4 }}
       />
-      {overview.loading && projects.length === 0 && <div className="pir-sider-project">Loading projects…</div>}
-      {overview.error && <div className="pir-sider-project" style={{ color: "var(--pir-danger)" }}>{overview.error}</div>}
+      {overview.loading && projects.length === 0 && <div className="pir-sider-note">Loading projects…</div>}
+      {overview.error && <div className="pir-sider-note is-error">{overview.error}</div>}
       {filtered.map((project) => (
         <button
           key={project.projectId}
@@ -151,7 +151,7 @@ function ProjectSider({ projectId, runId, onNavigate }: { projectId: string | un
         </button>
       ))}
       {!overview.loading && !overview.error && filtered.length === 0 && projects.length > 0 && (
-        <div className="pir-sider-project">No matching projects</div>
+        <div className="pir-sider-note">No matching projects</div>
       )}
 
       <Divider style={{ margin: "16px 0 8px" }} />
