@@ -277,7 +277,7 @@ export class PiSessionFactory implements AgentSessionFactory {
       const result = await this.dependencies.createAgentSession(options);
       session = result.session;
       const activeSession = session;
-      // SDK 0.87.1 exposes this on Agent, not CreateAgentSessionOptions. This also
+      // SDK 1.4.0 exposes this on Agent, not CreateAgentSessionOptions. This also
       // serializes builtins; custom collector tools have sequential overrides.
       activeSession.agent.toolExecution = "sequential";
       const calls = createToolCallTracker();
