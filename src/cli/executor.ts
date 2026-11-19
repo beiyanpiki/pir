@@ -48,7 +48,8 @@ import {
   verifyFix,
   type MemorySyncResult,
 } from "../app/services.js";
-import { envelope, findExitCode, renderAuditResultText, renderFindResultText } from "../app/output.js";
+import { envelope, findExitCode, renderAuditResultText, renderFindResultText, renderSummarizeResultText } from "../app/output.js";
+import { runSummarize } from "../app/summarize.js";
 import { renderSarif } from "../app/sarif.js";
 import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
@@ -64,6 +65,7 @@ const USAGE_SECTIONS = {
 
 Usage:
   pir find [options]                     run the finding loop over a change range
+  pir summarize [options]                plain-language walkthrough of a change range
   pir audit [options]                    full-repository audit of a pinned snapshot
   pir memory status|bootstrap|refresh    manage repository memory
   pir memory sync [--dry-run]            merge local memory with a pir server's
@@ -176,6 +178,19 @@ Usage:
                       ~/.pir/logs/<jobId>.log and a receipt; remotely it is
                       an async job (see Remote mode). Exit 0 means accepted,
                       never that the review ran or passed`,
+
+  summarize: `Summarize options (one model session; a walkthrough, not a review):
+  --base <ref>        base ref (default: HEAD^)
+  --head <ref>        head ref (default: HEAD)
+  --model <id>        model override for the session: <provider>/<model> or
+                      fuzzy id (see \`pir models\`; default: PIR_MODEL env,
+                      then pi settings)
+  The change set is built exactly like find's (merge-base three-dot diff with
+  the change-mode filter), and ONE summarizer session returns a markdown
+  walkthrough — an overview, changes grouped by theme, notable risk areas —
+  submitted through submit_summary. No findings, no verdicts, no repository
+  writes. An empty range is a valid zero-change summary and skips the model
+  session entirely.`,
 
   audit: `Audit options (current-state review; no diff, no change attribution):
   --path <p>...       literal file or directory prefix selecting scope;
@@ -389,6 +404,7 @@ Exit codes: 0 ok | 1 findings at/above --fail-on | 2 usage error | 3 runtime err
 export const USAGE = [
   USAGE_SECTIONS.header,
   USAGE_SECTIONS.find,
+  USAGE_SECTIONS.summarize,
   USAGE_SECTIONS.audit,
   USAGE_SECTIONS.findings,
   USAGE_SECTIONS.jobs,
@@ -408,6 +424,7 @@ export const USAGE = [
 /** Commands that have their own USAGE section for contextual --help. */
 const HELP_SECTIONS: Record<string, string> = {
   find: USAGE_SECTIONS.find,
+  summarize: USAGE_SECTIONS.summarize,
   audit: USAGE_SECTIONS.audit,
   findings: USAGE_SECTIONS.findings,
   jobs: USAGE_SECTIONS.jobs,
@@ -766,7 +783,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError("serve must run in the local CLI process, not through the executor");
   }
 
-  const knownCommands = new Set(["find", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill", "_verify-comment"]);
+  const knownCommands = new Set(["find", "summarize", "audit", "memory", "feedback", "remember", "findings", "verify-fix", "config", "skill", "_verify-comment"]);
   if (!knownCommands.has(command)) {
     throw new UsageError(`unknown command: ${command}`);
   }
@@ -801,6 +818,9 @@ async function runInContext(
     switch (command) {
       case "find":
         code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log, warn);
+        break;
+      case "summarize":
+        code = await cmdSummarize(ctx, positional.slice(1), flags, json, emit, log);
         break;
       case "audit":
         code = await cmdAudit(ctx, positional.slice(1), flags, multi, json, emit, log);
@@ -1350,6 +1370,61 @@ async function cmdFind(
   }
 
   return findExitCode(findings, failOn, result.incomplete);
+}
+
+/**
+ * `pir summarize`: one model session turns a change range into a plain-language
+ * walkthrough (see src/app/summarize.ts). Run-shaping find/audit flags are
+ * usage errors here — a summarize has no rounds, budgets or gate to shape.
+ */
+async function cmdSummarize(
+  ctx: Ctx,
+  _args: string[],
+  flags: Map<string, string | boolean>,
+  json: boolean,
+  emit: Emit,
+  log: Log,
+): Promise<number> {
+  if (flags.has("--format")) {
+    throw new UsageError("--format applies to find/audit output; summarize prints text or --json");
+  }
+  for (const shaping of ["--max-rounds", "--max-tokens", "--max-findings", "--verify-concurrency", "--min-confidence", "--fail-on", "--verify-model", "--angles", "--plugins", "--rule", "--background", "--background-file"]) {
+    if (flags.has(shaping)) {
+      throw new UsageError(`${shaping} shapes a find/audit run; summarize runs one session with no such knobs`);
+    }
+  }
+  const model = flags.get("--model");
+  if (model !== undefined && (typeof model !== "string" || model.trim() === "")) {
+    throw new UsageError("--model requires a model id (see `pir models`)");
+  }
+  const base = flags.get("--base");
+  const head = flags.get("--head");
+  log(`• summarizing ${typeof base === "string" ? base : "HEAD^"}..${typeof head === "string" ? head : "HEAD"}`);
+  const result = await runSummarize(ctx, {
+    ...(typeof base === "string" ? { base } : {}),
+    ...(typeof head === "string" ? { head } : {}),
+    ...(typeof model === "string" ? { model } : {}),
+  });
+  log(`• change set: ${result.stats.files} file${result.stats.files === 1 ? "" : "s"}, +${result.stats.insertions}/-${result.stats.deletions}`);
+  if (json) {
+    emit(
+      envelope(
+        "summarize",
+        {
+          base: result.base,
+          head: result.head,
+          stats: result.stats,
+          summary: result.summary,
+          riskAreas: result.riskAreas,
+        },
+        { project: { id: ctx.memory.identity.projectId, cwd: ctx.repoRoot, head: result.head } },
+      ),
+    );
+    emit("\n");
+  } else {
+    emit(`${renderSummarizeResultText(result)}\n`);
+  }
+  return 0;
 }
 
 /**

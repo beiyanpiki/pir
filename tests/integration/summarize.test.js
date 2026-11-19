@@ -1,9 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { createTempGitRepo } from "../fixtures/helpers.js";
 import { createAppContext } from "../../dist/app/context.js";
 import { emptyRangeSummary, runSummarize } from "../../dist/app/summarize.js";
+import { renderSummarizeResultText } from "../../dist/app/output.js";
+import { executePirCommand, UsageError } from "../../dist/cli/executor.js";
+
+const execFileAsync = promisify(execFile);
+const CLI = path.resolve("dist/cli/cli.js");
 
 /**
  * `pir summarize`: the change set is built exactly like find's (merge-base
@@ -121,6 +128,79 @@ test("an empty range is a valid zero-change summary and never creates a session"
     assert.equal(created, 0);
   } finally {
     ctx.memory.close();
+    repo.cleanup();
+  }
+});
+
+test("summarize --json on an empty range prints the envelope contract on stdout", async () => {
+  const repo = seedRepo();
+  const dbPath = path.join(repo.dir, "memory.sqlite");
+  try {
+    const result = await executePirCommand(
+      ["summarize", "--json", "--base", "HEAD", "--head", "HEAD", "--no-sync-index", "--cwd", repo.dir],
+      { dbPath },
+    );
+    assert.equal(result.code, 0);
+    const parsed = JSON.parse(result.output);
+    assert.equal(parsed.schemaVersion, 1);
+    assert.equal(parsed.command, "summarize");
+    assert.equal(parsed.project.cwd, repo.dir);
+    assert.match(parsed.project.id, /./);
+    assert.match(parsed.project.head, /^[0-9a-f]{40}$/);
+    assert.deepEqual(Object.keys(parsed.data).sort(), ["base", "head", "riskAreas", "stats", "summary"]);
+    assert.deepEqual(parsed.data.stats, { files: 0, insertions: 0, deletions: 0 });
+    assert.equal(parsed.data.summary, emptyRangeSummary());
+    assert.deepEqual(parsed.data.riskAreas, []);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("text mode prints a range/stats header then the markdown walkthrough", async () => {
+  const repo = seedRepo();
+  const dbPath = path.join(repo.dir, "memory.sqlite");
+  try {
+    // Executor text lane on the empty range: header line plus canned summary.
+    const result = await executePirCommand(
+      ["summarize", "--base", "HEAD", "--head", "HEAD", "--no-sync-index", "--cwd", repo.dir],
+      { dbPath },
+    );
+    assert.equal(result.code, 0);
+    assert.match(result.output, /^summary of [0-9a-f]{40}\.\.[0-9a-f]{40}: 0 files, \+0\/-0\n\nNo changed files in this range — there is nothing to walk through\.\n$/);
+    // With content, the markdown summary passes through unchanged after the header.
+    const rendered = renderSummarizeResultText({
+      base: "b",
+      head: "h",
+      stats: { files: 2, insertions: 3, deletions: 1 },
+      summary: SCRIPTED_SUMMARY,
+    });
+    assert.equal(
+      rendered,
+      `summary of b..h: 2 files, +3/-1\n\n${SCRIPTED_SUMMARY}`,
+    );
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("summarize rejects find/audit run-shaping flags as usage errors (exit 2)", async () => {
+  const repo = seedRepo();
+  const dbPath = path.join(repo.dir, "memory.sqlite");
+  try {
+    for (const bad of [["--max-rounds", "2"], ["--fail-on", "P1"], ["--format", "sarif"]]) {
+      await assert.rejects(
+        executePirCommand(["summarize", ...bad, "--cwd", repo.dir], { dbPath }),
+        (error) => error instanceof UsageError && error.message.includes(bad[0]),
+      );
+    }
+    // The built CLI maps the same rejection to exit code 2.
+    const { stderr, code } = await execFileAsync(process.execPath, [CLI, "summarize", "--fail-on", "P1", "--cwd", repo.dir], {
+      encoding: "utf8",
+      env: { ...process.env, PIR_CONFIG_DIR: path.join(repo.dir, "cfg"), PIR_NO_WIZARD: "1" },
+    }).catch((error) => error);
+    assert.equal(code, 2);
+    assert.match(stderr, /--fail-on/);
+  } finally {
     repo.cleanup();
   }
 });

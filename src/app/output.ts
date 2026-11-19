@@ -150,6 +150,20 @@ export function renderFindResultText(input: {
   return lines.join("\n");
 }
 
+/** `pir summarize` text mode: a one-line header with range and stats, then the markdown walkthrough. */
+export function renderSummarizeResultText(input: {
+  base: string;
+  head: string;
+  stats: { files: number; insertions: number; deletions: number };
+  summary: string;
+}): string {
+  return [
+    `summary of ${input.base}..${input.head}: ${input.stats.files} file${input.stats.files === 1 ? "" : "s"}, +${input.stats.insertions}/-${input.stats.deletions}`,
+    "",
+    input.summary,
+  ].join("\n");
+}
+
 export function renderAuditResultText(input: {
   degraded: boolean;
   dirtyWorktree: boolean;
