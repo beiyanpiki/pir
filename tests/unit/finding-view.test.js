@@ -36,6 +36,14 @@ test("FindingView exposes the snippet-anchoring correction flag and it survives 
 
     const correctedView = toFindingView({ memory }, memory.findings.get(corrected.id));
     assert.equal(correctedView.lineCorrected, true);
+    // The stable cross-run identity is exposed next to the per-run UUID id.
+    const expectedFingerprint = buildIdentity({
+      category: "correctness",
+      claim: "The running total ignores the per-item rate",
+      trigger: "Calling computeTotal once",
+    }).fingerprint;
+    assert.equal(correctedView.fingerprint, expectedFingerprint);
+    assert.match(JSON.stringify(correctedView), /"fingerprint":"[0-9a-f]{64}"/);
     assert.deepEqual(correctedView.anchors, [{
       path: "src/total.ts", startLine: 10, endLine: 12, excerpt: "return total * rate;",
       lineCorrected: true, originalStartLine: 34, originalEndLine: 36,

@@ -31,6 +31,12 @@ export async function runFind(
 export interface FindingView {
   id: string;
   displayId: string;
+  /**
+   * Stable identity hash (sha256 of featureKey+entityKey+category+claim+trigger).
+   * Unlike id — a per-run UUID — it survives across runs, so cross-run
+   * consumers (e.g. the Gitea PR integration's repost suppression) key on it.
+   */
+  fingerprint: string;
   title: string;
   claim: string;
   trigger: string;
@@ -64,6 +70,7 @@ export function toFindingView(ctx: AppContext, row: FindingRow): FindingView {
   return {
     id: row.id,
     displayId: row.displayId,
+    fingerprint: row.fingerprint,
     title: row.title,
     claim: row.claim,
     trigger: row.trigger,
