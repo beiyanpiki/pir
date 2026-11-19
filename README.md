@@ -472,7 +472,7 @@ elsewhere needs the explicit flag.
 Setup:
 
 1. Register the repository on the serve host — `pir repos add <clone-url>` (for example `pir repos add https://git.example.com/team/pir.git`). The PR head is fetched from `refs/pull/<n>/head` of that registered clone; a repo that is not registered gets a failure status on its first PR, with the `repos add` guidance in the comment.
-2. Create a bot account on the Gitea instance and generate a personal access token with the scopes `read:repository`, `write:repository` (reviews and commit statuses) and `write:issue` (the status comment).
+2. Create a bot account on the Gitea instance and generate a personal access token with the scopes `read:user` (bot-account lookup), `read:repository`, `write:repository` (reviews and commit statuses) and `write:issue` (the status comment).
 3. Write the integration config. Either `<pir config dir>/gitea.json` (default `~/.pir/gitea.json`, i.e. `$PIR_CONFIG_DIR/gitea.json` — it holds the bot token and the webhook secret, so keep it `chmod 600` and server-side), or the `PIR_GITEA_JSON` environment variable carrying the same JSON — docker and secret-manager friendly, no volume mount needed. A non-empty `PIR_GITEA_JSON` wins over the file:
 
 ```json
@@ -498,7 +498,7 @@ Configuration reference (see `src/gitea/config.ts` for the authoritative validat
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `url` | required | Gitea instance base URL, `http(s)://…` (trailing slashes stripped) |
+| `url` | required | Gitea instance base URL, `http(s)://…` (trailing slashes stripped; an `/api/v1` suffix is optional — API paths are derived from the instance root) |
 | `token` | required | bot PAT, sent as `Authorization: token …` |
 | `webhookSecret` | required | shared secret the webhooks are HMAC-SHA256-signed with |
 | `commentLanguage` | `en` | language of the posted comments: `en` or `zh-CN` |
