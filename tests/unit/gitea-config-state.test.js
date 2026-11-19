@@ -179,3 +179,49 @@ function loadGiteaConfigFrom(value) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+const { giteaStateFile, giteaStateKey, loadGiteaState, saveGiteaState } = await import(
+  "../../dist/gitea/state.js"
+);
+
+test("gitea state: missing file loads as an empty store", (t) => {
+  const dir = withTempDir(t);
+  assert.deepEqual(loadGiteaState(dir), { prs: {} });
+});
+
+test("gitea state: save/load roundtrip, owner-only mode, tmp file gone", (t) => {
+  const dir = withTempDir(t);
+  const key = giteaStateKey("beiyan/pir-demo", 42);
+  assert.equal(key, "beiyan/pir-demo#42");
+  const state = {
+    prs: {
+      [key]: {
+        lastHeadSha: "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+        reviewId: 1001,
+        statusCommentId: 2002,
+        lastPostedFingerprints: ["src/a.ts:fp1", "src/b.ts:fp2"],
+        updatedAt: "2026-11-18T12:00:00.000Z",
+      },
+    },
+  };
+  const file = saveGiteaState(dir, state);
+  assert.equal(file, path.join(dir, "gitea-state.json"));
+  assert.equal(giteaStateFile(dir), file);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.throws(() => statSync(`${file}.tmp`), /ENOENT/); // atomic rename left no tmp behind
+  assert.deepEqual(loadGiteaState(dir), state);
+
+  // A second save replaces entries atomically (tmp+rename, no leftovers).
+  state.prs[key].reviewId = 1003;
+  saveGiteaState(dir, state);
+  assert.equal(loadGiteaState(dir).prs[key].reviewId, 1003);
+  assert.throws(() => statSync(`${file}.tmp`), /ENOENT/);
+});
+
+test("gitea state: corrupt or wrong-shape files are tolerated as empty", (t) => {
+  const dir = withTempDir(t);
+  for (const raw of ["{ not json", "[]", '{"prs": "nope"}', '{"other": 1}', "null"]) {
+    writeFileSync(giteaStateFile(dir), raw);
+    assert.deepEqual(loadGiteaState(dir), { prs: {} }, `raw: ${raw}`);
+  }
+});
