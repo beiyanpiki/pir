@@ -163,8 +163,9 @@ export interface ServerHandle {
 
 /**
  * Gitea webhook integration input for startServer: `gitea.json` in the pir
- * config dir (PIR_CONFIG_DIR-aware). Missing file → integration off (route
- * still mounted, answering 503); a present-but-invalid file is a loud startup
+ * config dir (PIR_CONFIG_DIR-aware), or the `PIR_GITEA_JSON` env when set
+ * (non-empty wins over the file). Neither present → integration off (route
+ * still mounted, answering 503); an invalid source is a loud startup
  * failure (GiteaConfigError propagates) — a half-parsed webhook secret is
  * worse than refusing to start.
  */

@@ -5,10 +5,16 @@ import { pirConfigDir } from "../rules/project-rules.js";
 /**
  * Gitea integration configuration: `gitea.json` in the pir config dir
  * (PIR_CONFIG_DIR or ~/.pir, the same resolution as every other pir config
- * file). A missing file is not an error — it means the integration is off.
- * A present-but-invalid file IS an error: a half-parsed webhook secret or
- * token policy is worse than a loud startup failure.
+ * file), or — when `PIR_GITEA_JSON` is set to a non-empty value — that env
+ * variable's JSON instead (the deployment-friendly source: docker and secret
+ * managers inject env without volume-mounting a file). A missing file with no
+ * env is not an error — it means the integration is off. A present-but-invalid
+ * source IS an error: a half-parsed webhook secret or token policy is worse
+ * than a loud startup failure.
  */
+
+/** Error-context label for the env configuration source; the file path names itself. */
+const ENV_SOURCE = "$PIR_GITEA_JSON";
 
 /** Configuration error with the offending file in the message; the endpoint maps it to a usage failure. */
 export class GiteaConfigError extends Error {
@@ -134,10 +140,72 @@ function parsePolicyOverride(value: unknown, context: string): Partial<GiteaTrig
 }
 
 /**
- * Load `<configDir>/gitea.json`. Missing file → null (integration off).
- * Invalid file → GiteaConfigError naming the file and the offending key.
+ * Parse and validate one configuration source. `source` names the file path or
+ * env label in error messages. Shared by the file and `PIR_GITEA_JSON` paths
+ * so the validation contract cannot drift between them.
+ */
+function parseGiteaConfig(raw: string, source: string): GiteaIntegrationConfig {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new GiteaConfigError(`${source} is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!isRecord(parsed)) {
+    throw new GiteaConfigError(`${source}: expected a JSON object`);
+  }
+  rejectUnknownKeys(parsed, TOP_LEVEL_KEYS, source);
+
+  const url = parseGiteaUrl(parsed.url, source);
+
+  const commentLanguage =
+    parsed.commentLanguage === undefined ? DEFAULT_COMMENT_LANGUAGE : parsed.commentLanguage;
+  if (commentLanguage !== "en" && commentLanguage !== "zh-CN") {
+    throw new GiteaConfigError(`${source}: commentLanguage must be "en" or "zh-CN"`);
+  }
+  const statusOnFindings =
+    parsed.statusOnFindings === undefined ? DEFAULT_STATUS_ON_FINDINGS : parsed.statusOnFindings;
+  if (statusOnFindings !== "success" && statusOnFindings !== "failure") {
+    throw new GiteaConfigError(`${source}: statusOnFindings must be "success" or "failure"`);
+  }
+
+  const defaultsOverride =
+    parsed.defaults === undefined ? {} : parsePolicyOverride(parsed.defaults, `${source}: defaults`);
+  const defaults: GiteaTriggerPolicy = { ...DEFAULT_GITEA_TRIGGER_POLICY, ...defaultsOverride };
+
+  const repos: Record<string, Partial<GiteaTriggerPolicy>> = {};
+  if (parsed.repos !== undefined) {
+    if (!isRecord(parsed.repos)) {
+      throw new GiteaConfigError(`${source}: repos must be an object keyed by "owner/name"`);
+    }
+    for (const [repoFullName, policy] of Object.entries(parsed.repos)) {
+      repos[repoFullName] = parsePolicyOverride(policy, `${source}: repos["${repoFullName}"]`);
+    }
+  }
+
+  return {
+    url,
+    token: requireString(parsed.token, `${source}: token`),
+    webhookSecret: requireString(parsed.webhookSecret, `${source}: webhookSecret`),
+    commentLanguage,
+    statusOnFindings,
+    defaults,
+    repos,
+  };
+}
+
+/**
+ * Load the Gitea integration config. Precedence: a non-empty `PIR_GITEA_JSON`
+ * env variable wins and is parsed as the config JSON (same validation, errors
+ * name `$PIR_GITEA_JSON`); otherwise `<configDir>/gitea.json`. Missing file
+ * and no env → null (integration off). An invalid source → GiteaConfigError
+ * naming the source and the offending key.
  */
 export function loadGiteaConfig(configDir: string = pirConfigDir()): GiteaIntegrationConfig | null {
+  const envRaw = process.env.PIR_GITEA_JSON;
+  if (envRaw !== undefined && envRaw.trim() !== "") {
+    return parseGiteaConfig(envRaw, ENV_SOURCE);
+  }
   const file = giteaConfigFile(configDir);
   let raw: string;
   try {
@@ -146,53 +214,7 @@ export function loadGiteaConfig(configDir: string = pirConfigDir()): GiteaIntegr
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw new GiteaConfigError(`cannot read ${file}: ${(err as Error).message}`);
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new GiteaConfigError(`${file} is not valid JSON: ${(err as Error).message}`);
-  }
-  if (!isRecord(parsed)) {
-    throw new GiteaConfigError(`${file}: expected a JSON object`);
-  }
-  rejectUnknownKeys(parsed, TOP_LEVEL_KEYS, file);
-
-  const url = parseGiteaUrl(parsed.url, file);
-
-  const commentLanguage =
-    parsed.commentLanguage === undefined ? DEFAULT_COMMENT_LANGUAGE : parsed.commentLanguage;
-  if (commentLanguage !== "en" && commentLanguage !== "zh-CN") {
-    throw new GiteaConfigError(`${file}: commentLanguage must be "en" or "zh-CN"`);
-  }
-  const statusOnFindings =
-    parsed.statusOnFindings === undefined ? DEFAULT_STATUS_ON_FINDINGS : parsed.statusOnFindings;
-  if (statusOnFindings !== "success" && statusOnFindings !== "failure") {
-    throw new GiteaConfigError(`${file}: statusOnFindings must be "success" or "failure"`);
-  }
-
-  const defaultsOverride =
-    parsed.defaults === undefined ? {} : parsePolicyOverride(parsed.defaults, `${file}: defaults`);
-  const defaults: GiteaTriggerPolicy = { ...DEFAULT_GITEA_TRIGGER_POLICY, ...defaultsOverride };
-
-  const repos: Record<string, Partial<GiteaTriggerPolicy>> = {};
-  if (parsed.repos !== undefined) {
-    if (!isRecord(parsed.repos)) {
-      throw new GiteaConfigError(`${file}: repos must be an object keyed by "owner/name"`);
-    }
-    for (const [repoFullName, policy] of Object.entries(parsed.repos)) {
-      repos[repoFullName] = parsePolicyOverride(policy, `${file}: repos["${repoFullName}"]`);
-    }
-  }
-
-  return {
-    url,
-    token: requireString(parsed.token, `${file}: token`),
-    webhookSecret: requireString(parsed.webhookSecret, `${file}: webhookSecret`),
-    commentLanguage,
-    statusOnFindings,
-    defaults,
-    repos,
-  };
+  return parseGiteaConfig(raw, file);
 }
 
 /** http(s) URL, trailing slashes stripped so client path joins never double-slash. */
