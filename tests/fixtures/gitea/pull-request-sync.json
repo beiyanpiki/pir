@@ -1,0 +1,90 @@
+{
+  "action": "synchronized",
+  "number": 42,
+  "pull_request": {
+    "id": 10042,
+    "number": 42,
+    "title": "Add retry with backoff to the login client",
+    "body": "Retries idempotent POSTs up to three times before giving up.\n\nCloses #7.",
+    "user": {
+      "id": 10,
+      "login": "alice",
+      "user_name": "alice",
+      "full_name": "Alice Chen",
+      "email": "alice@example.com"
+    },
+    "base": {
+      "label": "main",
+      "ref": "main",
+      "sha": "0e2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5",
+      "repo_id": 5,
+      "repo": {
+        "id": 5,
+        "name": "pir-demo",
+        "owner": {
+          "id": 4,
+          "login": "beiyan",
+          "user_name": "beiyan"
+        },
+        "full_name": "beiyan/pir-demo",
+        "clone_url": "https://gitea.example.com/beiyan/pir-demo.git",
+        "ssh_url": "git@gitea.example.com:beiyan/pir-demo.git",
+        "html_url": "https://gitea.example.com/beiyan/pir-demo",
+        "default_branch": "main"
+      }
+    },
+    "head": {
+      "label": "alice:feat/login-retry",
+      "ref": "feat/login-retry",
+      "sha": "5f6e7d8c9b0a1f2e3d4c5b6a7988091726354e5d",
+      "repo_id": 6,
+      "repo": {
+        "id": 6,
+        "name": "pir-demo",
+        "owner": {
+          "id": 10,
+          "login": "alice",
+          "user_name": "alice"
+        },
+        "full_name": "alice/pir-demo",
+        "clone_url": "https://gitea.example.com/alice/pir-demo.git",
+        "ssh_url": "git@gitea.example.com:alice/pir-demo.git",
+        "html_url": "https://gitea.example.com/alice/pir-demo",
+        "default_branch": "main"
+      }
+    },
+    "html_url": "https://gitea.example.com/beiyan/pir-demo/pulls/42",
+    "created_at": "2026-11-18T09:15:00Z",
+    "updated_at": "2026-11-18T11:02:00Z",
+    "labels": [
+      {
+        "id": 21,
+        "name": "enhancement",
+        "color": "84b6eb"
+      }
+    ],
+    "merged": false,
+    "mergeable": true,
+    "state": "open"
+  },
+  "repository": {
+    "id": 5,
+    "owner": {
+      "id": 4,
+      "login": "beiyan",
+      "user_name": "beiyan"
+    },
+    "name": "pir-demo",
+    "full_name": "beiyan/pir-demo",
+    "clone_url": "https://gitea.example.com/beiyan/pir-demo.git",
+    "ssh_url": "git@gitea.example.com:beiyan/pir-demo.git",
+    "html_url": "https://gitea.example.com/beiyan/pir-demo",
+    "default_branch": "main"
+  },
+  "sender": {
+    "id": 10,
+    "login": "alice",
+    "user_name": "alice",
+    "full_name": "Alice Chen"
+  }
+}
