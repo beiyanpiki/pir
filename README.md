@@ -177,6 +177,8 @@ pir find --uncommitted --base HEAD --json # staged, unstaged, and untracked work
 pir find --preview --json               # what a review would select, and what it withholds
 pir find --background-file pr-description.md --base origin/main --json  # state the intent of the change
 
+pir summarize --base origin/main --json # plain-language walkthrough of a change range (one session, no findings)
+
 pir audit --json                        # committed HEAD snapshot
 pir audit --path src/auth --path src/payments --json
 pir audit --skip '**/generated/**' --json

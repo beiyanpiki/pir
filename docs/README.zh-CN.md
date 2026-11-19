@@ -126,6 +126,8 @@ pir find --uncommitted --base HEAD --json # 暂存、未暂存和未跟踪的内
 pir find --preview --json               # 预演本次评审会选择哪些文件、遮蔽哪些文件
 pir find --background-file pr.md --base origin/main --json  # 说明这次改动的意图
 
+pir summarize --base origin/main --json # 用大白话讲解一个变更区间（单会话，不报 findings）
+
 pir audit --json                        # 已提交的 HEAD 快照
 pir audit --path src/auth --path src/payments --json
 pir audit --skip '**/generated/**' --json
