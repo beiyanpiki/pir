@@ -270,7 +270,7 @@ web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIE
 配置步骤：
 
 1. 在 serve 所在主机注册仓库——`pir repos add <clone-url>`（例如 `pir repos add https://git.example.com/team/pir.git`）。PR head 会从这个注册 clone 的 `refs/pull/<n>/head` 拉取；未注册的仓库在第一个 PR 上会收到失败状态评论，评论里带有 `repos add` 的指引。
-2. 在 Gitea 实例上创建一个机器人账号，生成带 `read:repository`、`write:repository`（评审与 commit status）和 `write:issue`（状态评论）权限的 personal access token。
+2. 在 Gitea 实例上创建一个机器人账号，生成带 `read:user`（机器人账号识别）、`read:repository`、`write:repository`（评审与 commit status）和 `write:issue`（状态评论）权限的 personal access token。
 3. 写集成配置。可以是 `<pir 配置目录>/gitea.json`（默认 `~/.pir/gitea.json`，即 `$PIR_CONFIG_DIR/gitea.json`——文件里有 bot token 和 webhook secret，请保持 `chmod 600` 且只放在服务端），也可以用承载同样 JSON 的 `PIR_GITEA_JSON` 环境变量——对 docker 和 secret 管理器友好，无需挂载文件。`PIR_GITEA_JSON` 非空时优先于文件：
 
 ```json
@@ -296,7 +296,7 @@ web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIE
 
 | 键 | 默认值 | 含义 |
 | --- | --- | --- |
-| `url` | 必填 | Gitea 实例 base URL，`http(s)://…`（末尾斜杠会被去掉） |
+| `url` | 必填 | Gitea 实例 base URL，`http(s)://…`（末尾斜杠会被去掉；可带可不带 `/api/v1` 后缀 —— API 路径由实例根自动推导） |
 | `token` | 必填 | bot PAT，以 `Authorization: token …` 发送 |
 | `webhookSecret` | 必填 | webhook 的 HMAC-SHA256 签名共享密钥 |
 | `commentLanguage` | `en` | 评论语言：`en` 或 `zh-CN` |
