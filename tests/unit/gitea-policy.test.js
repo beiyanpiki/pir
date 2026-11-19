@@ -39,6 +39,16 @@ const cases = [
     code: "accepted",
   },
   {
+    name: "synchronized under the umbrella pull_request event is accepted (Gitea 1.24 delivery)",
+    input: { ...BASE_INPUT, event: "pull_request", action: "synchronized" },
+    code: "accepted",
+  },
+  {
+    name: "synchronized under the umbrella event still skips on a WIP title",
+    input: { ...BASE_INPUT, event: "pull_request", action: "synchronized", title: "WIP: Add retry" },
+    code: "wip",
+  },
+  {
     name: "unwatched event",
     input: { ...BASE_INPUT, event: "issues" },
     code: "unwatched-event",
