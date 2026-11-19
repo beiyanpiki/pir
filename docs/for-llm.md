@@ -615,6 +615,7 @@ Prefer the CLI for bundles and job handling. Direct callers use:
 | `GET /v1/jobs` | `{jobs:[...]}` summaries |
 | `GET /v1/jobs/<full-id>` | `{job:{status,log,result,...}}` |
 | `POST /v1/memory/sync` | versioned memory snapshot; use `pir memory sync` |
+| `POST /v1/webhook/gitea` | HMAC-signed Gitea webhook; see the Gitea section below |
 
 Bundle request fields:
 
@@ -639,6 +640,29 @@ resolution is performed by the CLI.
 
 `/v1/exec` requires an existing server git context for repo commands. A stock
 serve workspace is not a checkout; use bundles or a registered `--repo`.
+
+## Gitea integration
+
+`POST /v1/webhook/gitea` lets a Gitea instance request PR reviews: point a
+repository webhook at the serve URL (events: pull request; delivery is
+HMAC-authenticated, not bearer-authenticated). Configuration lives in
+`gitea.json` inside the pir config dir (`PIR_CONFIG_DIR`, default `~/.pir`) —
+instance URL, API token, webhook secret, comment language, the commit status
+to post when findings exist, and per-repo trigger policy (watched base
+branches, WIP title prefixes, skip labels, finding cap, model override). A
+missing file keeps the integration off (the route answers
+`503 {"error":"gitea integration not configured"}`); an invalid one refuses
+startup. The reviewed repository must be registered server-side (`pir repos
+add <clone_url>`) so the PR head can be fetched from a known clone.
+
+Response codes: `202 {accepted:true, reason:"accepted", jobId}` starts a
+review job (poll `GET /v1/jobs/<id>`; the job output is
+`{outcome:"reviewed"|"superseded"|"failed", detail}`); `200` with
+`{accepted:false, reason:"<code>: …"}` is a policy rejection (codes:
+`unwatched-event`, `unwatched-action`, `wip`, `base-branch`, `skip-label`,
+`bot-sender` — no job is created); `401` invalid signature; `400` malformed
+body or routing headers. A newer webhook for the same PR supersedes the older
+run's job. Full setup and config reference follow in the docs PR.
 
 ## Operational settings
 

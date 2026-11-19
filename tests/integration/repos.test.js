@@ -289,3 +289,63 @@ test("a live foreign lock is never deleted by a failed acquisition", async (t) =
     repo.cleanup();
   }
 });
+
+test("fetchPullRef fetches refs/pull/<n>/head into a stable ref that survives fetch --all", async (t) => {
+  sandbox(t);
+  const origin = createTempGitRepo("pir-pullref-origin-");
+  try {
+    const head1 = origin.commit("first");
+    git(origin.dir, ["update-ref", "refs/pull/7/head", head1]);
+    const { addRepo, fetchPullRef } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(origin.dir);
+    const dir = path.join(process.env.PIR_REPOS_ROOT, entry.projectId);
+
+    // New push: the origin's pull ref moves; the registered clone's fetch must follow.
+    origin.write("src/next.ts", "export const next = 1;\n");
+    const head2 = origin.commit("second");
+    git(origin.dir, ["update-ref", "refs/pull/7/head", head2]);
+    assert.equal(await fetchPullRef(dir, 7), head2);
+
+    // The ref is a fixed local ref, not FETCH_HEAD: a concurrent plain
+    // `fetch --all` (any other in-flight review) cannot overwrite it.
+    await git(dir, ["fetch", "--all", "--quiet"]);
+    assert.equal((await git(dir, ["rev-parse", "refs/pir/pull/7/head"])).trim(), head2);
+
+    // A PR number the origin does not have is a loud error, not a stale ref.
+    await assert.rejects(fetchPullRef(dir, 9), /refs\/pull\/9\/head/);
+  } finally {
+    origin.cleanup();
+  }
+});
+
+test("findRegisteredRepoByUrl matches across transports and returns null for unknown repos", async (t) => {
+  sandbox(t);
+  const origin = createTempGitRepo("pir-byurl-origin-");
+  try {
+    git(origin.dir, ["remote", "add", "origin", "https://Gitea.Example.com/beiyan/Repo.git"]);
+    const { addRepo, findRegisteredRepoByUrl } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(origin.dir);
+
+    // Same repository, different transport spelling (case, .git, ssh form).
+    const found = findRegisteredRepoByUrl("git@gitea.example.com:beiyan/Repo");
+    assert.ok(found, "ssh spelling should match the https registration");
+    assert.equal(found.entry.projectId, entry.projectId);
+    assert.equal(found.dir, path.join(process.env.PIR_REPOS_ROOT, entry.projectId));
+
+    // A local path registration matches the identical path (webhook payloads
+    // from a local Gitea carry it as clone_url).
+    const local = createTempGitRepo("pir-byurl-local-");
+    try {
+      const localEntry = await addRepo(local.dir);
+      const localFound = findRegisteredRepoByUrl(local.dir);
+      assert.ok(localFound);
+      assert.equal(localFound.entry.projectId, localEntry.projectId);
+    } finally {
+      local.cleanup();
+    }
+
+    assert.equal(findRegisteredRepoByUrl("https://other.example.com/x/y.git"), null);
+  } finally {
+    origin.cleanup();
+  }
+});

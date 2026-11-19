@@ -235,6 +235,17 @@ test("review body: no findings renders the empty line, unchanged note absent at 
   assert.ok(!body.includes("| F-1 |"));
 });
 
+test("review body: an all-unchanged run still notes the unchanged count", () => {
+  // No new rows at all — the note is the reader's only signal that the
+  // previously posted findings still stand, so it must not vanish with the table.
+  const body = renderReviewBody({
+    ...REVIEW_BASE,
+    findings: { inline: [], demoted: [], unchangedCount: 3 },
+  });
+  assert.ok(body.includes("No findings."));
+  assert.ok(body.includes("3 previously-reported finding(s) unchanged — not reposted"));
+});
+
 // ---------------------------------------------------------------------------
 // inline finding body
 // ---------------------------------------------------------------------------
