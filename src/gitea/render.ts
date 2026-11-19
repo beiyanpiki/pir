@@ -34,7 +34,10 @@ const RATIONALE_MAX = 1200;
  * that swallows a real one.
  */
 export function stripHtmlComments(text: string): string {
-  return text.replace(/<!--[\s\S]*?-->/g, "");
+  // Closed comments first, then any leftover bare `<!--` — an unclosed
+  // opener would pair with the NEXT `-->` in the rendered HTML (possibly
+  // the marker's own closer) and swallow everything between.
+  return text.replace(/<!--[\s\S]*?-->/g, "").replace(/<!--/g, "");
 }
 
 /** Cap text at `max` characters, marking the cut with a single ellipsis character. */
@@ -363,6 +366,14 @@ export function renderReviewBody(input: GiteaReviewBodyInput): string {
 export interface GiteaInlineBodyInput {
   finding: FindingView;
   lang: CommentLang;
+  /**
+   * Where the comment is pinned, as `path:line`. Defaults to the finding's
+   * first anchor, which can differ from the mapped position when that first
+   * anchor did not land on a changed line — callers that already ran the
+   * anchor mapping pass the mapped `path:new_position` here so the header
+   * never disagrees with the pin.
+   */
+  location?: string;
   runUrl?: string;
 }
 
@@ -378,7 +389,8 @@ export function renderInlineFindingBody(input: GiteaInlineBodyInput): string {
   const link = runLink(input.runUrl, t);
 
   const lines: string[] = [];
-  lines.push(`**${finding.severity} · ${finding.category}** — \`${anchorLocation(finding, t)}\``);
+  const location = input.location ?? anchorLocation(finding, t);
+  lines.push(`**${finding.severity} · ${finding.category}** — \`${location}\``);
   lines.push("", stripHtmlComments(finding.claim).trim());
   lines.push("", `${t.triggerLabel}${capText(stripHtmlComments(finding.trigger).trim(), TRIGGER_MAX)}`);
   if (finding.verifierRationale) {

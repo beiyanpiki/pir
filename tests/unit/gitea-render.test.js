@@ -255,6 +255,18 @@ test("inline body (zh-CN): localized labels", () => {
   assert.ok(body.includes("验证说明：Confirmed against the loop guard."));
 });
 
+test("inline body accepts a mapped location so the header never disagrees with the pin", () => {
+  // First anchor (src/gone.ts) is a deleted-file dud; the comment is pinned
+  // at the mapped anchor — the header must show the mapped one.
+  const finding = view({ anchors: [{ path: "src/gone.ts", startLine: 1 }, { path: "src/loop.ts", startLine: 42 }] });
+  const body = renderInlineFindingBody({ finding, lang: "en", location: "src/loop.ts:42" });
+  assert.ok(body.startsWith("**P1 · correctness** — `src/loop.ts:42`\n"));
+  assert.ok(!body.includes("src/gone.ts"));
+  // Default stays the first anchor when no mapped location is handed in.
+  const fallback = renderInlineFindingBody({ finding, lang: "en" });
+  assert.ok(fallback.startsWith("**P1 · correctness** — `src/gone.ts:1`\n"));
+});
+
 test("inline body caps trigger at ~400 and rationale at ~1200 with an ellipsis", () => {
   const longTrigger = "t".repeat(500);
   const longRationale = "r".repeat(2000);
@@ -294,6 +306,9 @@ test("escapeTableCell escapes pipes, collapses newlines, and caps at ~200", () =
 test("stripHtmlComments removes comments so claims cannot forge or erase pir markers", () => {
   assert.equal(stripHtmlComments("x <!-- hidden --> y"), "x  y");
   assert.equal(stripHtmlComments("<!-- pir:review v1 -->"), "");
+  // An unclosed opener is removed too — it would pair with the NEXT closer
+  // in the rendered HTML (possibly the marker's own) and swallow content.
+  assert.equal(stripHtmlComments("a <!-- b"), "a  b");
   // A claim carrying the review marker cannot inject it into a rendered body.
   const sneaky = view({ claim: "evil <!-- pir:review v1 --> claim" });
   const review = renderReviewBody({
