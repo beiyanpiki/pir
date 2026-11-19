@@ -324,6 +324,7 @@ Finding shape:
 
 ```text
 id, displayId, title, claim, trigger, category, severity, status
+fingerprint: stable identity hash (sha256 of featureKey+entityKey+category+claim+trigger) that survives across runs, unlike the per-run UUID id; the key for cross-run dedupe
 featureKey, entityKey
 anchors: [{ path, startLine, endLine?, excerpt?, lineCorrected?, originalStartLine?, originalEndLine? }]
   excerpt: verbatim snippet used for local re-location (optional)
