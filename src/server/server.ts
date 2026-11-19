@@ -15,6 +15,14 @@ import { JobRegistry } from "./jobs.js";
 import { redactUserBackgroundArgv } from "../core/user-background.js";
 import { pirStateBase } from "./web-store.js";
 import { isGitRepo } from "../changes/git.js";
+import { pirConfigDir } from "../rules/project-rules.js";
+import { findRegisteredRepoByUrl } from "../app/repos.js";
+import { parseGiteaEvent, parsePullRequestPayload, verifyGiteaSignature } from "../gitea/webhook.js";
+import { evaluateTrigger } from "../gitea/policy.js";
+import { loadGiteaConfig, resolveTriggerPolicy, type GiteaIntegrationConfig } from "../gitea/config.js";
+import { createGiteaClient, type GiteaFetch } from "../gitea/client.js";
+import { giteaStateKey } from "../gitea/state.js";
+import { orchestrateGiteaReview, type GiteaReviewRunner } from "../gitea/orchestrator.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -102,12 +110,23 @@ export async function runServe(argv: string[]): Promise<void> {
       webUi = { ...(webToken ? { token: webToken } : {}), stateRoot: pirStateBase(), webRoot: defaultWebRoot() };
     }
   }
-  const handle = await startServer({ host, port, token, workspace, tls: await resolveTls(options), ...(webUi ? { webUi } : {}) });
+  const handle = await startServer({
+    host,
+    port,
+    token,
+    workspace,
+    tls: await resolveTls(options),
+    ...(webUi ? { webUi } : {}),
+    ...loadGiteaServeInput(),
+  });
   const log = handle.log;
 
   log(
     `listening on ${handle.url} | workspace ${workspace} | auth ${token ? "bearer" : "NONE"} | tls ${handle.tls ? "on" : "OFF"}`,
   );
+  if (handle.giteaEnabled) {
+    log(`gitea integration enabled for ${handle.giteaEnabled}`);
+  }
   if (webEnabled) {
     if (webUi) {
       log(`web ui on at / (auth ${webUi.token ? "PIR_WEB_UI_TOKEN" : "loopback open — set PIR_WEB_UI_TOKEN to require a token"}) | transcripts default on`);
@@ -138,6 +157,21 @@ export interface ServerHandle {
   tls: boolean;
   log: (message: string) => void;
   close: () => void;
+  /** Gitea instance URL when the webhook integration is configured; undefined otherwise. */
+  giteaEnabled?: string;
+}
+
+/**
+ * Gitea webhook integration input for startServer: `gitea.json` in the pir
+ * config dir (PIR_CONFIG_DIR-aware). Missing file → integration off (route
+ * still mounted, answering 503); a present-but-invalid file is a loud startup
+ * failure (GiteaConfigError propagates) — a half-parsed webhook secret is
+ * worse than refusing to start.
+ */
+function loadGiteaServeInput(): { gitea?: { config: GiteaIntegrationConfig; configDir: string } } {
+  const configDir = pirConfigDir();
+  const config = loadGiteaConfig(configDir);
+  return config ? { gitea: { config, configDir } } : {};
 }
 
 export async function startServer(input: {
@@ -148,6 +182,8 @@ export async function startServer(input: {
   tls: TlsMaterial | null;
   /** Read-only web UI configuration; absent keeps the classic JSON-only server. */
   webUi?: { token?: string; stateRoot: string; webRoot: string };
+  /** Gitea webhook integration; absent (or a null config) keeps the route mounted but 503. */
+  gitea?: { config: GiteaIntegrationConfig; configDir: string; fetchImpl?: GiteaFetch; runner?: GiteaReviewRunner };
 }): Promise<ServerHandle> {
   const log = (message: string): void => {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] ${message}\n`);
@@ -195,6 +231,36 @@ export async function startServer(input: {
   // result up by id; sync requests whose client disconnected keep it here too.
   const jobs = new JobRegistry();
 
+  // Gitea webhook integration. The route is always mounted (a constant,
+  // probe-able surface); without a config it answers 503. The client and the
+  // bot login are shared across requests: one API object, one cached /user
+  // lookup per serve process.
+  const giteaClient = input.gitea
+    ? createGiteaClient({
+        baseUrl: input.gitea.config.url,
+        token: input.gitea.config.token,
+        ...(input.gitea.fetchImpl ? { fetchImpl: input.gitea.fetchImpl } : {}),
+      })
+    : undefined;
+  let botLoginPromise: Promise<string | undefined> | undefined;
+  const getBotLogin = (): Promise<string | undefined> => {
+    if (!input.gitea || !giteaClient) return Promise.resolve(undefined);
+    // Cache the promise (not the value) so concurrent webhooks share one
+    // /user call; a failure caches undefined — the bot-sender skip rule
+    // stays off until restart rather than retrying on every webhook.
+    botLoginPromise ??= giteaClient.getCurrentUser().then(
+      (user) => user.login,
+      (err) => {
+        log(`gitea: could not fetch the bot account (${err instanceof Error ? err.message : String(err)}) — bot-sender skip rule disabled`);
+        return undefined;
+      },
+    );
+    return botLoginPromise;
+  };
+  // Latest accepted head SHA per PR (`owner/name#number`): the newest
+  // webhook owns the PR; an older in-flight job checks this and stands down.
+  const latestAcceptedHead = new Map<string, string>();
+
   const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     const url = new URL(req.url ?? "/", "http://local");
     if (req.method === "GET" && url.pathname === "/health") {
@@ -211,6 +277,12 @@ export async function startServer(input: {
         return;
       }
       handleJobs(res, url.pathname.slice("/v1/jobs/".length));
+      return;
+    }
+    // HMAC-authenticated, so never behind the bearer check: Gitea signs the
+    // raw body with the shared webhook secret instead of holding a token.
+    if (req.method === "POST" && url.pathname === "/v1/webhook/gitea") {
+      void handleGiteaWebhook(req, res);
       return;
     }
     if (
@@ -253,10 +325,135 @@ export async function startServer(input: {
     res.end(
       JSON.stringify({
         error: "not found",
-        endpoints: ["GET /health", "POST /v1/exec", "POST /v1/review", "POST /v1/memory/sync", "GET /v1/jobs", "GET /v1/jobs/<id>"],
+        endpoints: [
+          "GET /health",
+          "POST /v1/exec",
+          "POST /v1/review",
+          "POST /v1/memory/sync",
+          "POST /v1/webhook/gitea",
+          "GET /v1/jobs",
+          "GET /v1/jobs/<id>",
+        ],
       }),
     );
   };
+
+  /**
+   * POST /v1/webhook/gitea — the Gitea PR-review ingress. HMAC-verified (no
+   * bearer token: Gitea signs the raw body with the configured shared
+   * secret), then routed through the pure policy gate. Accepted PR triggers
+   * answer 202 immediately and run the orchestration on the serial queue as
+   * a job; every rejection answers 200 with the machine-readable reason so
+   * Gitea does not retry unwatched events. An unconfigured integration
+   * answers 503 — the route itself is the constant surface.
+   */
+  async function handleGiteaWebhook(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const json = (status: number, body: unknown): void => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
+    try {
+      if (!input.gitea || !giteaClient) {
+        json(503, { error: "gitea integration not configured" });
+        return;
+      }
+      const config = input.gitea.config;
+      const raw = await readBody(req);
+      if (!verifyGiteaSignature(raw, config.webhookSecret, req.headers)) {
+        json(401, { error: "invalid or missing webhook signature" });
+        return;
+      }
+      let headers;
+      try {
+        headers = parseGiteaEvent(req.headers);
+      } catch (err) {
+        json(400, { error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      // Only the two PR-carrying events parse a payload; everything else is
+      // skipped cheaply with the machine-readable reason so Gitea does not retry.
+      if (headers.event !== "pull_request" && headers.event !== "pull_request_sync") {
+        json(200, { accepted: false, reason: "unwatched-event" });
+        return;
+      }
+      let view;
+      try {
+        view = parsePullRequestPayload(raw);
+      } catch (err) {
+        json(400, { error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      const botLogin = await getBotLogin();
+      const decision = evaluateTrigger(
+        {
+          event: headers.event,
+          action: view.action,
+          title: view.title,
+          ...(view.draft !== undefined ? { draft: view.draft } : {}),
+          baseRef: view.baseRef,
+          labels: view.labels,
+          senderLogin: view.senderLogin,
+          ...(botLogin !== undefined ? { botLogin } : {}),
+        },
+        resolveTriggerPolicy(config, view.repoFullName),
+      );
+      if (!decision.accepted) {
+        log(`gitea webhook ${view.repoFullName}#${view.number} rejected: ${decision.reason}`);
+        json(200, { accepted: false, reason: decision.reason });
+        return;
+      }
+
+      const prKey = giteaStateKey(view.repoFullName, view.number);
+      const job = jobs.create({ command: "gitea-review", argv: [prKey, view.headSha] });
+      // Registering the head AFTER job creation, BEFORE responding: the
+      // in-flight older job consults this map and stands down when a newer
+      // head has taken over the PR.
+      latestAcceptedHead.set(prKey, view.headSha);
+      json(202, { accepted: true, reason: "accepted", jobId: job.jobId });
+      log(`gitea webhook ${prKey}@${view.headSha.slice(0, 10)} accepted (job ${job.jobId})`);
+
+      void enqueue(async () => {
+        job.start();
+        const logLines: string[] = [];
+        const onLog = (message: string): void => {
+          logLines.push(message);
+          job.progress(message);
+          log(`gitea ${prKey} :: ${message}`);
+        };
+        try {
+          const registered = findRegisteredRepoByUrl(view.cloneUrl);
+          const outcome = await orchestrateGiteaReview({
+            config,
+            configDir: input.gitea!.configDir,
+            client: giteaClient!,
+            ...(registered ? { repoDir: registered.dir, projectId: registered.entry.projectId } : {}),
+            view,
+            jobId: job.jobId,
+            onLog,
+            ...(input.gitea!.runner ? { runner: input.gitea!.runner } : {}),
+            isSuperseded: () => latestAcceptedHead.get(prKey) !== view.headSha,
+            version: readVersion(),
+          });
+          if (outcome.outcome === "failed") {
+            job.fail(outcome.detail);
+            log(`gitea job ${job.jobId} failed: ${outcome.detail}`);
+          } else {
+            job.finish({ code: 0, output: JSON.stringify(outcome), log: logLines });
+            log(`gitea job ${job.jobId} ${outcome.outcome}: ${outcome.detail}`);
+          }
+        } catch (err) {
+          // orchestrateGiteaReview never throws, but a job must always settle.
+          const message = err instanceof Error ? err.message : String(err);
+          job.fail(message);
+          log(`gitea job ${job.jobId} failed: ${message}`);
+        }
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`gitea webhook error: ${message}`);
+      if (!res.headersSent) json(400, { error: message });
+    }
+  }
 
   /**
    * coderabbit-cli style flow: the client ships its LOCAL state as a git
@@ -724,6 +921,7 @@ export async function startServer(input: {
     url: `${input.tls ? "https" : "http"}://${input.host}:${actualPort}`,
     tls: Boolean(input.tls),
     log,
+    ...(input.gitea ? { giteaEnabled: input.gitea.config.url } : {}),
     close: () => {
       server.close();
       webRegistry?.dispose();
