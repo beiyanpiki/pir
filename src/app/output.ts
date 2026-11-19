@@ -17,7 +17,8 @@ export function severityAtLeast(severity: string, threshold: string): boolean {
   return a <= b;
 }
 
-const REPORTED_STATUSES = new Set(["confirmed", "uncertain"]);
+/** Statuses a consumer should treat as reported findings (everything else is internal bookkeeping). */
+export const REPORTED_STATUSES = new Set(["confirmed", "uncertain"]);
 
 export function isReported(finding: FindingView): boolean {
   return REPORTED_STATUSES.has(finding.status);
