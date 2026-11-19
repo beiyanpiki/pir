@@ -348,9 +348,12 @@ export function renderReviewBody(input: GiteaReviewBodyInput): string {
     for (const row of rows) {
       lines.push(`| ${row.map((cell) => escapeTableCell(cell)).join(" | ")} |`);
     }
-    if (input.findings.unchangedCount > 0) {
-      lines.push("", fmt(t.unchangedNote, { n: input.findings.unchangedCount }));
-    }
+  }
+  // The note is independent of the table: a run whose findings are ALL
+  // unchanged posts no rows, and that is exactly when the reader most needs
+  // to know the findings still stand.
+  if (input.findings.unchangedCount > 0) {
+    lines.push("", fmt(t.unchangedNote, { n: input.findings.unchangedCount }));
   }
 
   const footer = fmt(t.footerVersion, { version: input.version });
