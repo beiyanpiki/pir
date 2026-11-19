@@ -45,6 +45,11 @@ services:
       # into its throwaway worktree and syncs it to the reviewed head (#64).
       # Without it (default) serve reviews run in degraded mode.
       - PIR_CODEGRAPH=${PIR_CODEGRAPH:-}
+      # Gitea PR-review webhook integration, configured purely via env (no
+      # volume-mount needed): the full gitea.json content as one JSON string.
+      # Set it in .env, never in a committed file — it carries the bot token
+      # and the webhook secret. Empty (default) keeps the integration off.
+      - PIR_GITEA_JSON=${PIR_GITEA_JSON:-}
     volumes:
       - ./docker/pi-config:/pi-config:ro
       - pir-repos:/data/repos

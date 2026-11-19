@@ -115,6 +115,60 @@ test("gitea config: unknown keys, bad shapes and bad values are loud", (t) => {
   assert.throws(() => loadGiteaConfig(dir), /expected a JSON object/); // valid JSON, wrong shape
 });
 
+// ---------------------------------------------------------------------------
+// PIR_GITEA_JSON env source
+// ---------------------------------------------------------------------------
+
+/** Set PIR_GITEA_JSON for one test; restored (or deleted) afterwards. */
+function setGiteaJsonEnv(t, value) {
+  const prev = process.env.PIR_GITEA_JSON;
+  if (value === undefined) delete process.env.PIR_GITEA_JSON;
+  else process.env.PIR_GITEA_JSON = value;
+  t.after(() => {
+    if (prev === undefined) delete process.env.PIR_GITEA_JSON;
+    else process.env.PIR_GITEA_JSON = prev;
+  });
+}
+
+test("gitea config: non-empty PIR_GITEA_JSON wins over the file and works with no file", (t) => {
+  const dir = withTempDir(t);
+  // A file with a DIFFERENT url proves the env value, not the file, was used.
+  writeGiteaJson(dir, MINIMAL);
+  setGiteaJsonEnv(t, JSON.stringify({ ...MINIMAL, url: "https://env-gitea.example.com/" }));
+  let config = loadGiteaConfig(dir);
+  assert.equal(config.url, "https://env-gitea.example.com");
+  assert.deepEqual(config.defaults, DEFAULT_GITEA_TRIGGER_POLICY); // env goes through the same defaults
+  // No file at all: the env alone enables the integration (docker case).
+  rmSync(path.join(dir, "gitea.json"));
+  config = loadGiteaConfig(dir);
+  assert.equal(config.url, "https://env-gitea.example.com");
+});
+
+test("gitea config: invalid PIR_GITEA_JSON is a loud error naming the env, even with no file", (t) => {
+  const dir = withTempDir(t); // deliberately no gitea.json — a broken env must not read as "off"
+  setGiteaJsonEnv(t, "{ not json");
+  assert.throws(() => loadGiteaConfig(dir), GiteaConfigError);
+  assert.throws(() => loadGiteaConfig(dir), /\$PIR_GITEA_JSON is not valid JSON/);
+  setGiteaJsonEnv(t, JSON.stringify({ ...MINIMAL, url: "ftp://gitea.example.com" }));
+  assert.throws(() => loadGiteaConfig(dir), /\$PIR_GITEA_JSON: url/);
+  setGiteaJsonEnv(t, JSON.stringify({ ...MINIMAL, webhook_secret: "x" }));
+  assert.throws(() => loadGiteaConfig(dir), /unknown key "webhook_secret"/);
+});
+
+test("gitea config: unset, empty, or whitespace-only PIR_GITEA_JSON falls back to the file", (t) => {
+  const dir = withTempDir(t);
+  writeGiteaJson(dir, { ...MINIMAL, commentLanguage: "zh-CN" });
+  for (const value of [undefined, "", "   "]) {
+    setGiteaJsonEnv(t, value);
+    assert.equal(loadGiteaConfig(dir).commentLanguage, "zh-CN", `env: ${JSON.stringify(value)}`);
+  }
+  setGiteaJsonEnv(t, undefined);
+  assert.equal(loadGiteaConfig(dir).commentLanguage, "zh-CN");
+  // And with neither source, the integration stays off.
+  rmSync(path.join(dir, "gitea.json"));
+  assert.equal(loadGiteaConfig(dir), null);
+});
+
 const POLICY_CONFIG = {
   ...MINIMAL,
   defaults: { baseBranches: ["main", "dev"], maxFindings: 5, model: "provider/default-model" },

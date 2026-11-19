@@ -396,6 +396,7 @@ run-shaping flags are rejected with a usage error instead of being ignored.
 | `POST /v1/exec` | execute a non-bundled CLI invocation |
 | `POST /v1/review` | execute a repo-context command from a git bundle |
 | `POST /v1/memory/sync` | merge a local memory snapshot into the server |
+| `POST /v1/webhook/gitea` | HMAC-signed Gitea PR webhook; see the Gitea integration section |
 | `GET /v1/jobs` and `/v1/jobs/<id>` | inspect or retrieve asynchronous work |
 
 Remote audits sent from a checkout are asynchronous jobs by default.
@@ -463,6 +464,69 @@ Web-tier credentials are separate from the execution token (#50):
 and neither kind ever substitutes for the other. Env/config viewer tokens are
 only sent to the server they were configured for; a run URL pointing
 elsewhere needs the explicit flag.
+
+## Gitea integration
+
+`pir serve` can watch Gitea pull requests for you: a repository webhook triggers an automatic review of the PR head — a plain-language walkthrough (`pir summarize`), verified findings as inline comments on the changed lines, an evolving status comment on the PR conversation, and a `pir/review` commit status that CI can read. The integration is opt-in and entirely server-side: the CLI never posts anything anywhere, and an unconfigured serve answers `503` on the webhook route. The design rationale is [ADR 0023](docs/adr/0023-gitea-pr-webhook-integration.md).
+
+Setup:
+
+1. Register the repository on the serve host — `pir repos add <clone-url>` (for example `pir repos add https://git.example.com/team/pir.git`). The PR head is fetched from `refs/pull/<n>/head` of that registered clone; a repo that is not registered gets a failure status on its first PR, with the `repos add` guidance in the comment.
+2. Create a bot account on the Gitea instance and generate a personal access token with the scopes `read:repository`, `write:repository` (reviews and commit statuses) and `write:issue` (the status comment).
+3. Write the integration config. Either `<pir config dir>/gitea.json` (default `~/.pir/gitea.json`, i.e. `$PIR_CONFIG_DIR/gitea.json` — it holds the bot token and the webhook secret, so keep it `chmod 600` and server-side), or the `PIR_GITEA_JSON` environment variable carrying the same JSON — docker and secret-manager friendly, no volume mount needed. A non-empty `PIR_GITEA_JSON` wins over the file:
+
+```json
+{
+  "url": "https://git.example.com",
+  "token": "<bot PAT>",
+  "webhookSecret": "<webhook secret>",
+  "commentLanguage": "en",
+  "statusOnFindings": "success",
+  "defaults": { "baseBranches": ["main"], "wipPrefixes": ["WIP:", "[WIP]", "Draft:"], "skipLabels": ["skip-review"], "maxFindings": 10, "model": null },
+  "repos": { "team/pir": { "baseBranches": ["main", "dev"] } }
+}
+```
+
+4. Start (or restart) `pir serve`. The config is loaded once at startup: a missing file and unset env keep the integration off; an invalid one refuses to start. A successful start logs `gitea integration enabled for <url>`.
+5. In the Gitea repository settings, create a webhook: target URL `https://<serve-host>:<port>/v1/webhook/gitea`, method POST, content type `application/json`, secret = the `webhookSecret` from the config, triggering on the custom events "Pull Request" and "Pull Request Sync" (the sync event is how Gitea delivers pushes to an open PR branch).
+
+What a reviewed PR looks like: pir first posts (and thereafter edits) one status comment carrying a hidden marker, `started` while the review runs, then `done` with a findings table or `failed` with the sanitized error. The `pir/review` commit status on the PR head goes `pending` → `success` (clean), the configured `statusOnFindings` state when verified findings exist, or `error` when the run failed. Results are published as exactly one review per run (`event: COMMENT` — advisory, never REQUEST_CHANGES): the body carries context, the walkthrough and an overview table of all reportable findings; findings whose anchor falls on a changed line become inline comments on that line, everything else is listed in the table as "not on a changed line". A finding whose fingerprint was already posted on an earlier run of the same PR is counted but not reposted, and the previous pir review is deleted before the new one is posted — one current review, no duplicates.
+
+Trigger rules (defaults apply unless a repo overrides them): reviews start on `pull_request` opened/reopened, on `edited` only once a WIP prefix has been removed from the title (that edit is the "ready for review" signal), and on every `pull_request_sync` push. Draft PRs and titles starting with a `wipPrefixes` prefix (case-insensitive) are skipped — Gitea computes its own WIP marker from the server-side `WORK_IN_PROGRESS_PREFIXES` list, which may differ from yours, so align the two if you rely on both. PRs targeting a base branch outside `baseBranches` are skipped (an empty list watches every base branch), as are PRs carrying a `skipLabels` label and actions performed by the bot's own account.
+
+Configuration reference (see `src/gitea/config.ts` for the authoritative validation):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `url` | required | Gitea instance base URL, `http(s)://…` (trailing slashes stripped) |
+| `token` | required | bot PAT, sent as `Authorization: token …` |
+| `webhookSecret` | required | shared secret the webhooks are HMAC-SHA256-signed with |
+| `commentLanguage` | `en` | language of the posted comments: `en` or `zh-CN` |
+| `statusOnFindings` | `success` | commit-status state when findings exist: `success` (advisory) or `failure` (fails the SHA) |
+| `defaults.baseBranches` | `["main"]` | PR base branches that get reviewed; `[]` = every base branch |
+| `defaults.wipPrefixes` | `["WIP:", "[WIP]", "Draft:"]` | case-insensitive title prefixes marking a PR as work-in-progress |
+| `defaults.skipLabels` | `["skip-review"]` | PR labels that opt a PR out of review |
+| `defaults.maxFindings` | `10` | cap passed to the review run's `--max-findings` |
+| `defaults.model` | `null` | model override for the review and summarize sessions; `null` = pir's default |
+| `repos` | `{}` | per-repo overrides keyed by `owner/name` |
+
+Per-repo overrides in `repos` replace only the keys they set; array and scalar values replace wholesale (never merge or concatenate), and an explicit `"model": null` inherits the default model. Unknown keys anywhere are rejected at startup rather than silently ignored.
+
+Private repositories: the registered clone must be able to fetch the PR head — either register with the token embedded in the URL (`pir repos add https://<user>:<token>@git.example.com/owner/repo.git`) or configure a git credential helper on the serve host. Treat the token like any other secret: keep it out of command history and logs.
+
+The webhook answers `202 {accepted:true, jobId}` for accepted triggers (poll `GET /v1/jobs/<id>`; the job output is `{outcome:"reviewed"|"superseded"|"failed", detail}`), `200 {accepted:false, reason}` for every policy rejection so Gitea does not retry, `401` for a bad signature and `503` when the integration is not configured. Reviews run on serve's serial queue — one review at a time per process, queued behind any bundle review — and a newer push supersedes an older queued run for the same PR.
+
+Troubleshooting:
+
+| Symptom | Cause / fix |
+| --- | --- |
+| Webhook answers `401 invalid or missing webhook signature` | the webhook secret differs between the Gitea webhook and the config — retype it in one place |
+| Status comment says the repository is not registered | `pir repos add <clone-url>` on the serve host; the registration must name the same repository the webhook payload carries |
+| Webhook answers `503 gitea integration not configured` | no `gitea.json` and no `PIR_GITEA_JSON`, or serve was started before the config existed — write the config and restart |
+| Review sits queued for a long time | another review holds the serial queue (check `GET /health`'s executor queue stats); webhook reviews share it with bundle reviews |
+| pir reacts to actions performed by the bot itself | the startup `GET /user` lookup failed, so the bot-sender skip rule is off — check the serve log and restart; the login is cached once per serve process |
+| An `edited` PR is never reviewed | `edited` triggers only when the WIP prefix is removed from the title; also align `wipPrefixes` with Gitea's server-side `WORK_IN_PROGRESS_PREFIXES` |
+| A finding appears in the table instead of inline | its anchor is not inside a diff hunk's new-side span — demoted to the overview by design |
 
 ## State and memory
 

@@ -21,8 +21,9 @@ and [`docs/for-llm.md`](../for-llm.md).
 | [0010](0010-project-rules-and-introspection.md) | Layered project rule file and rule introspection | accepted |
 | [0011](0011-deferred-and-rejected-directions.md) | Deferred and rejected directions — slicing, session audit, non-borrows | accepted; slicing and session-audit rejected, non-borrows recorded |
 | [0016](0016-invocation-inputs-outputs-and-long-runs.md) | Invocation inputs, outputs and long-running execution | accepted; audit resume is a no-go |
+| [0023](0023-gitea-pr-webhook-integration.md) | Gitea PR-review webhook integration on `pir serve` | accepted |
 
-New records take the next unused number — currently **0023**. Numbers are
+New records take the next unused number — currently **0024**. Numbers are
 never reused: a superseded decision is marked as such in its own file and
 linked from the replacement, and a rejected one stays with its revisit
 conditions.

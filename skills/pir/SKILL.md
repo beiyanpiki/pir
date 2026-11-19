@@ -2,7 +2,7 @@
 name: pir
 description: "Code review with the pir CLI: a reviewer→verifier agent loop with repository memory (SQLite) that reports only verified findings. Trigger when the user asks to review code / a diff / recent changes, find bugs introduced by a change (评审代码, 代码审查, 检查改动), gate a branch on findings, or mentions pir. Covers install (npx from GitHub), local vs remote mode, first-run config, the JSON protocol, feedback/memory commands, and troubleshooting."
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
 ---
 
 # pir — verified code review from the CLI
@@ -23,8 +23,10 @@ when reality changes.
 - Teaching the reviewer: "this warning is intentional" → `pir feedback`
 - Checking past findings: `pir findings list`
 
-Do **not** use for style-only linting, auto-fixing, or posting PR comments —
-pir does none of those by design.
+Do **not** use for style-only linting or auto-fixing — pir does neither by
+design. The CLI itself never posts PR comments; posting Gitea review comments
+is an opt-in `pir serve`-side webhook integration (server-side
+`gitea.json` / `PIR_GITEA_JSON`), not something a client invocation does.
 
 ## Prerequisites
 

@@ -644,16 +644,33 @@ serve workspace is not a checkout; use bundles or a registered `--repo`.
 ## Gitea integration
 
 `POST /v1/webhook/gitea` lets a Gitea instance request PR reviews: point a
-repository webhook at the serve URL (events: pull request; delivery is
-HMAC-authenticated, not bearer-authenticated). Configuration lives in
-`gitea.json` inside the pir config dir (`PIR_CONFIG_DIR`, default `~/.pir`) —
-instance URL, API token, webhook secret, comment language, the commit status
-to post when findings exist, and per-repo trigger policy (watched base
-branches, WIP title prefixes, skip labels, finding cap, model override). A
-missing file keeps the integration off (the route answers
-`503 {"error":"gitea integration not configured"}`); an invalid one refuses
-startup. The reviewed repository must be registered server-side (`pir repos
-add <clone_url>`) so the PR head can be fetched from a known clone.
+repository webhook at the serve URL (events: pull request and pull request
+sync; delivery is HMAC-authenticated, not bearer-authenticated).
+Configuration lives in `gitea.json` inside the pir config dir
+(`PIR_CONFIG_DIR`, default `~/.pir`) — or, when the `PIR_GITEA_JSON` env
+variable is set non-empty, in that JSON instead (env wins over the file; the
+docker deployment path, no volume mount needed). A missing source keeps the
+integration off (the route answers `503 {"error":"gitea integration not
+configured"}`); an invalid one refuses startup. The reviewed repository must
+be registered server-side (`pir repos add <clone_url>`) so the PR head can be
+fetched from a known clone.
+
+Config keys (either source; unknown keys are rejected at startup):
+
+```text
+url                     required   Gitea base URL, http(s)://…
+token                   required   bot PAT, sent as `Authorization: token …`
+webhookSecret           required   HMAC-SHA256 shared secret for webhooks
+commentLanguage         en         comment language: en | zh-CN
+statusOnFindings        success    commit-status state when findings exist: success | failure
+defaults.baseBranches   ["main"]   watched PR base branches; [] = every base branch
+defaults.wipPrefixes    ["WIP:", "[WIP]", "Draft:"]   case-insensitive WIP title prefixes
+defaults.skipLabels     ["skip-review"]   labels that opt a PR out of review
+defaults.maxFindings    10         --max-findings cap for the review run
+defaults.model          null       model override for review+summarize; null = pir default
+repos                   {}         per-repo overrides keyed by "owner/name"; each key set
+                                   replaces wholesale, unset keys inherit from defaults
+```
 
 Response codes: `202 {accepted:true, reason:"accepted", jobId}` starts a
 review job (poll `GET /v1/jobs/<id>`; the job output is
@@ -662,7 +679,9 @@ review job (poll `GET /v1/jobs/<id>`; the job output is
 `unwatched-event`, `unwatched-action`, `wip`, `base-branch`, `skip-label`,
 `bot-sender` — no job is created); `401` invalid signature; `400` malformed
 body or routing headers. A newer webhook for the same PR supersedes the older
-run's job. Full setup and config reference follow in the docs PR.
+run's job. The full setup walkthrough, per-repo override semantics and a
+troubleshooting table live in the Gitea integration section of `README.md`
+(and `docs/README.zh-CN.md`).
 
 ## Operational settings
 
