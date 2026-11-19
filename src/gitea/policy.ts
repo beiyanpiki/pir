@@ -51,8 +51,15 @@ export interface GiteaTriggerDecision {
   reason: string;
 }
 
-/** pull_request actions that (can) start a review. */
-const WATCHED_PR_ACTIONS = new Set(["opened", "reopened", "edited"]);
+/**
+ * pull_request actions that (can) start a review. `synchronized` belongs here
+ * too: Gitea 1.24 delivers pushes to an open PR under the umbrella
+ * `pull_request` event (x-gitea-event) with action `synchronized` — the
+ * dedicated `pull_request_sync` event name is only what the finer-grained
+ * x-gitea-event-type header reports — so both spellings must pass (E2E,
+ * 2026-11-19).
+ */
+const WATCHED_PR_ACTIONS = new Set(["opened", "reopened", "edited", "synchronized"]);
 
 function no(code: string, phrase: string): GiteaTriggerDecision {
   return { accepted: false, reason: `${code}: ${phrase}` };
@@ -61,9 +68,10 @@ function no(code: string, phrase: string): GiteaTriggerDecision {
 /**
  * Should this webhook start a review run? Watched: `pull_request` with action
  * opened/reopened/edited — edited only once the WIP marker came OFF the title
- * (that edit is the "ready for review" signal) — and `pull_request_sync`
- * (pushes to an open PR; action is always `synchronized`, the event itself is
- * authoritative). Skip rules apply in a fixed order so reasons are stable.
+ * (that edit is the "ready for review" signal) — and pushes to an open PR,
+ * which arrive as action `synchronized` under either the umbrella
+ * `pull_request` event or the dedicated `pull_request_sync` event. Skip rules
+ * apply in a fixed order so reasons are stable.
  */
 export function evaluateTrigger(input: GiteaTriggerInput, policy: GiteaTriggerPolicy): GiteaTriggerDecision {
   if (input.event !== "pull_request" && input.event !== "pull_request_sync") {
