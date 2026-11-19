@@ -98,8 +98,12 @@ function apiErrorFrom(status: number, body: unknown): GiteaApiError {
 }
 
 export function createGiteaClient(options: GiteaClientOptions): GiteaClient {
-  // Strip trailing slashes so "<base>/repos/…" joins never produce "//".
-  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  // The config's `url` is the instance root (what the README example shows),
+  // while every endpoint below is an api/v1 path: strip trailing slashes and
+  // an existing /api/v1 suffix, then append the prefix once, so both the
+  // instance-root and API-root spellings request the same URLs and "<base>/repos/…"
+  // joins never produce "//".
+  const baseUrl = options.baseUrl.replace(/\/+$/, "").replace(/\/api\/v1$/, "") + "/api/v1";
   const doFetch = options.fetchImpl ?? fetch;
 
   async function request(method: string, apiPath: string, body?: unknown): Promise<unknown> {

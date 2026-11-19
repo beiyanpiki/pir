@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 const { GiteaApiError, createGiteaClient } = await import("../../dist/gitea/client.js");
 
 const BASE = "https://gitea.example.com";
+const API = `${BASE}/api/v1`;
 const TOKEN = "bot-token-0123456789";
 
 /** Scripted fetch: pops one planned response per call and records every request. */
@@ -42,7 +43,7 @@ test("gitea client: createReview posts the comment array verbatim with token aut
   assert.equal(calls.length, 1);
   const call = calls[0];
   // Trailing slash in baseUrl must not become a double slash in the path.
-  assert.equal(call.url, `${BASE}/repos/beiyan/pir-demo/pulls/42/reviews`);
+  assert.equal(call.url, `${API}/repos/beiyan/pir-demo/pulls/42/reviews`);
   assert.equal(call.method, "POST");
   assert.equal(call.headers.authorization, `token ${TOKEN}`);
   assert.equal(call.headers["content-type"], "application/json");
@@ -70,24 +71,24 @@ test("gitea client: every method hits its Gitea API path with the right verb", a
   t.after(() => assert.equal(plan.length, 0, "every scripted response was consumed"));
 
   assert.deepEqual(await api.listReviews("o", "r", 5), [{ id: 7, user: { login: "pir-bot" }, body: "stale" }]);
-  assert.equal(calls[0].url, `${BASE}/repos/o/r/pulls/5/reviews`);
+  assert.equal(calls[0].url, `${API}/repos/o/r/pulls/5/reviews`);
   assert.equal(calls[0].method, "GET");
   assert.equal(calls[0].body, undefined);
 
   await api.deleteReview("o", "r", 5, 7);
-  assert.equal(calls[1].url, `${BASE}/repos/o/r/pulls/5/reviews/7`);
+  assert.equal(calls[1].url, `${API}/repos/o/r/pulls/5/reviews/7`);
   assert.equal(calls[1].method, "DELETE");
 
   assert.deepEqual(await api.listIssueComments("o", "r", 5), []);
-  assert.equal(calls[2].url, `${BASE}/repos/o/r/issues/5/comments`);
+  assert.equal(calls[2].url, `${API}/repos/o/r/issues/5/comments`);
 
   assert.deepEqual(await api.createIssueComment("o", "r", 5, "status line"), { id: 3003 });
-  assert.equal(calls[3].url, `${BASE}/repos/o/r/issues/5/comments`);
+  assert.equal(calls[3].url, `${API}/repos/o/r/issues/5/comments`);
   assert.equal(calls[3].method, "POST");
   assert.deepEqual(JSON.parse(calls[3].body), { body: "status line" });
 
   assert.deepEqual(await api.editIssueComment("o", "r", 3003, "status line v2"), { id: 3003, body: "edited" });
-  assert.equal(calls[4].url, `${BASE}/repos/o/r/issues/comments/3003`);
+  assert.equal(calls[4].url, `${API}/repos/o/r/issues/comments/3003`);
   assert.equal(calls[4].method, "PATCH");
   assert.deepEqual(JSON.parse(calls[4].body), { body: "status line v2" });
 
@@ -97,7 +98,7 @@ test("gitea client: every method hits its Gitea API path with the right verb", a
     description: "2 verified findings",
     target_url: "https://pir.svc/run/xyz",
   }), { id: 9, status: "success" });
-  assert.equal(calls[5].url, `${BASE}/repos/o/r/statuses/abc123`);
+  assert.equal(calls[5].url, `${API}/repos/o/r/statuses/abc123`);
   assert.equal(calls[5].method, "POST");
   assert.deepEqual(JSON.parse(calls[5].body), {
     state: "failure",
@@ -158,7 +159,7 @@ test("gitea client: getCurrentUser returns the token account's login from GET /u
   const { impl, calls } = scriptedFetch([{ status: 200, body: { id: 3, login: "pirbot", full_name: "pir bot" } }]);
   assert.deepEqual(await client(impl).getCurrentUser(), { login: "pirbot" });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, `${BASE}/user`);
+  assert.equal(calls[0].url, `${API}/user`);
   assert.equal(calls[0].method, "GET");
   assert.equal(calls[0].body, undefined);
 });
@@ -169,4 +170,10 @@ test("gitea client: getCurrentUser rejects a 200 body without a login", async ()
     () => client(impl).getCurrentUser(),
     (err) => err instanceof GiteaApiError && /no login/.test(err.message),
   );
+});
+
+test("gitea client: an api/v1-suffixed baseUrl normalizes to the same URLs", async () => {
+  const { impl, calls } = scriptedFetch([{ status: 200, body: { id: 1, login: "pirbot" } }]);
+  await createGiteaClient({ baseUrl: `${BASE}/api/v1/`, token: TOKEN, fetchImpl: impl }).getCurrentUser();
+  assert.equal(calls[0].url, `${API}/user`);
 });

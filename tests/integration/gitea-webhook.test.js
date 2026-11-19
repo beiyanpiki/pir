@@ -149,7 +149,9 @@ function fakeGitea(hooks = {}) {
   const impl = async (url, init = {}) => {
     const method = init.method ?? "GET";
     requests.push({ url: String(url), method, body: init.body });
-    const pathname = new URL(String(url)).pathname;
+    // The client normalizes its base to the api/v1 root; the fake routes on
+    // the bare API path either way.
+    const pathname = new URL(String(url)).pathname.replace(/^\/api\/v1/, "");
 
     if (pathname === "/user" && method === "GET") {
       return jsonResponse({ id: 1, login: "pirbot" });
