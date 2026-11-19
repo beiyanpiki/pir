@@ -281,6 +281,34 @@ export function resolveRepo(spec: string): { entry: RepoEntry; dir: string } {
   return { entry, dir: repoDirFor(entry.projectId) };
 }
 
+/**
+ * Find the registered repo whose URL is the same repository as `url` (the
+ * webhook payload's clone URL): normalizeRemoteUrl equality (host/path case,
+ * .git suffix, transport scheme) with an exact-string fallback. Null when no
+ * registration matches — the webhook caller reports that on the PR.
+ */
+export function findRegisteredRepoByUrl(url: string): { entry: RepoEntry; dir: string } | null {
+  const entries = Object.values(readRegistry());
+  const wanted = normalizeRemoteUrl(url);
+  const entry = entries.find((e) => normalizeRemoteUrl(e.url) === wanted) ?? entries.find((e) => e.url === url);
+  if (!entry) return null;
+  return { entry, dir: repoDirFor(entry.projectId) };
+}
+
+/**
+ * Fetch a hosted pull request head (`refs/pull/<n>/head`, the Gitea layout)
+ * from origin into a stable local ref and return its commit SHA. A fixed ref,
+ * never FETCH_HEAD: FETCH_HEAD is a shared singleton any concurrent fetch
+ * overwrites, while refs/pir/pull/<n>/head survives `fetch --all` and other
+ * refspec fetches. Fetch errors propagate — the webhook caller reports them
+ * on the PR.
+ */
+export async function fetchPullRef(dir: string, prNumber: number): Promise<string> {
+  const ref = `refs/pir/pull/${prNumber}/head`;
+  await git(dir, ["fetch", "--quiet", "origin", `+refs/pull/${prNumber}/head:${ref}`]);
+  return (await git(dir, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+}
+
 function looksLikeUrl(spec: string): boolean {
   return /^[a-z]+@|:\/\/|^git@/i.test(spec);
 }
