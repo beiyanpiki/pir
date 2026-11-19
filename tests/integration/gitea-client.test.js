@@ -153,3 +153,20 @@ test("gitea client: non-JSON error body degrades to its text, HTML proxies inclu
     (err) => err instanceof GiteaApiError && err.status === 502 && err.message.includes("502 Bad Gateway"),
   );
 });
+
+test("gitea client: getCurrentUser returns the token account's login from GET /user", async () => {
+  const { impl, calls } = scriptedFetch([{ status: 200, body: { id: 3, login: "pirbot", full_name: "pir bot" } }]);
+  assert.deepEqual(await client(impl).getCurrentUser(), { login: "pirbot" });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, `${BASE}/user`);
+  assert.equal(calls[0].method, "GET");
+  assert.equal(calls[0].body, undefined);
+});
+
+test("gitea client: getCurrentUser rejects a 200 body without a login", async () => {
+  const { impl } = scriptedFetch([{ status: 200, body: { id: 3 } }]);
+  await assert.rejects(
+    () => client(impl).getCurrentUser(),
+    (err) => err instanceof GiteaApiError && /no login/.test(err.message),
+  );
+});

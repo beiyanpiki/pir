@@ -66,6 +66,8 @@ export interface GiteaCommitStatusInput {
 }
 
 export interface GiteaClient {
+  /** The token's own account (GET /user) — the webhook endpoint learns the bot login once per serve process. */
+  getCurrentUser(): Promise<{ login: string }>;
   createReview(owner: string, repo: string, prIndex: number, input: GiteaReviewInput): Promise<{ id: number }>;
   listReviews(owner: string, repo: string, prIndex: number): Promise<GiteaReview[]>;
   deleteReview(owner: string, repo: string, prIndex: number, id: number): Promise<void>;
@@ -127,6 +129,14 @@ export function createGiteaClient(options: GiteaClientOptions): GiteaClient {
   }
 
   return {
+    async getCurrentUser() {
+      const out = await request("GET", "/user");
+      const login = (out as { login?: unknown }).login;
+      if (typeof login !== "string" || !login) {
+        throw new GiteaApiError(200, "GET /user returned no login", out);
+      }
+      return { login };
+    },
     async createReview(owner, repo, prIndex, input) {
       const out = await request("POST", `/repos/${owner}/${repo}/pulls/${prIndex}/reviews`, {
         body: input.body,
