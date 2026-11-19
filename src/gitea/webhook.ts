@@ -143,12 +143,12 @@ function requireString(value: unknown, context: string): string {
   return value;
 }
 
-/** First non-empty string among candidates, or a GiteaWebhookError naming the context. */
-function requireFirstString(candidates: Array<[unknown, string]>, context: string): string {
-  for (const [value, field] of candidates) {
+/** First non-empty string among candidates, or a GiteaWebhookError naming what was missing. */
+function requireFirstString(candidates: unknown[], context: string): string {
+  for (const value of candidates) {
     if (typeof value === "string" && value) return value;
   }
-  throw new GiteaWebhookError(`${context}: no ${context} available`);
+  throw new GiteaWebhookError(`${context} missing`);
 }
 
 /** Parse the raw webhook body into a GiteaPullRequestView; malformed payloads throw instead of half-parsing. */
@@ -176,13 +176,10 @@ export function parsePullRequestPayload(rawBody: Buffer | string): GiteaPullRequ
   const repoOwner = requireObject(repository.owner, "payload.repository.owner");
   const repoFullName = requireFirstString(
     [
-      [repository.full_name, "full_name"],
-      [
-        typeof repoOwner.login === "string" && typeof repository.name === "string"
-          ? `${repoOwner.login}/${repository.name}`
-          : undefined,
-        "owner/login + name",
-      ],
+      repository.full_name,
+      typeof repoOwner.login === "string" && typeof repository.name === "string"
+        ? `${repoOwner.login}/${repository.name}`
+        : undefined,
     ],
     "payload.repository repo full name",
   );
@@ -192,12 +189,7 @@ export function parsePullRequestPayload(rawBody: Buffer | string): GiteaPullRequ
   // when a bare-bones payload omits head.repo.
   const headRepo = typeof head.repo === "object" && head.repo !== null ? requireObject(head.repo, "payload.pull_request.head.repo") : null;
   const cloneUrl = requireFirstString(
-    [
-      [headRepo?.clone_url, "clone_url"],
-      [headRepo?.ssh_url, "ssh_url"],
-      [repository.clone_url, "clone_url"],
-      [repository.ssh_url, "ssh_url"],
-    ],
+    [headRepo?.clone_url, headRepo?.ssh_url, repository.clone_url, repository.ssh_url],
     "payload clone URL",
   );
 

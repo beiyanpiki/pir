@@ -221,7 +221,8 @@ export function resolveTriggerPolicy(
 ): GiteaTriggerPolicy {
   const defaults = config.defaults;
   const override = config.repos[repoFullName];
-  if (override === undefined) return defaults;
+  // A copy either way: callers may not mutate (and thereby rewire) config.defaults.
+  if (override === undefined) return { ...defaults };
   return {
     baseBranches: override.baseBranches ?? defaults.baseBranches,
     wipPrefixes: override.wipPrefixes ?? defaults.wipPrefixes,
