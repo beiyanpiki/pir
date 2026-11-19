@@ -280,6 +280,40 @@ export function createFinishRoundTool(outcome: RoundOutcome): ReviewTool {
   };
 }
 
+/** What the summarizer session submits through submit_summary. */
+export interface SummaryOutcome {
+  /** Markdown walkthrough of the change range. */
+  summary: string;
+  /** Notable risk areas as short phrases; empty when none were identified. */
+  riskAreas: string[];
+  submitted: boolean;
+}
+
+/**
+ * The summarizer's one terminal tool: a change walkthrough is complete when
+ * it is submitted, the same contract finish_round and submit_verdict carry.
+ */
+export function createSubmitSummaryTool(outcome: SummaryOutcome): ReviewTool {
+  return {
+    name: "submit_summary",
+    description: "Submit the change walkthrough: markdown summary plus notable risk areas as short phrases. Call alone to end the session.",
+    promptSnippet: "submit_summary: required terminal walkthrough submission",
+    parameters: Type.Object({
+      summary: nonemptySchema(),
+      riskAreas: Type.Optional(stringArraySchema()),
+    }),
+    async execute(params) {
+      try {
+        if (outcome.submitted) throw new Error("submit_summary was already submitted.");
+        const summary = text(params.summary, "summary");
+        const riskAreas = params.riskAreas === undefined ? [] : strings(params.riskAreas, "riskAreas");
+        Object.assign(outcome, { summary, riskAreas, submitted: true });
+        return { text: "Summary recorded.", terminate: true };
+      } catch (error) { return errorOutput(error); }
+    },
+  };
+}
+
 export interface VerdictCollector { verdict?: VerifierResult }
 
 /**

@@ -321,6 +321,100 @@ function bounded(value: unknown, limit = 16000): string {
   return text.length <= limit ? text : `${text.slice(0, limit)}\n[TRUNCATED CONTEXT; retrieve the relevant pinned evidence before concluding]`;
 }
 
+// ---------------------------------------------------------------------------
+// Summarize mode: change walkthrough (one session, no findings)
+// ---------------------------------------------------------------------------
+
+/**
+ * One changed file as the summarizer prompt lists it: the change-set
+ * projection plus the hunks (empty for files the change-mode filter
+ * excluded, whose bodies must never reach a model).
+ */
+export interface SummarizeFileChange {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  oldPath?: string;
+  excluded?: boolean;
+  excludedReason?: string;
+  hunks: ReadonlyArray<{ header: string; lines: readonly string[] }>;
+}
+
+/**
+ * Character cap on the inline diff body. A larger change still gets a
+ * walkthrough — the prompt says what was withheld and the session pages the
+ * remainder with get_change, the same paging channel the reviewer uses.
+ */
+const SUMMARIZE_DIFF_CHARS = 24_000;
+
+function summarizeChangedFileLines(files: readonly SummarizeFileChange[]): string[] {
+  if (files.length === 0) return [];
+  const shown = files.slice(0, CHANGED_FILES_LIMIT);
+  return [
+    `CHANGED FILES (all ${files.length} file${files.length === 1 ? "" : "s"} in this change; path, status, churn)`,
+    ...shown.map((file) => {
+      const reason = file.excluded ? ` — excluded: ${promptSafeField(file.excludedReason ?? "filtered out of diff review")}` : "";
+      return `- ${promptSafeField(file.path)} (${promptSafeField(file.status, 40)}, +${file.additions}/-${file.deletions})${reason}`;
+    }),
+    ...(files.length > CHANGED_FILES_LIMIT ? [`... ${files.length - CHANGED_FILES_LIMIT} more changed files not listed`] : []),
+  ];
+}
+
+/** The inline diff body, bounded by SUMMARIZE_DIFF_CHARS; the header line says what was withheld. */
+function summarizeDiffLines(files: readonly SummarizeFileChange[]): string[] {
+  const blocks: string[] = [];
+  let used = 0;
+  let withheld = 0;
+  for (const file of files) {
+    if (file.excluded || file.hunks.length === 0) continue;
+    const body = [
+      `## ${JSON.stringify(file.path)} [${file.status}] (+${file.additions}/-${file.deletions})${file.oldPath ? `; renamed from ${JSON.stringify(file.oldPath)}` : ""}`,
+      ...file.hunks.map((hunk) => `${hunk.header}\n${hunk.lines.join("\n")}`),
+    ].join("\n");
+    if (used + body.length > SUMMARIZE_DIFF_CHARS) {
+      withheld += 1;
+      continue;
+    }
+    blocks.push(body);
+    used += body.length;
+  }
+  if (blocks.length === 0 && withheld === 0) return [];
+  return [
+    "DIFF (merge-base -> head; excluded files carry metadata only, no diff body)",
+    ...blocks,
+    ...(withheld > 0 ? [`[TRUNCATED: ${withheld} file diff(s) withheld to bound the prompt; page them with get_change]`] : []),
+  ];
+}
+
+/**
+ * The `pir summarize` walkthrough prompt: one session turns a change range
+ * into a plain-language walkthrough — what changed and why, grouped by theme,
+ * with notable risk areas. Explicitly NOT a review: no findings, no verdicts.
+ */
+export function summarizePrompt(input: {
+  base: string;
+  head: string;
+  mergeBase?: string;
+  stats: { files: number; insertions: number; deletions: number };
+  files: readonly SummarizeFileChange[];
+}): string {
+  const lines = [
+    "You are the SUMMARIZER. Write a plain-language walkthrough of this change for a reader who has not opened the diff. This is a walkthrough, NOT a review: no findings, no verdicts, no severity ratings, no fix proposals.",
+    `Change: ${input.base}..${input.head}; merge-base (actual old side): ${input.mergeBase ?? input.base}. ${input.stats.files} files, +${input.stats.insertions}/-${input.stats.deletions} changed lines.`,
+    ...summarizeChangedFileLines(input.files),
+    ...summarizeDiffLines(input.files),
+    "The inline diff may be truncated; page the remainder with get_change (path + hunkIndex), and read head-side context with read_code or search_text when a hunk alone is unclear.",
+    "OUTPUT (markdown, English, plain language)",
+    "Open with one overview paragraph: what this change does and why, in plain terms.",
+    "Then walk through the changes grouped by theme or area — never a per-file laundry list — naming the files that carry each theme.",
+    "Close with the notable risk areas a reader should watch when examining this change further (subtle behavior changes, blast radius, open questions) without judging them as defects.",
+    "Stay grounded in the change you read; do not speculate beyond the diff.",
+    "End by calling submit_summary with the walkthrough in `summary` (markdown) and the notable risk areas as short phrases in `riskAreas`. Call this terminal tool ALONE, never in a batch with other tools, and make no further calls.",
+  ];
+  return lines.join("\n\n");
+}
+
 export function verifierPrompt(input: {
   candidate: Pick<CandidateFinding, "title" | "claim" | "trigger" | "category" | "severity" | "anchors"> & Partial<CandidateFinding>;
   base?: string; head: string; mergeBase?: string; structuralQueries?: boolean;
