@@ -263,6 +263,69 @@ pir findings export --run https://pir.example:8790/runs/<projectId>/<runId> \
 
 web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIEWER_TOKEN` > 配置 `server.viewerToken`，两者绝不互为回退。env/配置中的 viewer token 只发送给它所属的服务器；指向别处的 run URL 需要显式传 `--viewer-token`。
 
+## Gitea 集成
+
+`pir serve` 可以替你盯 Gitea 的 pull request：配置仓库 webhook 后，PR 的 head 会被自动评审——大白话变更讲解（`pir summarize`）、以行内评论出现的已验证 findings、PR 会话里一条持续更新的状态评论，以及可供 CI 读取的 `pir/review` commit status。该集成为可选功能，完全在服务端配置：CLI 本身从不向任何地方发帖，未配置的 serve 对 webhook 路由回答 `503`。设计取舍见 [ADR 0023](adr/0023-gitea-pr-webhook-integration.md)。
+
+配置步骤：
+
+1. 在 serve 所在主机注册仓库——`pir repos add <clone-url>`（例如 `pir repos add https://git.example.com/team/pir.git`）。PR head 会从这个注册 clone 的 `refs/pull/<n>/head` 拉取；未注册的仓库在第一个 PR 上会收到失败状态评论，评论里带有 `repos add` 的指引。
+2. 在 Gitea 实例上创建一个机器人账号，生成带 `read:repository`、`write:repository`（评审与 commit status）和 `write:issue`（状态评论）权限的 personal access token。
+3. 写集成配置。可以是 `<pir 配置目录>/gitea.json`（默认 `~/.pir/gitea.json`，即 `$PIR_CONFIG_DIR/gitea.json`——文件里有 bot token 和 webhook secret，请保持 `chmod 600` 且只放在服务端），也可以用承载同样 JSON 的 `PIR_GITEA_JSON` 环境变量——对 docker 和 secret 管理器友好，无需挂载文件。`PIR_GITEA_JSON` 非空时优先于文件：
+
+```json
+{
+  "url": "https://git.example.com",
+  "token": "<bot PAT>",
+  "webhookSecret": "<webhook secret>",
+  "commentLanguage": "en",
+  "statusOnFindings": "success",
+  "defaults": { "baseBranches": ["main"], "wipPrefixes": ["WIP:", "[WIP]", "Draft:"], "skipLabels": ["skip-review"], "maxFindings": 10, "model": null },
+  "repos": { "team/pir": { "baseBranches": ["main", "dev"] } }
+}
+```
+
+4. 启动（或重启）`pir serve`。配置只在启动时加载一次：文件缺失且环境变量未设置则集成保持关闭；配置无效则拒绝启动。启动成功会打印 `gitea integration enabled for <url>`。
+5. 在 Gitea 仓库设置里创建 webhook：目标 URL `https://<serve-host>:<port>/v1/webhook/gitea`，方法 POST，content type `application/json`，secret 填配置中的 `webhookSecret`，触发事件勾选自定义事件里的 "Pull Request" 和 "Pull Request Sync"（sync 事件就是 Gitea 通知 PR 分支有新 push 的方式）。
+
+被评审的 PR 会是什么样子：pir 先发布（此后反复编辑）一条带隐藏标记的状态评论——评审运行中显示 `started`，结束后变为带 findings 表格的 `done` 或带净化错误信息的 `failed`。PR head 上的 `pir/review` commit status 走 `pending` → `success`（干净）/ 有已验证 findings 时配置的 `statusOnFindings` 状态 / 运行失败时 `error`。结果以每次运行恰好一条评审（`event: COMMENT`——只是建议，绝不阻塞合并）的形式发布：正文包含上下文、变更讲解和全部可报告 findings 的总览表；anchor 落在变更行上的 finding 会变成该行的行内评论，其余在表格里标注"不在变更行上"。指纹在此前运行中已发布过的 finding 只计数、不重发；发布新评审前会删除上一条 pir 评审——始终只有一条当前评审，不会堆积。
+
+触发规则（默认值，可被仓库级覆盖）：`pull_request` 的 opened/reopened 触发评审；`edited` 只有在 WIP 前缀从标题移除后才触发（这次编辑就是"可以评审了"的信号）；每次 `pull_request_sync`（push）都会触发。Draft PR 与标题带 `wipPrefixes` 前缀（大小写不敏感）的 PR 会被跳过——Gitea 服务端的 `WORK_IN_PROGRESS_PREFIXES` 列表可能与你的配置不同，若两边的 WIP 标记都要用，请对齐它们。base 分支不在 `baseBranches` 内的 PR（空列表表示全部 base 分支都评审）、带 `skipLabels` 标签的 PR，以及由 bot 自己账号触发的动作都会被跳过。
+
+配置参考（权威校验逻辑见 `src/gitea/config.ts`）：
+
+| 键 | 默认值 | 含义 |
+| --- | --- | --- |
+| `url` | 必填 | Gitea 实例 base URL，`http(s)://…`（末尾斜杠会被去掉） |
+| `token` | 必填 | bot PAT，以 `Authorization: token …` 发送 |
+| `webhookSecret` | 必填 | webhook 的 HMAC-SHA256 签名共享密钥 |
+| `commentLanguage` | `en` | 评论语言：`en` 或 `zh-CN` |
+| `statusOnFindings` | `success` | 有 findings 时的 commit status：`success`（仅提示）或 `failure`（让该 SHA 变红） |
+| `defaults.baseBranches` | `["main"]` | 参与评审的 PR base 分支；`[]` = 所有 base 分支 |
+| `defaults.wipPrefixes` | `["WIP:", "[WIP]", "Draft:"]` | 标记 PR 为进行中的标题前缀（大小写不敏感） |
+| `defaults.skipLabels` | `["skip-review"]` | 让 PR 免于评审的标签 |
+| `defaults.maxFindings` | `10` | 传给评审运行的 `--max-findings` 上限 |
+| `defaults.model` | `null` | 评审与讲解会话的模型覆盖；`null` = pir 默认模型 |
+| `repos` | `{}` | 按 `owner/name` 索引的仓库级覆盖 |
+
+`repos` 里的仓库级覆盖只替换它显式设置的键；数组与标量整体替换（绝不合并或拼接），显式的 `"model": null` 表示继承默认模型。任何位置的未知键都会在启动时被拒绝，而不是被静默忽略。
+
+私有仓库：注册的 clone 必须能拉取 PR head——要么用内嵌 token 的 URL 注册（`pir repos add https://<user>:<token>@git.example.com/owner/repo.git`），要么在 serve 主机上配置 git credential helper。token 按普通 secret 对待：不要进命令历史和日志。
+
+webhook 对接受的触发回答 `202 {accepted:true, jobId}`（用 `GET /v1/jobs/<id>` 轮询；任务输出是 `{outcome:"reviewed"|"superseded"|"failed", detail}`）；所有策略性拒绝回答 `200 {accepted:false, reason}`，Gitea 因此不会重试；签名错误回答 `401`，集成未配置回答 `503`。评审运行在 serve 的串行队列上——每个进程一次只跑一个评审，排在 bundle 评审之后——同一 PR 的更新 push 会取代排队中的旧运行。
+
+问题排查：
+
+| 症状 | 原因 / 处理 |
+| --- | --- |
+| webhook 回答 `401 invalid or missing webhook signature` | Gitea webhook 与配置里的 secret 不一致——在其中一处重新填写 |
+| 状态评论提示仓库未注册 | 在 serve 主机执行 `pir repos add <clone-url>`；注册的必须是 webhook payload 携带的同一仓库 |
+| webhook 回答 `503 gitea integration not configured` | 没有 `gitea.json` 也没有 `PIR_GITEA_JSON`，或 serve 先于配置启动——写好配置后重启 |
+| 评审长时间排队 | 串行队列被其他评审占用（看 `GET /health` 的 executor queue 统计）；webhook 评审与 bundle 评审共用队列 |
+| pir 对 bot 自己的动作起了反应 | 启动时 `GET /user` 查询失败，bot-sender 跳过规则未生效——查 serve 日志并重启；bot 登录名每进程只取一次 |
+| `edited` 的 PR 一直没有被评审 | `edited` 仅在 WIP 前缀被移除时触发；同时把 `wipPrefixes` 与 Gitea 服务端的 `WORK_IN_PROGRESS_PREFIXES` 对齐 |
+| finding 出现在表格里而不是行内 | 它的 anchor 不在 diff hunk 的新侧区间内——按设计降级到总览表 |
+
 ## 状态与记忆
 
 项目身份由规范化的远程 URL 和根提交决定，因此不依赖 checkout 路径或机器。普通本地状态位于平台状态目录下的 `pir/<projectId>/memory.sqlite`；服务端可以用 `PIR_STATE_ROOT` 集中存储。`PIR_MEMORY_DB` 和 `PIR_STATE_IN_PROJECT=1` 提供显式覆盖。
