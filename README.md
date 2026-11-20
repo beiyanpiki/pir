@@ -467,7 +467,7 @@ elsewhere needs the explicit flag.
 
 ## Gitea integration
 
-`pir serve` can watch Gitea pull requests for you: a repository webhook triggers an automatic review of the PR head — a plain-language walkthrough (`pir summarize`), verified findings as inline comments on the changed lines, an evolving status comment on the PR conversation, and a `pir/review` commit status that CI can read. The integration is opt-in and entirely server-side: the CLI never posts anything anywhere, and an unconfigured serve answers `503` on the webhook route. The design rationale is [ADR 0023](docs/adr/0023-gitea-pr-webhook-integration.md).
+`pir serve` can watch Gitea pull requests for you: a repository webhook triggers an automatic review of the PR head — a plain-language walkthrough (`pir summarize`), verified findings as inline comments on the changed lines, an evolving status comment on the PR conversation, and a `pir/review` commit status that CI can read. The integration is opt-in and entirely server-side: the CLI never posts anything anywhere, and an unconfigured serve answers `503` on the webhook route. The design rationale is [ADR 0023](docs/adr/0023-gitea-pr-webhook-integration.md); the full configuration reference — Gitea-side `app.ini` settings, networking and TLS, environment variables, docker patterns, and a verification playbook — is in [docs/gitea-integration.md](docs/gitea-integration.md).
 
 Setup:
 
