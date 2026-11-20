@@ -265,7 +265,7 @@ web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIE
 
 ## Gitea 集成
 
-`pir serve` 可以替你盯 Gitea 的 pull request：配置仓库 webhook 后，PR 的 head 会被自动评审——大白话变更讲解（`pir summarize`）、以行内评论出现的已验证 findings、PR 会话里一条持续更新的状态评论，以及可供 CI 读取的 `pir/review` commit status。该集成为可选功能，完全在服务端配置：CLI 本身从不向任何地方发帖，未配置的 serve 对 webhook 路由回答 `503`。设计取舍见 [ADR 0023](adr/0023-gitea-pr-webhook-integration.md)。
+`pir serve` 可以替你盯 Gitea 的 pull request：配置仓库 webhook 后，PR 的 head 会被自动评审——大白话变更讲解（`pir summarize`）、以行内评论出现的已验证 findings、PR 会话里一条持续更新的状态评论，以及可供 CI 读取的 `pir/review` commit status。该集成为可选功能，完全在服务端配置：CLI 本身从不向任何地方发帖，未配置的 serve 对 webhook 路由回答 `503`。设计取舍见 [ADR 0023](adr/0023-gitea-pr-webhook-integration.md)；完整的英文配置参考——Gitea 侧 `app.ini` 设置、网络与 TLS、环境变量、docker 部署模式与验证手册——见 [docs/gitea-integration.md](gitea-integration.md)（英文）。
 
 配置步骤：
 
