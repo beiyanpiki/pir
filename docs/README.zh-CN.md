@@ -109,6 +109,8 @@ PIR_SERVER_TOKEN=<service-token>
 PI_AUTH_JSON={"anthropic":{"type":"api_key","key":"<provider-key>"}}
 PI_DEFAULT_PROVIDER=anthropic
 PI_DEFAULT_MODEL=<model-id>
+# 可选：让服务端评审使用 CodeGraph 结构索引
+PIR_CODEGRAPH=1
 ```
 
 ```bash
@@ -116,6 +118,8 @@ docker compose up -d
 ```
 
 容器入口会把 `PI_AUTH_JSON`、`PI_API_KEY__<provider>` 和 `PI_DEFAULT_*` 转换为 Pi 配置。`sh docker/deploy.sh` 提供这一部署方式的交互式设置。
+
+Docker 镜像默认内置 CodeGraph 1.6.4。不设置 `PIR_CODEGRAPH=1` 时，服务端评审不会启用结构索引。旧版本创建的索引仍可读取，但增量同步不会重新提取未修改的文件。要让自己管理的仓库索引使用新版提取引擎，请用 CodeGraph 1.6.4 手动运行 `codegraph index <path>` 进行全量重建，其中 `<path>` 是仓库路径。升级镜像不会自动重建用户管理的索引。
 
 ## 常用命令
 
