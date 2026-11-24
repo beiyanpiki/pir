@@ -16,7 +16,7 @@ import {
   setConfigValue,
   type UserConfig,
 } from "./config.js";
-import { createAppContext } from "../app/context.js";
+import { createAppContext, type AppContextOptions } from "../app/context.js";
 import { changedFileSummary } from "../changes/change-set.js";
 import { runFind, toFindingView } from "../app/find.js";
 import {
@@ -55,6 +55,13 @@ import { FEEDBACK_DECISIONS } from "../memory/feedback.js";
 import type { SyncStats, SyncTableName } from "../memory/sync.js";
 
 export { UsageError } from "./config.js";
+
+// Provider SDKs can pass this value to Node timers, which overflow above 2^31−1 ms.
+const MAX_MODEL_TIMEOUT_SECONDS = Math.floor(2_147_483_647 / 1_000);
+const MODEL_TIMEOUT_HELP = `  --model-timeout <seconds>
+                      model request idle timeout for this task; an integer from
+                      0 to ${MAX_MODEL_TIMEOUT_SECONDS}. 0 requests pi's disabled setting;
+                      unset keeps pi's default`;
 
 /**
  * The reference text, split into sections so `--help` can show one command's
@@ -124,6 +131,7 @@ Usage:
   --model <id>        model override for sub-sessions: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
+${MODEL_TIMEOUT_HELP}
   --verify-model <id> separate verifier model (Q5): reviewer sessions keep
                       --model, verifier sessions resolve this id
                       (<provider>/<model> or fuzzy; PIR_VERIFIER_MODEL env
@@ -185,6 +193,7 @@ Usage:
   --model <id>        model override for the session: <provider>/<model> or
                       fuzzy id (see \`pir models\`; default: PIR_MODEL env,
                       then pi settings)
+${MODEL_TIMEOUT_HELP}
   The change set is built exactly like find's (merge-base three-dot diff with
   the change-mode filter), and ONE summarizer session returns a markdown
   walkthrough — an overview, changes grouped by theme, notable risk areas —
@@ -204,6 +213,7 @@ Usage:
                       (rounds and findings still cap); "unlimited" removes it
   --max-findings <n>  whole-run cap on reported findings (default 10);
                       "unlimited" removes it (#57)
+${MODEL_TIMEOUT_HELP}
   --verify-concurrency <n>
                       parallel verifier sessions during each verification
                       drain (1-8, default 1; PIR_VERIFY_CONCURRENCY env
@@ -291,7 +301,14 @@ Usage:
   --ids               one provider/model per line (script-friendly)
   --provider <p>      restrict the listing to one provider`,
 
-  memorySync: `Memory sync options:
+  verifyFix: `Verify-fix options:
+${MODEL_TIMEOUT_HELP}
+  Checks a finding marked fixed against committed HEAD.`,
+
+  memory: `Memory bootstrap/refresh options:
+${MODEL_TIMEOUT_HELP}
+
+Memory sync options:
   pir memory sync merges this project's memory DB with a pir serve instance
   (server from --server/PIR_SERVER_URL/config). It always runs locally, even
   in remote mode — both DBs converge; nothing is ever deleted. Conflicts on
@@ -411,7 +428,8 @@ export const USAGE = [
   USAGE_SECTIONS.runs,
   USAGE_SECTIONS.receipts,
   USAGE_SECTIONS.models,
-  USAGE_SECTIONS.memorySync,
+  USAGE_SECTIONS.verifyFix,
+  USAGE_SECTIONS.memory,
   USAGE_SECTIONS.serve,
   USAGE_SECTIONS.global,
   USAGE_SECTIONS.modes,
@@ -431,7 +449,8 @@ const HELP_SECTIONS: Record<string, string> = {
   runs: USAGE_SECTIONS.runs,
   receipts: USAGE_SECTIONS.receipts,
   models: USAGE_SECTIONS.models,
-  memory: USAGE_SECTIONS.memorySync,
+  memory: USAGE_SECTIONS.memory,
+  "verify-fix": USAGE_SECTIONS.verifyFix,
   serve: USAGE_SECTIONS.serve,
   config: USAGE_SECTIONS.config,
   rules: USAGE_SECTIONS.rules,
@@ -497,6 +516,7 @@ export const VALUE_FLAGS = new Set([
   "--min-confidence",
   "--fail-on",
   "--model",
+  "--model-timeout",
   "--verify-model",
   "--angles",
   "--provider",
@@ -548,6 +568,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (token.startsWith("--")) {
       const eq = token.indexOf("=");
       const name = eq === -1 ? token : token.slice(0, eq);
+      if (name === "--model-timeout" && flags.has(name)) {
+        throw new UsageError("--model-timeout may only be specified once");
+      }
       if (eq !== -1 && VALUE_FLAGS.has(name)) {
         flags.set(name, token.slice(eq + 1));
         recordMulti(name, token.slice(eq + 1));
@@ -565,6 +588,26 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
   return { positional, flags, multi };
+}
+
+/** Validated on the client before forwarding and independently at execution. */
+export function resolveModelTimeoutMs({ positional, flags }: ParsedArgs): number | undefined {
+  const raw = flags.get("--model-timeout");
+  if (raw === undefined) return undefined;
+  const seconds = typeof raw === "string" && raw !== "" && !/[^0-9]/u.test(raw) ? Number(raw) : NaN;
+  if (!Number.isSafeInteger(seconds) || seconds > MAX_MODEL_TIMEOUT_SECONDS) {
+    throw new UsageError(`invalid --model-timeout: ${JSON.stringify(raw)} (expected an integer from 0 to ${MAX_MODEL_TIMEOUT_SECONDS} seconds)`);
+  }
+  const [command, subcommand] = positional;
+  if (
+    (command === "find" && !flags.has("--preview")) ||
+    (command === "audit" && subcommand !== "coverage" && !flags.has("--dry-run")) ||
+    (command === "memory" && (subcommand === "bootstrap" || subcommand === "refresh")) ||
+    command === "summarize" || command === "verify-fix" || command === "_verify-comment"
+  ) {
+    return seconds * 1_000;
+  }
+  throw new UsageError("--model-timeout applies only to commands that run a model session, not previews or readouts");
 }
 
 export type OutputFormat = "text" | "json" | "sarif";
@@ -654,7 +697,8 @@ export function readVersion(): string {
  * writing to the process streams.
  */
 export async function executePirCommand(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
-  const { positional, flags, multi } = parseArgs(argv);
+  const parsed = parseArgs(argv);
+  const { positional, flags, multi } = parsed;
   const command = positional[0];
   const json = Boolean(flags.get("--json"));
   const out: string[] = [];
@@ -673,6 +717,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     emit(helpFor(command));
     return { code: 0, output: out.join("") };
   }
+  const modelTimeoutMs = resolveModelTimeoutMs(parsed);
 
   if (command === "repos") {
     return await cmdRepos(positional.slice(1), flags, json, emit, out);
@@ -768,7 +813,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = materialized.worktree;
     const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
     flags.set("--cwd", cwd);
-    return await runInContext(cwd, { dbPath }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
+    return await runInContext(cwd, { dbPath, modelTimeoutMs }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
   }
 
   if (command === "version") {
@@ -788,12 +833,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
+  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity, modelTimeoutMs }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
   cwd: string,
-  ctxOptions: { dbPath?: string; identity?: import("../memory/identity.js").ProjectIdentity },
+  ctxOptions: Pick<AppContextOptions, "dbPath" | "identity" | "modelTimeoutMs">,
   command: string,
   positional: string[],
   flags: Map<string, string | boolean>,
@@ -809,6 +854,7 @@ async function runInContext(
   const ctx = await createAppContext(cwd, {
     noSyncIndex: Boolean(flags.get("--no-sync-index")),
     dbPath: ctxOptions.dbPath,
+    modelTimeoutMs: ctxOptions.modelTimeoutMs,
     ...(ctxOptions.identity ? { identity: ctxOptions.identity } : {}),
     ...(readOnlyMemory ? { readOnlyMemory: true } : {}),
   });
