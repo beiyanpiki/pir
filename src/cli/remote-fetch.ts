@@ -1,5 +1,5 @@
 import process from "node:process";
-import { Agent } from "undici";
+import { Agent, Dispatcher1Wrapper } from "undici";
 import { UsageError } from "./executor.js";
 
 /**
@@ -72,7 +72,7 @@ function flagSecondsValue(argv: string[], name: string): string | undefined {
   return prefixed ? prefixed.slice(name.length + 1) : undefined;
 }
 
-let cached: { agent: Agent; timeoutMs: number } | undefined;
+let cached: { dispatcher: Dispatcher1Wrapper; timeoutMs: number } | undefined;
 
 /**
  * Per-process dispatcher for the remote client's fetches. Cached (and rebuilt
@@ -81,16 +81,19 @@ let cached: { agent: Agent; timeoutMs: number } | undefined;
  * drainAndExit/process.exit, so the pool's keep-alive sockets never block
  * shutdown.
  *
- * The return type is what global fetch's RequestInit expects; undici-types
- * (bundled with @types/node) lags the undici package's own type snapshots,
- * so the otherwise-compatible Agent needs one contained cast.
+ * Node 22's global fetch still uses legacy dispatcher callbacks. The wrapper
+ * adapts them for Undici 8 and keeps remote connections on HTTP/1.1.
  */
 export function remoteDispatcher(): NonNullable<RequestInit["dispatcher"]> {
   const timeoutMs = remoteTimeoutMs();
   if (!cached || cached.timeoutMs !== timeoutMs) {
-    cached = { agent: new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs }), timeoutMs };
+    cached = {
+      dispatcher: new Dispatcher1Wrapper(new Agent({ headersTimeout: timeoutMs, bodyTimeout: timeoutMs })),
+      timeoutMs,
+    };
   }
-  return cached.agent as unknown as NonNullable<RequestInit["dispatcher"]>;
+  // @types/node's undici-types doesn't describe the wrapper's legacy interface.
+  return cached.dispatcher as unknown as NonNullable<RequestInit["dispatcher"]>;
 }
 
 /**

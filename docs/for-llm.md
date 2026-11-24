@@ -36,7 +36,7 @@ pir config show
 or command override. Text output masks the token. `config show --json` returns
 the raw stored token, so do not copy that response into user-facing output.
 
-If the CLI is absent, Node.js >= 22.5 and git are required:
+If the CLI is absent, Node.js >= 22.19.0 and git are required:
 
 ```bash
 npm install --global github:beiyanpiki/pir

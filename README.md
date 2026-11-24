@@ -36,7 +36,7 @@ The review loop is deliberately conservative:
 
 ## Requirements
 
-- Node.js 22.5 or newer
+- Node.js 22.19.0 or newer
 - git
 - Credentials for at least one provider supported by Pi, unless the CLI sends
   work to a configured `pir serve` instance

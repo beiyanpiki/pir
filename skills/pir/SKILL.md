@@ -44,7 +44,7 @@ npx -y github:beiyanpiki/pir version
 npm i -g github:beiyanpiki/pir
 ```
 
-Requires Node ≥ 22.5 and git. Reviews need model credentials: pi auth at
+Requires Node ≥ 22.19.0 and git. Reviews need model credentials: pi auth at
 `~/.pi/agent/auth.json` (`{"<provider>": {"type":"api_key","key":"…"}}`) or a
 remote server that already has them. Check what is available:
 
