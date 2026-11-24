@@ -99,6 +99,39 @@ test("live sessions stream into the workflow timeline", async ({ page }) => {
   send(0, { kind: "session-end", seq: 5, ts: Date.now(), runId: liveRun, projectId: projectA, sessionId: "live-reviewer", usage: { totalTokens: 100, cost: 0.01 } });
   await expect(page.locator(".wf-end")).toContainText("Session complete");
 });
+
+test("Markdown sanitizes streamed and finalized reviewer prose", async ({ page }) => {
+  await page.goto(`runs/${projectA}/${liveRun}?tab=workflow`);
+  await expect(page.getByText("No review sessions recorded for this run")).toBeVisible();
+
+  const session = { runId: liveRun, projectId: projectA, sessionId: "markdown-session" };
+  send(0, { ...session, kind: "session-start", seq: 1, ts: Date.now(), sessionKind: "reviewer", role: "code reviewer", model: "fixture/model", round: 1, prompt: "Review Markdown." });
+  await expect(page.locator(".wf-session")).toHaveCount(1);
+
+  const markdown = [
+    "## Review heading",
+    '<p onclick="void 0">Raw HTML paragraph</p>',
+    "<script>void 0</script>",
+    "[Unsafe destination](javascript:void(0))",
+    "[Safe destination](https://example.com/review)",
+  ].join("\n\n") + "\n\n";
+  send(0, { ...session, kind: "session-delta", seq: 2, ts: Date.now(), deltaType: "text", text: markdown });
+
+  const prose = page.locator(".wf-response .pir-markdown");
+  const expectSanitized = async () => {
+    await expect(prose.getByRole("heading", { name: "Review heading" })).toBeVisible();
+    await expect(prose.getByRole("link", { name: "Safe destination" })).toHaveAttribute("href", "https://example.com/review");
+    await expect(prose.getByText("Raw HTML paragraph", { exact: true })).toBeVisible();
+    await expect(prose.getByText("Unsafe destination", { exact: true })).toBeVisible();
+    await expect(prose.locator('script, [onclick], [href^="javascript:" i]')).toHaveCount(0);
+  };
+  await expectSanitized();
+
+  send(0, { ...session, kind: "session-end", seq: 3, ts: Date.now() });
+  await expect(page.locator(".wf-end")).toContainText("Session complete");
+  await expectSanitized();
+});
+
 test("a live failed tool opens its error output by itself", async ({ page }) => {
   await page.goto(`runs/${projectA}/${liveRun}?tab=workflow`);
   // Wait for the observation stream to attach before publishing.
