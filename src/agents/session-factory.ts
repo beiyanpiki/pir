@@ -93,9 +93,13 @@ export function createIsolatedResourceLoader(systemRole: string, toolSnippets: r
 }
 
 /** Deterministic, memory-only settings; never merge project or global settings. */
-export function createReviewSettings(thinkingLevel: SessionThinkingLevel = "medium"): SettingsManager {
+export function createReviewSettings(
+  thinkingLevel: SessionThinkingLevel = "medium",
+  modelTimeoutMs?: number,
+): SettingsManager {
   return SettingsManager.inMemory({
     defaultThinkingLevel: thinkingLevel,
+    ...(modelTimeoutMs !== undefined ? { httpIdleTimeoutMs: modelTimeoutMs } : {}),
     defaultTools: [],
     packages: [],
     extensions: [],
@@ -115,6 +119,7 @@ interface IsolatedSessionDependencies {
   modelRuntime: ModelRuntime;
   model?: CreateAgentSessionOptions["model"];
   thinkingLevel?: SessionThinkingLevel;
+  modelTimeoutMs?: number;
 }
 
 /** Pure configuration assembly: no resource/model discovery or filesystem I/O. */
@@ -140,7 +145,7 @@ export function createIsolatedSessionOptions(
     customTools: config.tools.map(adaptTool),
     resourceLoader: createIsolatedResourceLoader(config.systemRole,
       config.tools.map((tool) => tool.promptSnippet).filter((snippet): snippet is string => Boolean(snippet))),
-    settingsManager: createReviewSettings(thinkingLevel),
+    settingsManager: createReviewSettings(thinkingLevel, dependencies.modelTimeoutMs),
     sessionManager: SessionManager.inMemory(config.cwd),
   };
 }
@@ -223,8 +228,10 @@ export class PiSessionFactory implements AgentSessionFactory {
   private runtimePromise: Promise<ModelRuntime> | null = null;
   private startupModelCache: ValidatedStartupModel | null = null;
   private readonly dependencies: FactoryDependencies;
+  private readonly modelTimeoutMs?: number;
 
-  constructor(dependencies: Partial<FactoryDependencies> = {}) {
+  constructor({ modelTimeoutMs, ...dependencies }: Partial<FactoryDependencies> & { modelTimeoutMs?: number } = {}) {
+    this.modelTimeoutMs = modelTimeoutMs;
     this.dependencies = {
       createModelRuntime: () => ModelRuntime.create({ allowModelNetwork: false }),
       readStartupModel: readPiStartupModel,
@@ -273,7 +280,9 @@ export class PiSessionFactory implements AgentSessionFactory {
         // Explicit "off" must not fall through to the SDK's medium default.
         thinkingLevel = resolved.thinkingLevel ?? thinkingLevel;
       }
-      const options = createIsolatedSessionOptions(config, { agentDir, modelRuntime: runtime, model, thinkingLevel });
+      const options = createIsolatedSessionOptions(config, {
+        agentDir, modelRuntime: runtime, model, thinkingLevel, modelTimeoutMs: this.modelTimeoutMs,
+      });
       const result = await this.dependencies.createAgentSession(options);
       session = result.session;
       const activeSession = session;

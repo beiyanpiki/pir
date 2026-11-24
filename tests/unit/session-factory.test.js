@@ -232,6 +232,45 @@ test("startup model validation accepts only supported thinking values and preser
   assert.equal(validateStartupModel({ modelSpec: "   " }).modelSpec, undefined);
 });
 
+test("pi SDK gets task-scoped timeout options for concurrent reviewer and verifier sessions", async (t) => {
+  // Exercise the real SDK's request assembly, but never start a network request.
+  const sdkRuntime = new Proxy(runtime, {
+    get(target, key) {
+      if (key === "streamSimple") return (_model, _context, options) => options.timeoutMs;
+      return Reflect.get(target, key);
+    },
+  });
+  const task = async (modelTimeoutMs, roles) => {
+    const observed = [];
+    const sessions = factory(async (options) => {
+      const result = await createAgentSession(options);
+      observed.push({
+        setting: options.settingsManager.getGlobalSettings().httpIdleTimeoutMs,
+        retry: options.settingsManager.getProviderRetrySettings().timeoutMs,
+        request: await result.session.agent.streamFunction(model, { messages: [] }),
+      });
+      return result;
+    }, { createModelRuntime: async () => sdkRuntime, modelTimeoutMs });
+    await Promise.all(roles.map(async (systemRole) => {
+      const handle = await sessions.createSession(config(process.cwd(), { model: modelSpec, systemRole }));
+      t.after(() => handle.dispose());
+    }));
+    return observed;
+  };
+  const [tuned, disabled, defaults] = await Promise.all([
+    task(90_000, ["code reviewer", "independent verifier"]),
+    task(0, ["fix verifier"]),
+    task(undefined, ["summarizer"]),
+  ]);
+  assert.deepEqual(tuned, [
+    { setting: 90_000, retry: undefined, request: 90_000 },
+    { setting: 90_000, retry: undefined, request: 90_000 },
+  ]);
+  // Pi uses the largest safe Node timer as a provider-side fallback when its idle setting is disabled.
+  assert.deepEqual(disabled, [{ setting: 0, retry: undefined, request: 2_147_483_647 }]);
+  assert.deepEqual(defaults, [{ setting: undefined, retry: undefined, request: 300_000 }]);
+});
+
 test("usage normalization sums disjoint cache buckets without adding reasoning twice", () => {
   const stats = { tokens: { input: 10, output: 7, cacheRead: 20, cacheWrite: 3, total: 40, reasoning: 6 }, cost: 0.25, toolCalls: 4 };
   assert.deepEqual(normalizeSessionUsage(stats, 120, { toolCalls: 3, repeatedToolCalls: 1 }), {
