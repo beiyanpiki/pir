@@ -168,6 +168,8 @@ reviewed head (the first review per project pays a full index build); without
 it, serve reviews run degraded — the structural `find_*` tools stay
 unavailable even though the image installs the codegraph CLI.
 
+The Docker image bundles CodeGraph 1.6.4 by default. Older indexes remain readable, but incremental sync does not re-extract unchanged files. To apply the updated extraction engine to an existing index in a repository you manage, opt in by running a full `codegraph index <path>` with CodeGraph 1.6.4, where `<path>` is the repository path. Upgrading the image does not automatically rebuild user-managed indexes.
+
 ## Common commands
 
 ```bash

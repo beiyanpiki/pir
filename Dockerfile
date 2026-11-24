@@ -32,7 +32,7 @@ RUN apt-get update \
 # binary it was asked to carry is exactly the "installed but never usable"
 # trap #64 was filed against.
 ARG INSTALL_CODEGRAPH=1
-RUN if [ "$INSTALL_CODEGRAPH" = "1" ]; then npm i -g @colbymchenry/codegraph@1.6.0; fi
+RUN if [ "$INSTALL_CODEGRAPH" = "1" ]; then npm i -g @colbymchenry/codegraph@1.6.4; fi
 
 # Writable home for pi (seeded from /pi-config + PI_* env vars by the
 # entrypoint) plus server-side data roots (registered clones, centralized
