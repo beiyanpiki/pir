@@ -161,6 +161,8 @@ pir rules check src/core/supervisor.ts  # 查看某个路径最终命中的项�
 
 verifier 会话可以使用与 reviewer 不同的模型：`--verify-model <id>`（未传 flag 时读 `PIR_VERIFIER_MODEL` 环境变量）为 verifier 会话指定独立的 `<provider>/<model>` 或模糊 id，reviewer 会话仍用 `--model`；未设置时 verifier 沿用 reviewer 模型。跨家族验证（用不同模型家族检查 reviewer 的工作）正是此功能的意义——模型对自身输出类别的盲区是重叠的。id 走标准模型解析路径：无法解析的 id 会让 verifier 会话以 `provider-error` 不确定项失败（run 报告 incomplete），绝不静默回退。run manifest 以 `model` 与 `verifierModel` 两个字段记录两个模型。
 
+`--model-timeout <秒>`（例如 `pir find --model-timeout 900`）只调整本次任务的 Pi 模型请求超时，reviewer 和 verifier 会话均适用。它也适用于 `audit`、`summarize`、`verify-fix`、`memory bootstrap` 和 `memory refresh`。值为 `0` 到 `2147483` 的整数；省略时保留 Pi 默认值，`0` 使用 Pi 的禁用空闲超时设置。该设置作用于单次请求尝试，是否生效取决于模型适配器，并不会覆盖 HTTP 传输、模型服务或网关自身的限制。它不是整轮任务的时限，也不同于 CLI 等待服务器的 `--remote-timeout`。远程执行需要服务端也支持此参数。
+
 `--angles <列表|all>`(实验性,仅 find,默认关闭)把第 1 轮拆成每个角度一个专门的 reviewer 会话——`correctness`、`concurrency`、`security`、`contracts`、`performance`——替代单一通用会话。最多 4 个并行,并按剩余 token/墙钟预算收缩;后续轮次保持通用会话并使用合并后的 focus。跨角度的近重复候选(同实体、近似 claim——即使 category 标签不同)在合并时折叠,finding id 重新唯一分配,各角度 transcript 记录其 id 映射。v1 各角度共用同一份 memory pack。
 
 变更评审实际比较的是所选 ref 的 merge base 与 head。工作区评审显式设置 `--base HEAD`，可以把范围限定到未提交内容。`verify-fix` 会对照已提交的 HEAD 检查标记为 fixed 的问题。

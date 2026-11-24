@@ -17,6 +17,8 @@ export interface AppContext {
 export interface AppContextOptions {
   /** Test seam: inject a fake session factory. */
   factory?: AgentSessionFactory;
+  /** Timeout override shared by every model session for this invocation. */
+  modelTimeoutMs?: number;
   /** Skip the codegraph sync probe. */
   noSyncIndex?: boolean;
   /** Test seam: custom sqlite location. */
@@ -78,6 +80,6 @@ export async function createAppContext(repoRoot: string, options: AppContextOpti
     memory,
     codeMap: codeMapResult.provider,
     codeMapDegraded: codeMapResult.degraded,
-    factory: options.factory ?? new PiSessionFactory(),
+    factory: options.factory ?? new PiSessionFactory({ modelTimeoutMs: options.modelTimeoutMs }),
   };
 }

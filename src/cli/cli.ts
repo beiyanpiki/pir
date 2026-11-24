@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import process from "node:process";
-import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveOutputFormat } from "./executor.js";
+import { USAGE, UsageError, VALUE_FLAGS, executePirCommand, helpFor, parseArgs, resolveModelTimeoutMs, resolveOutputFormat } from "./executor.js";
 import { machineOutputFromArgv } from "./machine-output.js";
 import { drainAndExit } from "./exit.js";
 import { resolveRemoteTimeoutSeconds } from "./remote-fetch.js";
@@ -43,10 +43,13 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const command = firstPositional(argv);
-  // find/audit output selection is validated before any transport or bundle
-  // work — and therefore before a remote forward — so a typo or a
-  // contradictory --json/--format pair fails fast with exit 2 (output formats).
-  if (command === "find" || command === "audit") resolveOutputFormat(parseArgs(argv).flags);
+  // Fail fast on invalid output formats and model timeouts before transport, bundle work, or starting a detached child. The executor validates these independently.
+  const isReview = command === "find" || command === "audit";
+  if (isReview || argv.some((arg) => arg === "--model-timeout" || arg.startsWith("--model-timeout="))) {
+    const parsed = parseArgs(argv);
+    if (isReview) resolveOutputFormat(parsed.flags);
+    resolveModelTimeoutMs(parsed);
+  }
   // Machine output (`--json` or `--format json|sarif`) decides two pre-executor
   // behaviours: whether the first-run wizard may prompt, and which detach
   // submission envelope remote.ts prints. Resolve it once here (dogfood F-17).

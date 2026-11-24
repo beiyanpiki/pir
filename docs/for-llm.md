@@ -97,6 +97,8 @@ the run reports incomplete), never a silent fallback.
 A local invocation can override a saved remote connection with `--local`.
 Model listing indicates configured auth, not a successful provider request.
 
+`--model-timeout <seconds>` applies to the model requests of a single `find`, `audit`, `summarize`, `verify-fix`, `memory bootstrap`, or `memory refresh` invocation, including reviewer and verifier sessions. Supply it once, as a decimal integer in `0..2147483`; invalid values and use on previews/readouts exit `2`. Omission leaves Pi's default unchanged. `0` requests Pi's disabled idle-timeout setting; the current Pi SDK passes `2147483647` ms (about 24.8 days) to provider adapters in that case. This is a per-attempt option, not a task deadline. Some adapters ignore it, and the HTTP transport (e.g., Undici), upstream provider, or gateway can still time out. It does not change review budgets or `--remote-timeout`. A remote task passes the flag in its command arguments; use a server version that supports it.
+
 ### Path B: Remote client only
 
 Required inputs: repository checkout, service URL, bearer token if the service
@@ -243,6 +245,7 @@ Limits:
 | `--max-findings N` | `10`; confirmed plus uncertain reports; ceiling, not target |
 | `--max-rounds N` | `2` for `find`; includes verification-only rounds |
 | `--max-tokens N` | `find`: default ceilings of 1.2M reviewer + 0.8M verifier prompt-side (input) tokens when the flag is absent — a hit starts no new reviewer round but still drains the pending verification backlog, and the stop is recorded in `stoppedBecause`/`budgetStop` with `incomplete` computed as usual; a numeric `N` replaces the defaults with one hard whole-run ceiling in measured total tokens (it also refuses new verifier admissions mid-drain, leaving pending candidates unverified); `unlimited` removes every token ceiling (the opt-out). `audit`: unlimited unless set. All ceilings are checked between sessions |
+| `--model-timeout N` | per-task model request timeout in seconds, including reviewer and verifier requests; `0` requests Pi's disabled setting, omitted uses Pi's default |
 | `--verify-concurrency N` | `1` (serial); parallel verifier sessions per verification drain, 1–8; `PIR_VERIFY_CONCURRENCY` env when the flag is absent |
 | `--min-confidence X` | `0` (off); bucket confirmed findings with verifier confidence below this 0–1 threshold into `lowConfidenceFindings` (`PIR_MIN_CONFIDENCE` env when the flag is absent); bucketing never deletes — the findings stay reported and count toward `--max-findings` |
 | `--verify-model ID` | separate verifier model while reviewer sessions keep `--model` (`PIR_VERIFIER_MODEL` env when the flag is absent); unset → verifiers use the reviewer model; the run manifest records both as `model` and `verifierModel` |
@@ -371,7 +374,7 @@ selection: `path`, `status`, `additions`/`deletions`, `excluded`,
 `skip-pattern`, `oversized-diff`, `not-included`) — no run, no model, no
 writes. Run-shaping flags (`--max-rounds`, `--max-tokens`,
 `--max-findings`, `--verify-concurrency`, `--min-confidence`,
-`--fail-on`, `--model`, `--verify-model`, `--angles`, `--plugins`)
+`--fail-on`, `--model`, `--model-timeout`, `--verify-model`, `--angles`, `--plugins`)
 are rejected with exit 2 rather than silently ignored.
 
 `--max-findings unlimited` (#57) removes the report cap: the result envelope
