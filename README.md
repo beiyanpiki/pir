@@ -251,6 +251,8 @@ unresolvable id fails the verifier sessions as `provider-error` uncertainty
 (the run reports incomplete), never a silent fallback. The run manifest
 records both models as `model` and `verifierModel`.
 
+Use `--model-timeout <seconds>` (for example, `pir find --model-timeout 900`) to set Pi's model request timeout for one invocation, including both reviewer and verifier sessions. It also applies to `audit`, `summarize`, `verify-fix`, `memory bootstrap`, and `memory refresh`. Use a whole number from `0` to `2147483`; omit the flag to keep Pi's default. `0` requests Pi's disabled idle-timeout setting. The timeout applies per request attempt, depends on the provider adapter, and does not override transport, provider, or gateway limits. It is not a whole-run deadline or the CLI-to-server `--remote-timeout`. Remote use needs a server version that supports the flag.
+
 `--angles <list|all>` (experimental, find-only, default off) fans out round 1
 into one specialized reviewer session per angle — `correctness`,
 `concurrency`, `security`, `contracts`, `performance` — instead of one
