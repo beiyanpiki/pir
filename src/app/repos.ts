@@ -340,9 +340,12 @@ export async function removeRepo(name: string, purge: boolean): Promise<RepoEntr
     }
     await withRegistryLock(() => {
       const registry = readRegistry();
-      // A concurrent remove may have unregistered it first; the purge above
-      // is already done, so removal is idempotent rather than an error.
-      if (registry[name]) {
+      // Delete only the entry this purge resolved. A concurrent add of a
+      // different project under the same name is not serialized by this
+      // project's repo lock, and its registration must survive: the old
+      // clone's purge says nothing about the new project (dogfood F-1).
+      const current = registry[name];
+      if (current && current.projectId === entry.projectId) {
         delete registry[name];
         writeRegistry(registry);
       }
