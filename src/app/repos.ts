@@ -189,6 +189,12 @@ function withRegistryLock<T>(fn: () => T | Promise<T>): Promise<T> {
 // for minutes rather than treating a live holder as stale. Crashed holders
 // are detected by pid, not by age.
 const REPO_LOCK_WAIT_MS = 20 * 60_000;
+// Cleanup runs in a `finally` that guards an already-finished review; waiting
+// out a preparation there would delay the result and a rejection would replace
+// it (dogfood F-2). A short best-effort wait keeps normal purge coordination,
+// then falls back to an unlocked removal that purge cannot break: purge
+// refuses while this worktree's admin entry exists.
+const REPO_CLEANUP_LOCK_WAIT_MS = 5_000;
 
 /**
  * Serialize every mutation of one per-project directory: cloning into it,
@@ -206,10 +212,10 @@ function repoLockPathFor(dir: string): string {
   return path.join(reposRoot(), ".locks", `repo-${sha256(path.resolve(dir))}.lock`);
 }
 
-function withRepoLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
+function withRepoLock<T>(dir: string, fn: () => T | Promise<T>, waitMs = REPO_LOCK_WAIT_MS): Promise<T> {
   return withResourceLock(
     repoLockPathFor(dir),
-    { waitMs: REPO_LOCK_WAIT_MS, busyError: "repository is busy with another materialization or purge" },
+    { waitMs, busyError: "repository is busy with another materialization or purge" },
     fn,
   );
 }
@@ -655,7 +661,18 @@ async function materializeWorktree(repoDir: string, projectId: string, headCommi
     projectId,
     cleanup: async () => {
       if (process.env.PIR_KEEP_WORKTREE === "1") return;
-      await withRepoLock(repoDir, () => removeWorktree(repoDir, worktree));
+      // Never reject: callers run cleanup in a finally that guards a completed
+      // review, so a busy lock must not discard the result or skip removal.
+      try {
+        await withRepoLock(repoDir, () => removeWorktree(repoDir, worktree), REPO_CLEANUP_LOCK_WAIT_MS);
+        return;
+      } catch (err) {
+        process.stderr.write(
+          `pir: worktree cleanup could not take the repo lock (${err instanceof Error ? err.message : String(err)}); ` +
+            "removing without coordination\n",
+        );
+      }
+      await removeWorktree(repoDir, worktree);
     },
   };
 }
@@ -666,9 +683,16 @@ async function removeWorktree(repoDir: string, worktree: string): Promise<void> 
     return;
   } catch {
     // The clone may already be gone (operator cleanup) or git refused the
-    // admin entry: drop the checkout and prune whatever admin state remains.
+    // admin entry: fall through to dropping the checkout by hand.
   }
-  rmSync(worktree, { recursive: true, force: true });
+  try {
+    rmSync(worktree, { recursive: true, force: true });
+  } catch (err) {
+    // Best effort by contract: cleanup cannot fail a finished review.
+    process.stderr.write(
+      `pir: could not remove leftover worktree ${worktree}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
   try {
     await git(repoDir, ["worktree", "prune"]);
   } catch {

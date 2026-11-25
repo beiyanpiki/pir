@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -94,5 +94,46 @@ test("purge never unregisters a newer registration that reused the name", async 
   } finally {
     oldRepo.cleanup();
     newRepo.cleanup();
+  }
+});
+
+test("cleanup never rejects when the repo lock is held and still drops the worktree", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-cleanup-busy-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    repo.commit("head");
+    const { addRepo, materializeRegistered } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(repo.dir, "demo");
+    const dir = path.join(reposRoot, entry.projectId);
+    const review = await materializeRegistered(dir, entry.projectId, { noFetch: true });
+
+    const lockName = `repo-${createHash("sha256").update(path.resolve(dir)).digest("hex")}.lock`;
+    const lockPath = path.join(reposRoot, ".locks", lockName);
+    const { withResourceLock } = await import("../../dist/app/repo-lock.js");
+    let releaseHolder;
+    let acquiredHolder;
+    const holderAcquired = new Promise((resolve) => (acquiredHolder = resolve));
+    const holding = withResourceLock(lockPath, { waitMs: 20_000 }, async () => {
+      acquiredHolder();
+      await new Promise((resolve) => (releaseHolder = resolve));
+    });
+    await holderAcquired;
+
+    // Cleanup runs after a completed review (the server/Gitea/CLI callers run
+    // it in a finally): a busy preparation must not fail the review's result
+    // or leak the worktree, so it gives up on the lock quickly and still
+    // removes the checkout.
+    const started = Date.now();
+    await review.cleanup();
+    assert.ok(Date.now() - started < 15_000, "cleanup did not wait out the preparation budget");
+    assert.ok(!existsSync(review.worktree), "the worktree was removed without the lock");
+    const admins = path.join(dir, ".git", "worktrees");
+    assert.deepEqual(existsSync(admins) ? readdirSync(admins) : [], [], "no admin entry leaks");
+
+    releaseHolder();
+    await holding;
+  } finally {
+    repo.cleanup();
   }
 });
