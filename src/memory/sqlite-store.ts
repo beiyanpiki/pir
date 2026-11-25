@@ -13,6 +13,18 @@ export interface OpenStoreOptions {
   readOnly?: boolean;
 }
 
+export interface TransactionOptions {
+  /**
+   * Take the write lock at BEGIN instead of on the first write. A deferred
+   * transaction starts on a read snapshot and upgrades later, so a
+   * read-then-write sequence (read a counter, insert its successor) can race
+   * another writer that commits in between. BEGIN IMMEDIATE serializes those
+   * writers up front; the default stays deferred so existing callers keep
+   * their current locking behavior.
+   */
+  immediate?: boolean;
+}
+
 /**
  * Thin wrapper around node:sqlite DatabaseSync: WAL mode, ordered migrations
  * tracked in _migrations, and a transaction helper. No external dependencies.
@@ -79,8 +91,8 @@ export class SqliteStore {
     }
   }
 
-  transaction<T>(fn: () => T): T {
-    this.db.exec("BEGIN");
+  transaction<T>(fn: () => T, options: TransactionOptions = {}): T {
+    this.db.exec(options.immediate ? "BEGIN IMMEDIATE" : "BEGIN");
     try {
       const result = fn();
       this.db.exec("COMMIT");
