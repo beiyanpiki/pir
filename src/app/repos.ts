@@ -26,6 +26,7 @@ import {
   CODEGRAPH_INIT_TIMEOUT_MS,
   CODEGRAPH_SYNC_TIMEOUT_MS,
 } from "../codemap/codegraph-cli.js";
+import { withResourceLock } from "./repo-lock.js";
 
 /**
  * Server-side repository registry. Repos live under PIR_REPOS_ROOT
@@ -183,6 +184,49 @@ function withRegistryLock<T>(fn: () => T | Promise<T>): Promise<T> {
   );
 }
 
+// One preparation can include a first-time codegraph seed build (a full init,
+// a sync and the copy-back, each bounded by its own timeout), so waiters queue
+// for minutes rather than treating a live holder as stale. Crashed holders
+// are detected by pid, not by age.
+const REPO_LOCK_WAIT_MS = 20 * 60_000;
+
+/**
+ * Serialize every mutation of one per-project directory: cloning into it,
+ * fetching, reading the shared bundle ref, adding/removing worktrees, healing
+ * a corrupt bundle cache and purging it. The lock file lives under
+ * `reposRoot()/.locks`, never inside the project directory — a purge deletes
+ * the latter, and must not delete the lock that makes its own purge safe.
+ *
+ * The lock is held only for preparation and cleanup, never for the review
+ * itself (review worktrees are independent once checked out). Lock order is
+ * fixed: the registry lock is only taken while holding a repo lock (add /
+ * remove), never the reverse; materialization takes only the repo lock.
+ */
+function repoLockPathFor(dir: string): string {
+  return path.join(reposRoot(), ".locks", `repo-${sha256(path.resolve(dir))}.lock`);
+}
+
+function withRepoLock<T>(dir: string, fn: () => T | Promise<T>): Promise<T> {
+  return withResourceLock(
+    repoLockPathFor(dir),
+    { waitMs: REPO_LOCK_WAIT_MS, busyError: "repository is busy with another materialization or purge" },
+    fn,
+  );
+}
+
+/**
+ * Names of linked-worktree admin entries (`<repo>/.git/worktrees/<id>`).
+ * `null` means the directory cannot be inspected — callers that would delete
+ * the repository must refuse rather than assume nothing is checked out.
+ */
+function linkedWorktreeAdmins(dir: string): string[] | null {
+  try {
+    return readdirSync(path.join(dir, ".git", "worktrees"));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? [] : null;
+  }
+}
+
 export function projectIdFor(remoteUrl: string | null, rootCommit: string): string {
   const normalized = remoteUrl ? normalizeRemoteUrl(remoteUrl) : null;
   return sha256(`${normalized ?? "local"}\u0000${rootCommit}`);
@@ -254,18 +298,50 @@ export function listRepos(): RepoEntry[] {
 }
 
 export async function removeRepo(name: string, purge: boolean): Promise<RepoEntry> {
-  const entry = await withRegistryLock(() => {
-    const registry = readRegistry();
-    const found = registry[name];
-    if (!found) throw new Error(`repo not registered: ${name}`);
-    delete registry[name];
-    writeRegistry(registry);
-    return found;
-  });
-  if (purge) {
-    const dir = repoDirFor(entry.projectId);
-    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  const entry = readRegistry()[name];
+  if (!entry) throw new Error(`repo not registered: ${name}`);
+  if (!purge) {
+    await withRegistryLock(() => {
+      const registry = readRegistry();
+      if (!registry[name]) throw new Error(`repo not registered: ${name}`);
+      delete registry[name];
+      writeRegistry(registry);
+    });
+    return entry;
   }
+  const dir = repoDirFor(entry.projectId);
+  // Purge deletes the clone (and with it every worktree admin entry), so it
+  // must prove no review is checked out there. Both checks happen under the
+  // repo lock that also gates worktree creation: a concurrent materialization
+  // either finished (its worktree is visible here) or waits for us. A failure
+  // while deleting propagates BEFORE the registry is touched — unregistering
+  // first would strand a clone nobody can find again.
+  await withRepoLock(dir, async () => {
+    if (existsSync(dir)) {
+      const admins = linkedWorktreeAdmins(dir);
+      if (admins === null) {
+        throw new Error(
+          `refusing to purge ${dir}: its linked worktrees cannot be inspected — remove it by hand once no review is running`,
+        );
+      }
+      if (admins.length > 0) {
+        throw new Error(
+          `refusing to purge ${dir}: linked worktrees ${admins.join(", ")} are still registered — let running reviews finish, ` +
+            "remove leftover worktrees (`git worktree prune` in the clone), then purge again",
+        );
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+    await withRegistryLock(() => {
+      const registry = readRegistry();
+      // A concurrent remove may have unregistered it first; the purge above
+      // is already done, so removal is idempotent rather than an error.
+      if (registry[name]) {
+        delete registry[name];
+        writeRegistry(registry);
+      }
+    });
+  });
   return entry;
 }
 
