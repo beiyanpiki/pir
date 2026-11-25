@@ -50,6 +50,10 @@ services:
       # Set it in .env, never in a committed file — it carries the bot token
       # and the webhook secret. Empty (default) keeps the integration off.
       - PIR_GITEA_JSON=${PIR_GITEA_JSON:-}
+      # Bounded review admission: global slots and per-project cap. Both
+      # default to 1 (serial); raise both for same-project parallelism.
+      - PIR_REVIEW_CONCURRENCY=${PIR_REVIEW_CONCURRENCY:-1}
+      - PIR_PROJECT_REVIEW_CONCURRENCY=${PIR_PROJECT_REVIEW_CONCURRENCY:-1}
     volumes:
       - ./docker/pi-config:/pi-config:ro
       - pir-repos:/data/repos

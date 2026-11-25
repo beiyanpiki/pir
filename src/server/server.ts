@@ -86,14 +86,7 @@ export const NEEDFULL_MARKER = "needFull: the shipped thin bundle could not be a
 const REPO_CONTEXT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
- * HTTPS wrapper around the shared command executor. One request = one pir
- * invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns
- * {code, output, log}. Mutating commands run serially — review sessions and
- * the sqlite store assume single-writer access per workspace — but provably
- * read-only ones (version, models, repos list) skip the queue entirely, and
- * pure sqlite reads (memory status, findings list/show) run as WAL readers
- * alongside the writer. Both fast lanes share a small concurrency cap. See
- * classifyExecLane.
+ * HTTPS wrapper around the shared command executor. One request = one pir invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns {code, output, log}. Isolated reviews share bounded admission; project maintenance and unclassified workspace commands retain exclusive access. Proven reads use a separately bounded fast lane. See classifyExecLane.
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
@@ -341,7 +334,7 @@ export async function startServer(input: {
    * POST /v1/webhook/gitea — the Gitea PR-review ingress. HMAC-verified (no
    * bearer token: Gitea signs the raw body with the configured shared
    * secret), then routed through the pure policy gate. Accepted PR triggers
-   * answer 202 immediately and run the orchestration on the serial queue as
+   * answer 202 immediately and run the orchestration on the executor as
    * a job; every rejection answers 200 with the machine-readable reason so
    * Gitea does not retry unwatched events. An unconfigured integration
    * answers 503 — the route itself is the constant surface.
@@ -543,9 +536,7 @@ export async function startServer(input: {
         head: parsed.head,
       };
 
-      // Bundle-free read lane: pure db reads answered while the serial queue
-      // is busy with an audit. Falls through to the queued materialize path
-      // on first contact (db missing or not yet migrated), which creates it.
+      // Pure database reads bypass executor admission; first contact falls through to materialization to create or migrate the database.
       if (isBundleFreeReadArgv(cleanedArgv)) {
         const { projectIdFor, reviewDbPath } = await import("../app/repos.js");
         const { dbCurrentForRead } = await import("../memory/index.js");
@@ -997,10 +988,7 @@ export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Pr
 }
 
 /**
- * Scheduling decision for a /v1/exec request. The serial queue exists
- * because review sessions, worktree materialization and the memory db
- * assume single-writer access — but that assumption only covers commands
- * that write. Three groups don't need the queue:
+ * Scheduling decision for a /v1/exec request. The queued lane uses resource-aware admission; unclassified commands remain exclusive. The proven read groups bypass admission:
  *
  * - "unqueued" — commands that touch no review worktree and no memory db:
  *   version, help, models, and `repos list` (a pure registry read; the
@@ -1013,9 +1001,7 @@ export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Pr
  * - everything else — "queued". That deliberately includes `repos add` /
  *   `repos remove`: the registry writes are lock-protected, but add/remove
  *   also clone into, fetch into and rmSync the shared per-project dirs
- *   under PIR_REPOS_ROOT — the same dirs bundle reviews materialize from —
- *   so un-queuing them without per-project locks could break an in-flight
- *   review.
+ *   under PIR_REPOS_ROOT; they remain globally exclusive even though the repository layer also coordinates its shared mutations.
  *
  * Exported for tests; the lane only picks a scheduling order, never
  * validation (usage errors surface from the queued executor path).

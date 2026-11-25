@@ -95,6 +95,10 @@ Startup semantics: the config is loaded exactly once when `serve` starts. A miss
 | `PIR_TLS_CERT` / `PIR_TLS_KEY` | unset | PEM pair for serve's HTTPS listener |
 | `PIR_CERT_DIR` | `/tmp/pir-certs` | cache dir for the generated self-signed pair |
 | `PIR_ALLOW_HTTP` | unset | `1` permits a plain-HTTP listener **only when** certificate generation fails |
+| `PIR_REVIEW_CONCURRENCY` | `1` | global review-admission slots (the `serve --review-concurrency` flag wins); covers preparation, execution, cleanup and admitted maintenance |
+| `PIR_PROJECT_REVIEW_CONCURRENCY` | `1` | maximum admitted reviews for one project (the `serve --project-review-concurrency` flag wins); raise it together with the global cap for same-project parallelism |
+
+Both concurrency variables default to `1`, so an existing deployment keeps the serial behavior. They accept positive decimal safe integers; an empty value counts as unset and any other invalid value refuses startup. For throughput, `PIR_REVIEW_CONCURRENCY=2` plus `PIR_PROJECT_REVIEW_CONCURRENCY=2` is the conservative first step. Different PRs can then overlap, while one PR's whole orchestrate-and-publish lifecycle remains mutually exclusive; repeated deliveries for the same head keep the existing re-review and fingerprint-dedupe behavior.
 
 ### 2.5 Docker pattern
 
@@ -193,11 +197,11 @@ Expected: `200 {"accepted":false,"reason":"wip: …"}` — the signature verifie
 | `pull_request` action `closed` / `deleted`, any non-PR event | rejected: `unwatched-event` / `unwatched-action`, no side effects |
 | Any accepted trigger with: WIP prefix or draft, base outside `baseBranches`, a `skipLabels` label, or the bot as sender | rejected with reason `wip` / `base-branch` / `skip-label` / `bot-sender` |
 
-Every rejection answers `200 {accepted:false, reason:"<code>: <phrase>"}` so Gitea does not retry. Accepted runs serialize on serve's single queue; a newer push to the same PR supersedes an older queued run (`outcome:"superseded"`, nothing posted).
+Every rejection answers `200 {accepted:false, reason:"<code>: <phrase>"}` so Gitea does not retry. Accepted runs share serve's bounded admission (defaults: one global slot, one per project), so the default deployment serializes as before; with both caps raised, different PRs can overlap. One PR's whole orchestrate-and-publish lifecycle stays mutually exclusive, and repeated deliveries for the same head keep the existing re-review/dedupe behavior. A newer push to the same PR supersedes an older queued run (`outcome:"superseded"`, nothing posted); a run whose head is replaced during model execution rechecks before publishing and stands down.
 
 ## 6. Operations notes
 
-- **One review at a time per serve process** — webhook reviews queue behind bundle reviews. `GET /health`'s `executor` block (pending count, oldest pending age) is the queue gauge.
+- **Bounded admission, serial by default** — webhook reviews share the serve process's admission pool with bundle reviews. Raise `PIR_REVIEW_CONCURRENCY`/`PIR_PROJECT_REVIEW_CONCURRENCY` (or the `serve` flags) for same-project parallelism; raising only the global cap leaves the default per-project cap of one. `GET /health`'s `executor` block keeps its wire shape: `pending` counts running plus waiting tasks and `oldestPendingMs` is the oldest admission age. The scheduler is process-local: separate serve processes do not coordinate, and a restart loses queued and running work (durable run rows and checkpoints remain).
 - **Per-PR state** lives in `gitea-state.json` in the config dir: last reviewed head SHA, review and status-comment IDs, and the fingerprints already posted (the cross-run dedupe set).
 - **Cost**: each accepted run is one review loop (`find`) plus one summarize session on the same change range; `defaults.model` and `defaults.maxFindings` are the levers.
 - **Observability**: serve logs every step as `gitea <owner>/<repo>#N :: …`; runs appear in the read-only web UI (`pir serve --web`) with transcripts, exactly like any other run.
@@ -216,6 +220,6 @@ Every rejection answers `200 {accepted:false, reason:"<code>: <phrase>"}` so Git
 | Run fails with `No API key found for the selected model` | model credentials missing on the serve host (`~/.pi/agent/auth.json` / `PI_AUTH_JSON`) — see [Prerequisites](#1-prerequisites) |
 | Every run fails with a 404-flavored `Not found.` | fixed since #166 — update pir; historically caused by an instance-root `url` requesting non-API paths |
 | serve log: `could not fetch the bot account … bot-sender skip rule disabled` | the PAT lacks `read:user` — regenerate with all four scopes and restart serve |
-| Review sits queued for a long time | another review holds the serial queue; check `GET /health` executor stats |
+| Review sits queued for a long time | admission slots are occupied; check `GET /health`'s `executor.pending`/`oldestPendingMs`. Webhook reviews share the pool with bundle reviews, and one project still admits a single review until both concurrency caps are raised |
 | An `edited` PR is never reviewed | `edited` triggers only when the WIP prefix is removed; also align `wipPrefixes` with `WORK_IN_PROGRESS_PREFIXES` |
 | A finding appears in the review table instead of inline | its anchor is not inside a diff hunk's new-side span — demoted to the overview by design |
