@@ -10,7 +10,7 @@ import { renderInlineFindingBody, renderReviewBody, renderStatusBody, type Gitea
 import { resolveTriggerPolicy, type GiteaIntegrationConfig, type GiteaTriggerPolicy } from "./config.js";
 import { GiteaApiError, type GiteaClient, type GiteaCommitStatusState } from "./client.js";
 import type { GiteaPullRequestView } from "./webhook.js";
-import { giteaStateKey, loadGiteaState, saveGiteaState, type GiteaPrState } from "./state.js";
+import { giteaStateKey, loadGiteaState, updateGiteaPrState, type GiteaPrState } from "./state.js";
 
 /**
  * The Gitea PR review orchestration: one accepted webhook → status comment +
@@ -259,18 +259,13 @@ export async function orchestrateGiteaReview(options: OrchestrateOptions): Promi
       statusCommentId = (await client.createIssueComment(owner, repo, view.number, startedBody)).id;
     }
     await client.createCommitStatus(owner, repo, view.headSha, commitStatusInput("pending", "pir review in progress", runUrl));
-    saveGiteaState(configDir, {
-      prs: {
-        ...state.prs,
-        [stateKey]: {
-          lastHeadSha: previous?.lastHeadSha ?? "",
-          reviewId: previous?.reviewId ?? null,
-          statusCommentId,
-          lastPostedFingerprints: previous?.lastPostedFingerprints ?? [],
-          updatedAt: nowISO(),
-        },
-      },
-    });
+    updateGiteaPrState(configDir, stateKey, (latest) => ({
+      lastHeadSha: latest?.lastHeadSha ?? "",
+      reviewId: latest?.reviewId ?? null,
+      statusCommentId,
+      lastPostedFingerprints: latest?.lastPostedFingerprints ?? [],
+      updatedAt: nowISO(),
+    }));
     log(`status comment up (#${statusCommentId}), commit status pending on ${view.headSha.slice(0, 10)}`);
 
     // 2. Superseded: a newer webhook for this PR already owns it — post
@@ -321,6 +316,12 @@ export async function orchestrateGiteaReview(options: OrchestrateOptions): Promi
       ({ inline: mappedInline, demoted } = mapFindingsToInlineComments(toPost, files));
     } finally {
       await materialized.cleanup();
+    }
+
+    // A newer head may have been accepted while the model ran; stand down before deleting/posting a review or saving final state.
+    if (options.isSuperseded?.()) {
+      log(`superseded by a newer head before publishing — job ${options.jobId} stands down`);
+      return { outcome: "superseded", detail: `superseded by a newer head on ${view.repoFullName}#${view.number}` };
     }
 
     // 6. Publish: delete-and-repost keeps exactly one pir review per run.
@@ -391,18 +392,13 @@ export async function orchestrateGiteaReview(options: OrchestrateOptions): Promi
         runUrl,
       ),
     );
-    saveGiteaState(configDir, {
-      prs: {
-        ...state.prs,
-        [stateKey]: {
-          lastHeadSha: view.headSha,
-          reviewId: review.id,
-          statusCommentId,
-          lastPostedFingerprints: [...unchanged.map((f) => f.fingerprint), ...toPost.map((f) => f.fingerprint)],
-          updatedAt: nowISO(),
-        },
-      },
-    });
+    updateGiteaPrState(configDir, stateKey, () => ({
+      lastHeadSha: view.headSha,
+      reviewId: review.id,
+      statusCommentId,
+      lastPostedFingerprints: [...unchanged.map((f) => f.fingerprint), ...toPost.map((f) => f.fingerprint)],
+      updatedAt: nowISO(),
+    }));
     return {
       outcome: "reviewed",
       detail: `${toPost.length} new finding(s), ${unchanged.length} unchanged, ${demoted.length} demoted (review ${review.id})`,
