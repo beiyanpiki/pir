@@ -139,6 +139,27 @@ test("executor: one hosted PR serializes publication while other PRs in the proj
   await Promise.all([a.result, b.result, c.result, d.result]);
 });
 
+test("executor: a global barrier also waits for earlier work blocked by a project limit", async () => {
+  const scheduler = new ExecutorScheduler({ concurrency: 2, projectConcurrency: 1 });
+  const started = [];
+  const a = hold(scheduler, review("a"), "a1", started);
+  const queued = hold(scheduler, review("a"), "a2", started);
+  const barrier = hold(scheduler, globalExclusive, "global", started);
+  const late = hold(scheduler, review("b"), "b", started);
+  await a.entered;
+  assert.deepEqual(started, ["a1"]);
+  a.release();
+  await queued.entered;
+  assert.deepEqual(started, ["a1", "a2"]);
+  queued.release();
+  await barrier.entered;
+  assert.deepEqual(started, ["a1", "a2", "global"]);
+  barrier.release();
+  await late.entered;
+  late.release();
+  await Promise.all([a.result, queued.result, barrier.result, late.result]);
+});
+
 test("executor: synchronous throws and rejected tasks release both slots and barriers", async () => {
   const scheduler = new ExecutorScheduler({ concurrency: 2, projectConcurrency: 2 });
   const sync = scheduler.run(globalExclusive, () => { throw new Error("sync failure"); });

@@ -1,6 +1,5 @@
 /**
- * Executor admission only: callers resolve resource identities and retain
- * ownership of command validation, workspaces, jobs, and persistence.
+ * Executor admission only: callers resolve resource identities and retain ownership of command validation, workspaces, jobs, and persistence.
  */
 export type ExecutorScope =
   | { kind: "review"; projectId: string; resourceKey?: string }
@@ -42,10 +41,7 @@ function copyScope(scope: ExecutorScope): ExecutorScope {
 }
 
 /**
- * Bounded, process-local scheduling with project maintenance barriers and
- * optional per-resource exclusion (for a hosted PR's publication lifecycle).
- * Blocked projects do not block unrelated work, but conflicting tasks never
- * overtake an earlier barrier. Slots are reserved before invoking user code.
+ * Bounded, process-local scheduling with project maintenance barriers and optional per-resource exclusion (for a hosted PR's publication lifecycle). Blocked projects do not block unrelated work, but conflicting tasks never overtake an earlier barrier. Slots are reserved before invoking user code.
  */
 export class ExecutorScheduler {
   private readonly queue: ScheduledTask[] = [];
