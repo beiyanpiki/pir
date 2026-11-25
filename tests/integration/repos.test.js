@@ -479,3 +479,36 @@ test("cleanup still removes the worktree after the clone disappears", async (t) 
     repo.cleanup();
   }
 });
+
+test("the Gitea pull-ref flow prepares sequentially and reviews the SHA it fetched", async (t) => {
+  sandbox(t);
+  const origin = createTempGitRepo("pir-pull-flow-");
+  try {
+    origin.write("src/who.txt", "one\n");
+    const head = origin.commit("head");
+    await git(origin.dir, ["update-ref", "refs/pull/7/head", head]);
+    const { addRepo, fetchPullRef, materializeRegistered } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(origin.dir);
+    const dir = path.join(process.env.PIR_REPOS_ROOT, entry.projectId);
+
+    // fetchPullRef releases its lock before materializeRegistered takes it
+    // again; a different push moving the pull ref in between must not change
+    // which commit the pinned SHA reviews.
+    const fetched = await fetchPullRef(dir, 7);
+    assert.equal(fetched, head);
+    origin.write("src/who.txt", "two\n");
+    const nextHead = origin.commit("next");
+    await git(origin.dir, ["update-ref", "refs/pull/7/head", nextHead]);
+
+    const review = await materializeRegistered(dir, entry.projectId, { branch: fetched });
+    try {
+      assert.equal(review.headCommit, head);
+      assert.equal(readFileSync(path.join(review.worktree, "src", "who.txt"), "utf8"), "one\n");
+    } finally {
+      await review.cleanup();
+    }
+    assert.equal(await fetchPullRef(dir, 7), nextHead);
+  } finally {
+    origin.cleanup();
+  }
+});

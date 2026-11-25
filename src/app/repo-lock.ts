@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -9,25 +9,28 @@ import { randomUUID } from "node:crypto";
  *
  * Unlike the registry lock in app/repos.ts, which is held for a few
  * milliseconds and may be broken after a short mtime age, a resource lock
- * names its owner: pid plus the Linux process start time, so a recycled pid
- * is not mistaken for the original holder. A holder on the same host is
- * considered alive while its pid lives (and its start token matches); only
- * then does a waiter queue, and only a provably dead owner is broken
- * immediately. Owners on another host (a shared filesystem) cannot be probed,
- * so their lock is broken only after a generous age — being conservative
- * there degrades to a busy error, never to two holders.
+ * names its owner and is only ever broken on PROOF that the owner is gone:
  *
- * The lock file is created with O_EXCL and always lives outside the state it
- * protects, so deleting that state cannot delete the lock.
+ * - the owner is on this host, and its pid no longer exists; or
+ * - the owner is on this host, the pid exists, but the kernel's process start
+ *   token differs — the pid was recycled after the holder died.
+ *
+ * No age heuristic ever breaks a lock. A holder on another host cannot be
+ * probed without distributed coordination, and an unreadable record proves
+ * nothing, so both are left alone: waiters fail with the lock path and a
+ * human decides. That keeps the one guarantee that matters — a live process
+ * is never joined by a second holder — at the cost of manual recovery for a
+ * dead foreign holder.
+ *
+ * The lock file is created atomically (write a complete record to a private
+ * temp, then link it into place) and always lives outside the state it
+ * protects, so deleting that state cannot delete the lock and no waiter can
+ * observe a half-written owner record.
  */
 
 export interface ResourceLockOptions {
   /** How long a waiter queues before failing. Default 60s. */
   waitMs?: number;
-  /** Age after which an unpromptable (other-host) owner is assumed dead. Default 30min. */
-  foreignStaleMs?: number;
-  /** Age after which an unparseable lock record is assumed dead. Default 60s. */
-  corruptStaleMs?: number;
   /** Poll interval while a live owner keeps the lock. Default 25ms. */
   pollMs?: number;
   busyError?: string;
@@ -42,19 +45,13 @@ interface LockOwner {
   acquiredAt: number;
 }
 
-interface LockFile {
+interface LockRecord {
   owner: LockOwner | null;
   raw: string;
-  mtimeMs: number;
 }
 
 const DEFAULT_WAIT_MS = 60_000;
-const DEFAULT_FOREIGN_STALE_MS = 30 * 60_000;
-const DEFAULT_CORRUPT_STALE_MS = 60_000;
 const DEFAULT_POLL_MS = 25;
-// Breaking a lock is read-compare-remove under a break mutex, so a break file
-// older than this can only belong to a crashed breaker.
-const BREAK_LOCK_STALE_MS = 10_000;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -80,12 +77,39 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-function readLock(lockPath: string): LockFile | null {
+function newOwner(): LockOwner {
+  return {
+    token: `${process.pid}-${randomUUID()}`,
+    pid: process.pid,
+    host: hostname(),
+    procStart: processStartToken(process.pid),
+    acquiredAt: Date.now(),
+  };
+}
+
+/**
+ * Publish a complete owner record at `lockPath`, atomically and only if it
+ * does not exist yet. The temp link makes a torn record impossible: waiters
+ * either see no file, or the full JSON written by the owner.
+ */
+function tryCreateLock(lockPath: string, owner: LockOwner): boolean {
+  const temp = `${lockPath}.${owner.token}.tmp`;
+  writeFileSync(temp, JSON.stringify(owner));
+  try {
+    linkSync(temp, lockPath);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw err;
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+function readLock(lockPath: string): LockRecord | null {
   let raw: string;
-  let mtimeMs: number;
   try {
     raw = readFileSync(lockPath, "utf8");
-    mtimeMs = statSync(lockPath).mtimeMs;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw err;
@@ -99,43 +123,45 @@ function readLock(lockPath: string): LockFile | null {
         pid: parsed.pid,
         host: parsed.host,
         procStart: typeof parsed.procStart === "string" ? parsed.procStart : null,
-        acquiredAt: typeof parsed.acquiredAt === "number" ? parsed.acquiredAt : mtimeMs,
+        acquiredAt: typeof parsed.acquiredAt === "number" ? parsed.acquiredAt : 0,
       };
     }
   } catch {
-    // A torn record (holder died between create and write): judged by age.
+    // Unreadable: not proof of death, so it is never broken automatically.
   }
-  return { owner, raw, mtimeMs };
+  return { owner, raw };
 }
 
-function ownerIsDead(lock: LockFile, now: number, options: ResourceLockOptions): boolean {
-  if (!lock.owner) return now - lock.mtimeMs > (options.corruptStaleMs ?? DEFAULT_CORRUPT_STALE_MS);
-  const owner = lock.owner;
-  if (owner.host !== hostname()) return now - lock.mtimeMs > (options.foreignStaleMs ?? DEFAULT_FOREIGN_STALE_MS);
+/**
+ * True only when the owner is provably dead. Everything unprovable — another
+ * host, an unparseable record, a live pid whose start token cannot be read —
+ * counts as alive and is handled by the waiter's deadline instead.
+ */
+function ownerIsProvablyDead(owner: LockOwner): boolean {
+  if (owner.host !== hostname()) return false;
   if (!pidAlive(owner.pid)) return true;
   const start = processStartToken(owner.pid);
-  // Both tokens known and different: the pid was recycled after the holder died.
   return owner.procStart !== null && start !== null && start !== owner.procStart;
 }
 
 /**
- * Remove a provably dead lock. The break mutex closes the race where two
- * waiters both decide a lock is stale and the second removes the lock the
- * first just re-acquired. The re-read of the observed raw content right
- * before the unlink closes the remaining window against a fresh owner.
+ * Remove a provably dead lock. The break mutex (itself an owner record with
+ * the same liveness rule) closes the race where two waiters both decide a
+ * lock is stale and the second removes the lock the first just re-acquired.
+ * The raw-content comparison right before the unlink closes the remaining
+ * window against a fresh owner.
  */
-function breakIfUnchanged(lockPath: string, observed: LockFile, now: number): boolean {
+function breakIfProvablyDead(lockPath: string, observed: LockRecord): boolean {
   const breakPath = `${lockPath}.break`;
-  const existing = readLock(breakPath);
-  if (existing) {
-    if (now - existing.mtimeMs <= BREAK_LOCK_STALE_MS) return false;
-    rmSync(breakPath, { force: true });
-  }
-  try {
-    writeFileSync(breakPath, `${process.pid}-${randomUUID()}`, { flag: "wx" });
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") return false;
-    throw err;
+  const breaker = newOwner();
+  if (!tryCreateLock(breakPath, breaker)) {
+    // A live breaker is mid-critical-section; a dead one left its mutex.
+    const held = readLock(breakPath);
+    if (held?.owner && ownerIsProvablyDead(held.owner)) {
+      const current = readLock(breakPath);
+      if (current && current.raw === held.raw) rmSync(breakPath, { force: true });
+    }
+    return false;
   }
   try {
     const current = readLock(lockPath);
@@ -145,7 +171,7 @@ function breakIfUnchanged(lockPath: string, observed: LockFile, now: number): bo
     }
     return false;
   } finally {
-    rmSync(breakPath, { force: true });
+    releaseIfOwner(breakPath, breaker.token);
   }
 }
 
@@ -165,32 +191,24 @@ export async function withResourceLock<T>(
   fn: () => T | Promise<T>,
 ): Promise<T> {
   mkdirSync(path.dirname(lockPath), { recursive: true });
-  const owner: LockOwner = {
-    token: `${process.pid}-${randomUUID()}`,
-    pid: process.pid,
-    host: hostname(),
-    procStart: processStartToken(process.pid),
-    acquiredAt: Date.now(),
-  };
+  const owner = newOwner();
   const waitMs = options.waitMs ?? DEFAULT_WAIT_MS;
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const deadline = Date.now() + waitMs;
   for (;;) {
-    try {
-      writeFileSync(lockPath, JSON.stringify(owner), { flag: "wx" });
-      break;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      const observed = readLock(lockPath);
-      if (observed === null) continue; // the holder released it — grab it now
-      const now = Date.now();
-      if (ownerIsDead(observed, now, options)) {
-        if (!breakIfUnchanged(lockPath, observed, now)) await sleep(pollMs);
-        continue;
-      }
-      if (now > deadline) throw new Error(`${options.busyError ?? "resource lock busy"}: ${lockPath}`);
-      await sleep(pollMs);
+    if (tryCreateLock(lockPath, owner)) break;
+    const observed = readLock(lockPath);
+    if (observed === null) continue; // the holder released it — grab it now
+    if (observed.owner && ownerIsProvablyDead(observed.owner)) {
+      if (!breakIfProvablyDead(lockPath, observed)) await sleep(pollMs);
+      continue;
     }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `${options.busyError ?? "resource lock busy"}: ${lockPath} — if no process is running, remove that lock file by hand`,
+      );
+    }
+    await sleep(pollMs);
   }
   try {
     return await fn();

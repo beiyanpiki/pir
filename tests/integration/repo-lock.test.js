@@ -118,6 +118,41 @@ test("a live lock owner is never broken; a dead owner is recovered without waiti
   assert.equal(existsSync(holder.lockPath), false, "the recovering owner released the lock");
 });
 
+test("an unprovable owner (foreign host or unreadable record) is never broken on age", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "pir-repo-lock-unprovable-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { mkdirSync, readFileSync, writeFileSync, utimesSync } = await import("node:fs");
+  const lockPath = path.join(root, "locks", "resource.lock");
+  mkdirSync(path.dirname(lockPath), { recursive: true });
+  const { withResourceLock } = await import("../../dist/app/repo-lock.js");
+
+  // This pid is dead on this host, but the record claims another host:
+  // liveness cannot be proved, so the lock must not be stolen.
+  const foreign = JSON.stringify({
+    token: "foreign-token",
+    pid: 999_999,
+    host: "another-host.invalid",
+    procStart: "1",
+    acquiredAt: 0,
+  });
+  writeFileSync(lockPath, foreign);
+  const ancient = new Date(Date.now() - 24 * 60 * 60_000);
+  utimesSync(lockPath, ancient, ancient);
+  await assert.rejects(
+    withResourceLock(lockPath, { waitMs: 150, pollMs: 10, busyError: "lock busy" }, async () => "never"),
+    /lock busy/,
+  );
+  assert.equal(readFileSync(lockPath, "utf8"), foreign, "the foreign lock survives");
+
+  // A record that cannot be parsed proves nothing either.
+  writeFileSync(lockPath, "{ torn");
+  await assert.rejects(
+    withResourceLock(lockPath, { waitMs: 150, pollMs: 10, busyError: "lock busy" }, async () => "never"),
+    /lock busy/,
+  );
+  assert.equal(readFileSync(lockPath, "utf8"), "{ torn", "the unreadable lock survives");
+});
+
 test("the lock holder releases the lock on a throwing critical section", async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "pir-repo-lock-release-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
