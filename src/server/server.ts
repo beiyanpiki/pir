@@ -23,6 +23,7 @@ import { loadGiteaConfig, resolveTriggerPolicy, type GiteaIntegrationConfig } fr
 import { createGiteaClient, type GiteaFetch } from "../gitea/client.js";
 import { giteaStateKey } from "../gitea/state.js";
 import { orchestrateGiteaReview, type GiteaReviewRunner } from "../gitea/orchestrator.js";
+import type { AgentSessionFactory } from "../agents/types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -185,6 +186,8 @@ export async function startServer(input: {
   webUi?: { token?: string; stateRoot: string; webRoot: string };
   /** Gitea webhook integration; absent (or a null config) keeps the route mounted but 503. */
   gitea?: { config: GiteaIntegrationConfig; configDir: string; fetchImpl?: GiteaFetch; runner?: GiteaReviewRunner };
+  /** Programmatic model-free execution seam; HTTP callers cannot set this. */
+  sessionFactory?: AgentSessionFactory;
 }): Promise<ServerHandle> {
   const log = (message: string): void => {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] ${message}\n`);
@@ -560,6 +563,7 @@ export async function startServer(input: {
           };
           const result = await fastLane.run(() =>
             executePirCommand(["--cwd", input.workspace, ...cleanedArgv], {
+              factory: input.sessionFactory,
               cwdGuard: input.workspace,
               dbPath,
               readOnlyMemory: true,
@@ -610,6 +614,7 @@ export async function startServer(input: {
             });
             const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
             const result = await executePirCommand(effectiveArgv, {
+              factory: input.sessionFactory,
               cwdGuard: materialized.worktree,
               dbPath: reviewDbPath(materialized.projectId),
               onLog: (message) => {
@@ -879,6 +884,7 @@ export async function startServer(input: {
           : cheap;
       const logLines: string[] = [];
       const execOptions = {
+        factory: input.sessionFactory,
         cwdGuard: input.workspace,
         ...(lane === "readonly" ? { readOnlyMemory: true } : {}),
         onLog: (message: string) => {

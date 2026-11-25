@@ -472,6 +472,10 @@ export interface ExecResult {
 }
 
 export interface ExecOptions {
+  /** Programmatic session injection; never supplied through command arguments. */
+  factory?: AppContextOptions["factory"];
+  /** A server-resolved registry snapshot, shared with its scheduling decision. */
+  registeredRepo?: ReturnType<typeof import("../app/repos.js").resolveRepo>;
   /** Progress/log sink (CLI: stderr; server: server log; tests: capture). */
   onLog?: (message: string) => void;
   /**
@@ -804,7 +808,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
       throw new UsageError(`--repo applies to find/audit/memory/findings/verify-fix, not ${command}`);
     }
     const { resolveRepo, materializeRegistered, reviewDbPath } = await import("../app/repos.js");
-    const resolvedRepo = resolveRepo(repoSpec);
+    const resolvedRepo = opts.registeredRepo ?? resolveRepo(repoSpec);
     log(`• repo ${resolvedRepo.entry.name} (${resolvedRepo.entry.projectId.slice(0, 10)}…)`);
     materialized = await materializeRegistered(resolvedRepo.dir, resolvedRepo.entry.projectId, {
       branch: typeof flags.get("--branch") === "string" ? (flags.get("--branch") as string) : undefined,
@@ -813,7 +817,7 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     cwd = materialized.worktree;
     const dbPath = explicitDbPath ?? reviewDbPath(materialized.projectId);
     flags.set("--cwd", cwd);
-    return await runInContext(cwd, { dbPath, modelTimeoutMs }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
+    return await runInContext(cwd, { dbPath, modelTimeoutMs, factory: opts.factory }, command ?? "", positional, flags, multi, json, out, emit, log, warn, materialized);
   }
 
   if (command === "version") {
@@ -833,12 +837,12 @@ export async function executePirCommand(argv: string[], opts: ExecOptions = {}):
     throw new UsageError(`unknown command: ${command}`);
   }
 
-  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity, modelTimeoutMs }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
+  return await runInContext(cwd, { dbPath: explicitDbPath, identity: opts.identity, modelTimeoutMs, factory: opts.factory }, command, positional, flags, multi, json, out, emit, log, warn, null, Boolean(opts.readOnlyMemory));
 }
 
 async function runInContext(
   cwd: string,
-  ctxOptions: Pick<AppContextOptions, "dbPath" | "identity" | "modelTimeoutMs">,
+  ctxOptions: Pick<AppContextOptions, "dbPath" | "identity" | "modelTimeoutMs" | "factory">,
   command: string,
   positional: string[],
   flags: Map<string, string | boolean>,
@@ -851,16 +855,17 @@ async function runInContext(
   materialized: import("../app/repos.js").MaterializedReview | null,
   readOnlyMemory = false,
 ): Promise<ExecResult> {
-  const ctx = await createAppContext(cwd, {
-    noSyncIndex: Boolean(flags.get("--no-sync-index")),
-    dbPath: ctxOptions.dbPath,
-    modelTimeoutMs: ctxOptions.modelTimeoutMs,
-    ...(ctxOptions.identity ? { identity: ctxOptions.identity } : {}),
-    ...(readOnlyMemory ? { readOnlyMemory: true } : {}),
-  });
-
+  let ctx: Ctx | undefined;
   let code: number;
   try {
+    ctx = await createAppContext(cwd, {
+      noSyncIndex: Boolean(flags.get("--no-sync-index")),
+      dbPath: ctxOptions.dbPath,
+      modelTimeoutMs: ctxOptions.modelTimeoutMs,
+      factory: ctxOptions.factory,
+      ...(ctxOptions.identity ? { identity: ctxOptions.identity } : {}),
+      ...(readOnlyMemory ? { readOnlyMemory: true } : {}),
+    });
     switch (command) {
       case "find":
         code = await cmdFind(ctx, positional.slice(1), flags, json, emit, log, warn);
@@ -895,8 +900,11 @@ async function runInContext(
         throw new UsageError(`unknown command: ${command}`);
     }
   } finally {
-    ctx.memory.close();
-    await materialized?.cleanup();
+    try {
+      ctx?.memory.close();
+    } finally {
+      await materialized?.cleanup();
+    }
   }
   return { code, output: out.join("") };
 }
