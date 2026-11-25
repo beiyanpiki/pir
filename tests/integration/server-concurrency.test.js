@@ -10,7 +10,7 @@ import { getHeadCommit, getRemoteUrl, getRootCommit } from "../../dist/changes/g
 import { emptySnapshot } from "../../dist/memory/sync.js";
 import { SqliteStore } from "../../dist/memory/sqlite-store.js";
 import { onRunEvent } from "../../dist/observability/run-events.js";
-import { createTempGitRepo, submitVerdictWithEvidence } from "../fixtures/helpers.js";
+import { createTempGitRepo, git, submitVerdictWithEvidence } from "../fixtures/helpers.js";
 
 function deferred() {
   let resolve;
@@ -277,6 +277,40 @@ test("registered reviews of different heads share project capacity rather than a
   const envelopes = results.map((result) => JSON.parse(result.body.output));
   assert.equal(envelopes[0].project.id, envelopes[1].project.id);
   assert.notEqual(envelopes[0].data.run.id, envelopes[1].data.run.id);
+});
+
+test("a project at its review limit does not block a different project's bundled review", { timeout: 30000 }, async (t) => {
+  const fixture = await sandbox(t, { reviewConcurrency: 2, projectReviewConcurrency: 1 });
+  git(fixture.repo.dir, ["remote", "add", "origin", "https://example.invalid/first.git"]);
+  fixture.repo.write("src/value.ts", 'export const value = "two";\n');
+  const head2 = fixture.repo.commit("second change");
+  const other = createTempGitRepo("pir-http-other-project-");
+  t.after(() => other.cleanup());
+  git(other.dir, ["remote", "add", "origin", "https://example.invalid/other.git"]);
+  other.write("src/value.ts", 'export const value = "other-base";\n');
+  const otherBase = other.commit("other base");
+  other.write("src/value.ts", 'export const value = "other-project";\n');
+  const otherHead = other.commit("other head");
+  const first = fixture.post("/v1/review", await fixture.reviewBody());
+  await fixture.factory.waitFor(fixture.head);
+  const second = await fixture.post("/v1/review", { ...await fixture.reviewBody(head2), async: true });
+  assert.equal(second.status, 202);
+  const unrelated = fixture.post("/v1/review", {
+    remoteUrl: await getRemoteUrl(other.dir), rootCommit: await getRootCommit(other.dir),
+    base: otherBase, head: otherHead,
+    bundleBase64: (await createBundle(other.dir, { base: null, head: otherHead })).toString("base64"),
+    argv: ["find", "--json", "--base", otherBase, "--head", otherHead, "--max-rounds", "1"],
+  });
+  await fixture.factory.waitFor(otherHead);
+  const { job } = await (await fetch(`${fixture.url}/v1/jobs/${second.body.jobId}`)).json();
+  assert.equal(job.status, "queued");
+  assert.equal(fixture.factory.reads.has(head2), false);
+  assert.match(fixture.factory.reads.get(otherHead).text, /other-project/);
+  fixture.factory.releaseAll();
+  const results = await Promise.all([first, unrelated]);
+  for (const result of results) assert.equal(result.body.code, 0, JSON.stringify(result));
+  assert.notEqual(JSON.parse(results[0].body.output).project.id, JSON.parse(results[1].body.output).project.id);
+  assert.equal((await waitForJob(fixture.url, second.body.jobId)).result.code, 0);
 });
 
 test("bundle ingress refuses a registered-repo override before creating a job", { timeout: 30000 }, async (t) => {
