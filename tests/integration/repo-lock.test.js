@@ -153,6 +153,23 @@ test("an unprovable owner (foreign host or unreadable record) is never broken on
   assert.equal(readFileSync(lockPath, "utf8"), "{ torn", "the unreadable lock survives");
 });
 
+test("an unreadable lock path behaves as held, not vanished", async (t) => {
+  const root = mkdtempSync(path.join(tmpdir(), "pir-repo-lock-unreadable-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const { mkdirSync } = await import("node:fs");
+  const lockPath = path.join(root, "locks", "resource.lock");
+  // A directory at the lock path cannot be read as an owner, but it is also
+  // not proof of death: a waiter must time out with the busy error rather
+  // than throwing EISDIR or spinning on a "vanished" lock.
+  mkdirSync(lockPath, { recursive: true });
+  const { withResourceLock } = await import("../../dist/app/repo-lock.js");
+  await assert.rejects(
+    withResourceLock(lockPath, { waitMs: 150, pollMs: 10, busyError: "lock busy" }, async () => "never"),
+    /lock busy/,
+  );
+  assert.ok(existsSync(lockPath), "the unreadable path is left untouched");
+});
+
 test("the lock holder releases the lock on a throwing critical section", async (t) => {
   const root = mkdtempSync(path.join(tmpdir(), "pir-repo-lock-release-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

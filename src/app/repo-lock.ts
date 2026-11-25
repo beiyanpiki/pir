@@ -112,7 +112,9 @@ function readLock(lockPath: string): LockRecord | null {
     raw = readFileSync(lockPath, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
+    // Something unreadable (a directory, permissions) proves nothing: treat it
+    // as held-and-unprovable so waiters time out instead of spinning forever.
+    return { owner: null, raw: "" };
   }
   let owner: LockOwner | null = null;
   try {
