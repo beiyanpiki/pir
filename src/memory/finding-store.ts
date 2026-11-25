@@ -117,7 +117,12 @@ export class FindingStore {
     private readonly projectId: string,
   ) {}
 
-  /** F-1, F-2, ... sequential per project. */
+  /**
+   * F-1, F-2, ... sequential per project. Allocates from COUNT(*) + 1, so it
+   * is only collision-free when read inside a write transaction that also
+   * writes the row — `insert` does that with BEGIN IMMEDIATE. Calling it
+   * standalone only yields a prediction, not a reservation.
+   */
   nextDisplayId(): string {
     const row = this.store.get<{ n: number }>(
       "SELECT COUNT(*) AS n FROM findings WHERE project_id = ?",
@@ -128,71 +133,83 @@ export class FindingStore {
 
   insert(finding: VerifiedFinding, runId: string): FindingRow {
     const id = randomUUID();
-    const displayId = this.nextDisplayId();
     const now = Date.now();
-    this.store.run(
-      `INSERT INTO findings (id, project_id, run_id, display_id, fingerprint, title, claim, trigger, category, severity, status, feature_key, entity_key, anchors, memory_matches, verifier_rationale, rejection_ground, confidence, round, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      id,
-      this.projectId,
-      runId,
-      displayId,
-      finding.identity.fingerprint,
-      finding.title,
-      finding.claim,
-      finding.trigger,
-      finding.category,
-      finding.severity,
-      finding.status,
-      finding.featureKey ?? null,
-      finding.entityKey ?? null,
-      JSON.stringify(finding.anchors ?? []),
-      JSON.stringify(finding.memoryMatches ?? []),
-      finding.verifierRationale ?? null,
-      finding.rejectionGround ?? null,
-      finding.confidence ?? null,
-      finding.round,
-      now,
-      now,
+    // Display ids are COUNT(*) + 1, so allocation and the write must share one
+    // write transaction, and it must be IMMEDIATE: a deferred BEGIN would read
+    // the count before taking the write lock, letting two connections (serve +
+    // a CLI run on the same per-project DB) both claim the same F-N and have
+    // one whole persistence batch die on the (project_id, display_id) unique
+    // index. Evidence rows ride in the same transaction too: a failed evidence
+    // insert must not leave a finding without its evidence.
+    return this.store.transaction(
+      () => {
+        const displayId = this.nextDisplayId();
+        this.store.run(
+          `INSERT INTO findings (id, project_id, run_id, display_id, fingerprint, title, claim, trigger, category, severity, status, feature_key, entity_key, anchors, memory_matches, verifier_rationale, rejection_ground, confidence, round, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          id,
+          this.projectId,
+          runId,
+          displayId,
+          finding.identity.fingerprint,
+          finding.title,
+          finding.claim,
+          finding.trigger,
+          finding.category,
+          finding.severity,
+          finding.status,
+          finding.featureKey ?? null,
+          finding.entityKey ?? null,
+          JSON.stringify(finding.anchors ?? []),
+          JSON.stringify(finding.memoryMatches ?? []),
+          finding.verifierRationale ?? null,
+          finding.rejectionGround ?? null,
+          finding.confidence ?? null,
+          finding.round,
+          now,
+          now,
+        );
+        for (const ev of finding.evidence ?? []) {
+          this.store.run(
+            `INSERT INTO finding_evidence (id, finding_id, kind, path, start_line, end_line, excerpt, description, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            randomUUID(),
+            id,
+            ev.kind,
+            ev.path ?? null,
+            ev.startLine ?? null,
+            ev.endLine ?? null,
+            ev.excerpt ?? null,
+            ev.description ?? null,
+            now,
+          );
+        }
+        return {
+          id,
+          projectId: this.projectId,
+          runId,
+          displayId,
+          fingerprint: finding.identity.fingerprint,
+          featureKey: finding.featureKey ?? null,
+          entityKey: finding.entityKey ?? null,
+          title: finding.title,
+          claim: finding.claim,
+          trigger: finding.trigger,
+          category: finding.category,
+          severity: finding.severity,
+          status: finding.status,
+          anchors: JSON.stringify(finding.anchors ?? []),
+          memoryMatches: JSON.stringify(finding.memoryMatches ?? []),
+          verifierRationale: finding.verifierRationale ?? null,
+          rejectionGround: finding.rejectionGround ?? null,
+          confidence: finding.confidence ?? null,
+          round: finding.round,
+          createdAt: now,
+          updatedAt: now,
+        };
+      },
+      { immediate: true },
     );
-    for (const ev of finding.evidence ?? []) {
-      this.store.run(
-        `INSERT INTO finding_evidence (id, finding_id, kind, path, start_line, end_line, excerpt, description, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        randomUUID(),
-        id,
-        ev.kind,
-        ev.path ?? null,
-        ev.startLine ?? null,
-        ev.endLine ?? null,
-        ev.excerpt ?? null,
-        ev.description ?? null,
-        now,
-      );
-    }
-    return {
-      id,
-      projectId: this.projectId,
-      runId,
-      displayId,
-      fingerprint: finding.identity.fingerprint,
-      featureKey: finding.featureKey ?? null,
-      entityKey: finding.entityKey ?? null,
-      title: finding.title,
-      claim: finding.claim,
-      trigger: finding.trigger,
-      category: finding.category,
-      severity: finding.severity,
-      status: finding.status,
-      anchors: JSON.stringify(finding.anchors ?? []),
-      memoryMatches: JSON.stringify(finding.memoryMatches ?? []),
-      verifierRationale: finding.verifierRationale ?? null,
-      rejectionGround: finding.rejectionGround ?? null,
-      confidence: finding.confidence ?? null,
-      round: finding.round,
-      createdAt: now,
-      updatedAt: now,
-    };
   }
 
   /** Accepts "F-12" or a raw UUID. */
