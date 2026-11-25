@@ -38,6 +38,8 @@ export interface ServeOptions {
   workspace?: string;
   /** Serve the read-only web UI (same as PIR_WEB_UI=1). */
   web?: boolean;
+  reviewConcurrency?: number;
+  projectReviewConcurrency?: number;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -95,6 +97,7 @@ const REPO_CONTEXT_COMMANDS = new Set(["find", "audit", "memory", "findings", "f
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
+  const concurrency = resolveServeConcurrency(options);
   const host = options.host ?? "0.0.0.0";
   const port = options.port ?? 8790;
   const token = options.token ?? process.env.PIR_SERVER_TOKEN;
@@ -117,6 +120,7 @@ export async function runServe(argv: string[]): Promise<void> {
     port,
     token,
     workspace,
+    ...concurrency,
     tls: await resolveTls(options),
     ...(webUi ? { webUi } : {}),
     ...loadGiteaServeInput(),
@@ -1086,10 +1090,35 @@ function parseServeArgs(argv: string[]): ServeOptions {
       else if (token === "--key") options.key = value();
       else if (token === "--token") options.token = value();
       else if (token === "--workspace") options.workspace = value();
-      else if (token === "--web") options.web = true;
-      else throw new UsageError(`unknown serve option: ${token}`);
+       else if (token === "--web") options.web = true;
+       else if (token === "--review-concurrency") options.reviewConcurrency = concurrencyValue(value(), token);
+       else if (token === "--project-review-concurrency") options.projectReviewConcurrency = concurrencyValue(value(), token);
+       else throw new UsageError(`unknown serve option: ${token}`);
   }
   return options;
+}
+
+function concurrencyValue(raw: string, name: string): number {
+  const value = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new UsageError(`${name} must be a positive decimal safe integer`);
+  }
+  return value;
+}
+
+/** Flags override their corresponding environment variable; absent or blank environment values preserve serial defaults. */
+export function resolveServeConcurrency(
+  options: Pick<ServeOptions, "reviewConcurrency" | "projectReviewConcurrency">,
+  env: Partial<Pick<NodeJS.ProcessEnv, "PIR_REVIEW_CONCURRENCY" | "PIR_PROJECT_REVIEW_CONCURRENCY">> = process.env,
+): { reviewConcurrency: number; projectReviewConcurrency: number } {
+  const read = (flag: number | undefined, raw: string | undefined, name: string): number => {
+    if (flag !== undefined) return concurrencyValue(String(flag), name);
+    return raw === undefined || raw.trim() === "" ? 1 : concurrencyValue(raw, name);
+  };
+  return {
+    reviewConcurrency: read(options.reviewConcurrency, env.PIR_REVIEW_CONCURRENCY, "--review-concurrency / PIR_REVIEW_CONCURRENCY"),
+    projectReviewConcurrency: read(options.projectReviewConcurrency, env.PIR_PROJECT_REVIEW_CONCURRENCY, "--project-review-concurrency / PIR_PROJECT_REVIEW_CONCURRENCY"),
+  };
 }
 
 interface TlsMaterial {

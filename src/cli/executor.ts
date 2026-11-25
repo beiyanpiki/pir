@@ -319,6 +319,8 @@ Memory sync options:
   serve: `Serve options:
   --host <h>          bind address (default 0.0.0.0)
   --port <p>          port (default 8790)
+  --review-concurrency <n>  admitted executor tasks (env PIR_REVIEW_CONCURRENCY; default 1)
+  --project-review-concurrency <n>  reviews per project (env PIR_PROJECT_REVIEW_CONCURRENCY; default 1)
   --cert <p> --key <p>  TLS cert/key (PEM). Falls back to PIR_TLS_CERT /
                       PIR_TLS_KEY; otherwise a self-signed pair is generated
                       with openssl when available.
