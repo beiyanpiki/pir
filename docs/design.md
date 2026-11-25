@@ -254,6 +254,15 @@ Registered repositories are an alternative: `repos add` creates a server-side
 clone and `--repo <name>` materializes a worktree from it. These commands use
 `/v1/exec`; fetching a private registered origin requires server credentials.
 
+Either flow coordinates per project directory with an owner-aware file lock
+under `<PIR_REPOS_ROOT>/.locks/` (pid + process start time, never inside the
+project dir it protects). Fetch, the shared `refs/pir/last-bundle` read, the
+head pin and the worktree checkout are one critical section, as are worktree
+removal, clone install and purge; the review itself runs outside the lock.
+Purging a clone or rebuilding a corrupt bundle cache is refused while linked
+worktrees are registered, and a purge deletes the clone before unregistering
+it, so a failed purge never strands an unreachable registration.
+
 ### Queueing, reads, and jobs
 
 The serve process serializes mutating executor work, including bundle

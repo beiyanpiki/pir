@@ -258,28 +258,34 @@ export async function addRepo(source: string, name?: string): Promise<RepoEntry>
     const rootCommit = (await git(tempDir, ["rev-list", "--max-parents=0", "HEAD"])).trim().split("\n")[0]!.trim();
     const projectId = projectIdFor(remoteUrl, rootCommit);
     const dir = repoDirFor(projectId);
-    if (existsSync(dir)) {
-      rmSync(tempDir, { recursive: true, force: true });
-      try {
-        await git(dir, ["fetch", "--all", "--quiet"]);
-      } catch {
-        // bundle-created repo without remotes, or offline: keep what we have
-      }
-    } else {
-      renameSync(tempDir, dir);
-    }
     const entry: RepoEntry = {
       name: name ?? defaultName(remoteUrl),
       url: remoteUrl,
       projectId,
       addedAt: Date.now(),
     };
-    // The clone happened outside the lock; only the registry mutation is
-    // serialized, so the lock is held for milliseconds.
-    await withRegistryLock(() => {
-      const registry = readRegistry();
-      registry[entry.name] = entry;
-      writeRegistry(registry);
+    // Installing the clone and registering it happen under the repo lock so a
+    // concurrent materialization or purge cannot interleave with either; the
+    // registry update is nested (repo → registry) and stays the last step, so
+    // a failed install never leaves a registration pointing at nothing.
+    await withRepoLock(dir, async () => {
+      if (existsSync(dir)) {
+        rmSync(tempDir, { recursive: true, force: true });
+        try {
+          await git(dir, ["fetch", "--all", "--quiet"]);
+        } catch {
+          // bundle-created repo without remotes, or offline: keep what we have
+        }
+      } else {
+        renameSync(tempDir, dir);
+      }
+      // The clone happened outside the lock; only the registry mutation is
+      // serialized, so the lock is held for milliseconds.
+      await withRegistryLock(() => {
+        const registry = readRegistry();
+        registry[entry.name] = entry;
+        writeRegistry(registry);
+      });
     });
     return entry;
   } catch (err) {
@@ -381,8 +387,13 @@ export function findRegisteredRepoByUrl(url: string): { entry: RepoEntry; dir: s
  */
 export async function fetchPullRef(dir: string, prNumber: number): Promise<string> {
   const ref = `refs/pir/pull/${prNumber}/head`;
-  await git(dir, ["fetch", "--quiet", "origin", `+refs/pull/${prNumber}/head:${ref}`]);
-  return (await git(dir, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+  // The fetch writes the shared repo (refs, packfiles), so it shares the
+  // per-repo preparation lock with materializeRegistered/addRepo/purge. The
+  // returned SHA is immutable; the caller may materialize after we release.
+  return withRepoLock(dir, async () => {
+    await git(dir, ["fetch", "--quiet", "origin", `+refs/pull/${prNumber}/head:${ref}`]);
+    return (await git(dir, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+  });
 }
 
 function looksLikeUrl(spec: string): boolean {
@@ -410,17 +421,24 @@ export async function materializeRegistered(
   projectId: string,
   options: { branch?: string; noFetch?: boolean } = {},
 ): Promise<MaterializedReview> {
-  if (!options.noFetch) {
-    try {
-      await git(dir, ["fetch", "--all", "--quiet"]);
-    } catch {
-      // Offline or no credentials: review what we already have.
+  // Fetch, ref resolution and worktree creation are one critical section: a
+  // concurrent review of the same clone would otherwise interleave fetches
+  // (shared refs/packfiles) or race a purge deleting the clone mid-checkout.
+  // The returned worktree is independent — the lock is released before the
+  // review runs.
+  return withRepoLock(dir, async () => {
+    if (!options.noFetch) {
+      try {
+        await git(dir, ["fetch", "--all", "--quiet"]);
+      } catch {
+        // Offline or no credentials: review what we already have.
+      }
     }
-  }
-  const headCommit = options.branch
-    ? (await git(dir, ["rev-parse", "--verify", `${options.branch}^{commit}`])).trim()
-    : (await git(dir, ["rev-parse", "HEAD"])).trim();
-  return materializeWorktree(dir, projectId, headCommit);
+    const headCommit = options.branch
+      ? (await git(dir, ["rev-parse", "--verify", `${options.branch}^{commit}`])).trim()
+      : (await git(dir, ["rev-parse", "HEAD"])).trim();
+    return materializeWorktree(dir, projectId, headCommit);
+  });
 }
 
 // codegraph keeps its database in files named codegraph.db plus SQLite
@@ -605,13 +623,28 @@ async function copyCodegraphDbBack(from: string, to: string): Promise<void> {
   for (const [tmp, entry] of staged) renameSync(path.join(to, tmp), path.join(to, entry));
 }
 
+/**
+ * Check out a detached review worktree. Callers hold the repo lock (see
+ * withRepoLock): the worktree admin entry is what purge and corrupt-cache
+ * healing check for, so it must be created inside that critical section.
+ * Cleanup re-acquires the lock, which also keeps a purge from deleting the
+ * clone while git is removing the worktree.
+ */
 async function materializeWorktree(repoDir: string, projectId: string, headCommit: string): Promise<MaterializedReview> {
   const workRoot = path.join(reposRoot(), "work");
   mkdirSync(workRoot, { recursive: true });
   const worktree = path.join(workRoot, randomUUID());
-  await git(repoDir, ["worktree", "add", "--quiet", "--detach", worktree, headCommit]);
-  if (process.env.PIR_CODEGRAPH === "1") {
-    await activateCodegraph(repoDir, worktree);
+  try {
+    await git(repoDir, ["worktree", "add", "--quiet", "--detach", worktree, headCommit]);
+    if (process.env.PIR_CODEGRAPH === "1") {
+      await activateCodegraph(repoDir, worktree);
+    }
+  } catch (err) {
+    // Never leak a freshly added worktree when preparation fails after the
+    // checkout exists (activation is best effort, but its own recovery can
+    // still fail on a filesystem error).
+    await removeWorktree(repoDir, worktree);
+    throw err;
   }
   return {
     worktree,
@@ -619,13 +652,25 @@ async function materializeWorktree(repoDir: string, projectId: string, headCommi
     projectId,
     cleanup: async () => {
       if (process.env.PIR_KEEP_WORKTREE === "1") return;
-      try {
-        await git(repoDir, ["worktree", "remove", "--force", worktree]);
-      } catch {
-        rmSync(worktree, { recursive: true, force: true });
-      }
+      await withRepoLock(repoDir, () => removeWorktree(repoDir, worktree));
     },
   };
+}
+
+async function removeWorktree(repoDir: string, worktree: string): Promise<void> {
+  try {
+    await git(repoDir, ["worktree", "remove", "--force", worktree]);
+    return;
+  } catch {
+    // The clone may already be gone (operator cleanup) or git refused the
+    // admin entry: drop the checkout and prune whatever admin state remains.
+  }
+  rmSync(worktree, { recursive: true, force: true });
+  try {
+    await git(repoDir, ["worktree", "prune"]);
+  } catch {
+    // No clone left to prune; the checkout itself is gone.
+  }
 }
 
 export interface BundleMeta {
@@ -659,7 +704,6 @@ export async function materializeFromBundle(
 ): Promise<{ review: MaterializedReview; neededFull: boolean }> {
   const projectId = projectIdFor(meta.remoteUrl, meta.rootCommit);
   const dir = repoDirFor(projectId);
-  const isNew = !existsSync(dir);
 
   // Write the bundle temp file BEFORE creating the repo dir: a failed write
   // (ENOSPC/EACCES on tmpdir) must not leave a poisoned empty repo behind.
@@ -670,8 +714,29 @@ export async function materializeFromBundle(
   } catch (err) {
     throw new Error(`failed to write bundle temp file ${bundleFile}: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (isNew) mkdirSync(dir, { recursive: true });
+  try {
+    // First contact, cache healing, the shared refs/pir/last-bundle ref, the
+    // head pin and the worktree checkout are one critical section per project.
+    // Two clients shipping different heads to the same new project otherwise
+    // both initialize it and the later fetch overwrites the ref the other is
+    // about to read. The lock is released as soon as the worktree exists; the
+    // review itself runs outside it.
+    return await withRepoLock(dir, () => materializeBundleLocked(bundleFile, dir, projectId, meta));
+  } finally {
+    rmSync(bundleFile, { force: true });
+  }
+}
 
+async function materializeBundleLocked(
+  bundleFile: string,
+  dir: string,
+  projectId: string,
+  meta: BundleMeta,
+): Promise<{ review: MaterializedReview; neededFull: boolean }> {
+  // Read under the lock: another request may have created the dir while we
+  // were writing the temp bundle.
+  const isNew = !existsSync(dir);
+  if (isNew) mkdirSync(dir, { recursive: true });
   try {
     if (isNew) await git(dir, ["init", "--quiet"]);
     const fetchBundle = (): Promise<string> =>
@@ -685,7 +750,6 @@ export async function materializeFromBundle(
         // Thin bundle but the base is unknown here — caller must resend full.
         const error = new Error("need-full") as Error & { needFull?: boolean };
         error.needFull = true;
-        if (isNew) rmSync(dir, { recursive: true, force: true });
         throw error;
       }
       // Already a full bundle, so the failure means the pre-existing cache
@@ -694,6 +758,19 @@ export async function materializeFromBundle(
       // pure rebuildable state: wipe and re-fetch from this full bundle,
       // unless the dir also backs a registered clone.
       if (isNew || isRegisteredProject(projectId)) throw err;
+      // A worktree of this project may be checked out by a review in another
+      // process. Deleting the clone would pull .git out from under it, so
+      // refuse the rebuild — leftover worktrees are never worth a live review.
+      const admins = linkedWorktreeAdmins(dir);
+      if (admins === null || admins.length > 0) {
+        const reason =
+          admins === null
+            ? "its linked worktrees cannot be inspected"
+            : `linked worktrees ${admins.join(", ")} are still registered`;
+        throw new Error(
+          `refusing to rebuild corrupt bundle cache ${dir}: ${reason} — finish those reviews first (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
       rmSync(dir, { recursive: true, force: true });
       mkdirSync(dir, { recursive: true });
       try {
@@ -742,8 +819,11 @@ export async function materializeFromBundle(
       );
     }
     return { review: await materializeWorktree(dir, projectId, head), neededFull: false };
-  } finally {
-    rmSync(bundleFile, { force: true });
+  } catch (err) {
+    // A dir created for this request holds nothing but our partial state:
+    // remove it so a failed first contact cannot poison the next attempt.
+    if (isNew) rmSync(dir, { recursive: true, force: true });
+    throw err;
   }
 }
 
