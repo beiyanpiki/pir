@@ -22,6 +22,14 @@ import { randomUUID } from "node:crypto";
  * is never joined by a second holder — at the cost of manual recovery for a
  * dead foreign holder.
  *
+ * The break mutex that serializes breaking dead locks is conservative in the
+ * same way but stricter: a leftover `.break` is NEVER reclaimed automatically,
+ * because proving its owner dead is not enough to prove no other breaker began
+ * after the dead one (a stale unlink can delete a live breaker and let two
+ * breakers delete each other's new main lock). A provably dead breaker makes
+ * acquisition fail immediately and names the `.break` path; an operator stops
+ * related processes, confirms none run, and removes the file by hand.
+ *
  * The lock file is created atomically (write a complete record to a private
  * temp, then link it into place) and always lives outside the state it
  * protects, so deleting that state cannot delete the lock and no waiter can
@@ -147,21 +155,29 @@ function ownerIsProvablyDead(owner: LockOwner): boolean {
 }
 
 /**
- * Remove a provably dead lock. The break mutex (itself an owner record with
- * the same liveness rule) closes the race where two waiters both decide a
- * lock is stale and the second removes the lock the first just re-acquired.
- * The raw-content comparison right before the unlink closes the remaining
- * window against a fresh owner.
+ * Remove a provably dead lock, serialized by the break mutex.
+ *
+ * The break mutex is never reclaimed automatically: a leftover `.break` file
+ * is not proof that no breaker is live (a stale reader-delete could remove a
+ * third process's freshly created breaker and let two breakers delete each
+ * other's new main lock). A breaker whose owner is provably dead is therefore
+ * a loud manual-recovery error, not an automatic cleanup; a live or
+ * unprovable breaker just makes the caller wait.
+ *
+ * Once this process holds the break mutex, no other process can break the
+ * main lock (they all need this mutex), so re-reading the observed content
+ * and removing the main lock is not racing another breaker.
  */
 function breakIfProvablyDead(lockPath: string, observed: LockRecord): boolean {
   const breakPath = `${lockPath}.break`;
   const breaker = newOwner();
   if (!tryCreateLock(breakPath, breaker)) {
-    // A live breaker is mid-critical-section; a dead one left its mutex.
     const held = readLock(breakPath);
     if (held?.owner && ownerIsProvablyDead(held.owner)) {
-      const current = readLock(breakPath);
-      if (current && current.raw === held.raw) rmSync(breakPath, { force: true });
+      throw new Error(
+        `refusing to break ${lockPath}: its break mutex ${breakPath} was left by a dead process — ` +
+          "stop any related pir processes, confirm none are running, then remove that .break file by hand",
+      );
     }
     return false;
   }
