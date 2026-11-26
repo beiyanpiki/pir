@@ -26,6 +26,7 @@ import {
   CODEGRAPH_INIT_TIMEOUT_MS,
   CODEGRAPH_SYNC_TIMEOUT_MS,
 } from "../codemap/codegraph-cli.js";
+import { withResourceLock } from "./repo-lock.js";
 
 /**
  * Server-side repository registry. Repos live under PIR_REPOS_ROOT
@@ -183,6 +184,55 @@ function withRegistryLock<T>(fn: () => T | Promise<T>): Promise<T> {
   );
 }
 
+// One preparation can include a first-time codegraph seed build (a full init,
+// a sync and the copy-back, each bounded by its own timeout), so waiters queue
+// for minutes rather than treating a live holder as stale. Crashed holders
+// are detected by pid, not by age.
+const REPO_LOCK_WAIT_MS = 20 * 60_000;
+// Cleanup runs in a `finally` that guards an already-finished review; waiting
+// out a preparation there would delay the result and a rejection would replace
+// it (dogfood F-2). A short best-effort wait keeps normal purge coordination,
+// then falls back to an unlocked removal that purge cannot break: purge
+// refuses while this worktree's admin entry exists.
+const REPO_CLEANUP_LOCK_WAIT_MS = 5_000;
+
+/**
+ * Serialize every mutation of one per-project directory: cloning into it,
+ * fetching, reading the shared bundle ref, adding/removing worktrees, healing
+ * a corrupt bundle cache and purging it. The lock file lives under
+ * `reposRoot()/.locks`, never inside the project directory — a purge deletes
+ * the latter, and must not delete the lock that makes its own purge safe.
+ *
+ * The lock is held only for preparation and cleanup, never for the review
+ * itself (review worktrees are independent once checked out). Lock order is
+ * fixed: the registry lock is only taken while holding a repo lock (add /
+ * remove), never the reverse; materialization takes only the repo lock.
+ */
+function repoLockPathFor(dir: string): string {
+  return path.join(reposRoot(), ".locks", `repo-${sha256(path.resolve(dir))}.lock`);
+}
+
+function withRepoLock<T>(dir: string, fn: () => T | Promise<T>, waitMs = REPO_LOCK_WAIT_MS): Promise<T> {
+  return withResourceLock(
+    repoLockPathFor(dir),
+    { waitMs, busyError: "repository is busy with another materialization or purge" },
+    fn,
+  );
+}
+
+/**
+ * Names of linked-worktree admin entries (`<repo>/.git/worktrees/<id>`).
+ * `null` means the directory cannot be inspected — callers that would delete
+ * the repository must refuse rather than assume nothing is checked out.
+ */
+function linkedWorktreeAdmins(dir: string): string[] | null {
+  try {
+    return readdirSync(path.join(dir, ".git", "worktrees"));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? [] : null;
+  }
+}
+
 export function projectIdFor(remoteUrl: string | null, rootCommit: string): string {
   const normalized = remoteUrl ? normalizeRemoteUrl(remoteUrl) : null;
   return sha256(`${normalized ?? "local"}\u0000${rootCommit}`);
@@ -214,28 +264,34 @@ export async function addRepo(source: string, name?: string): Promise<RepoEntry>
     const rootCommit = (await git(tempDir, ["rev-list", "--max-parents=0", "HEAD"])).trim().split("\n")[0]!.trim();
     const projectId = projectIdFor(remoteUrl, rootCommit);
     const dir = repoDirFor(projectId);
-    if (existsSync(dir)) {
-      rmSync(tempDir, { recursive: true, force: true });
-      try {
-        await git(dir, ["fetch", "--all", "--quiet"]);
-      } catch {
-        // bundle-created repo without remotes, or offline: keep what we have
-      }
-    } else {
-      renameSync(tempDir, dir);
-    }
     const entry: RepoEntry = {
       name: name ?? defaultName(remoteUrl),
       url: remoteUrl,
       projectId,
       addedAt: Date.now(),
     };
-    // The clone happened outside the lock; only the registry mutation is
-    // serialized, so the lock is held for milliseconds.
-    await withRegistryLock(() => {
-      const registry = readRegistry();
-      registry[entry.name] = entry;
-      writeRegistry(registry);
+    // Installing the clone and registering it happen under the repo lock so a
+    // concurrent materialization or purge cannot interleave with either; the
+    // registry update is nested (repo → registry) and stays the last step, so
+    // a failed install never leaves a registration pointing at nothing.
+    await withRepoLock(dir, async () => {
+      if (existsSync(dir)) {
+        rmSync(tempDir, { recursive: true, force: true });
+        try {
+          await git(dir, ["fetch", "--all", "--quiet"]);
+        } catch {
+          // bundle-created repo without remotes, or offline: keep what we have
+        }
+      } else {
+        renameSync(tempDir, dir);
+      }
+      // The clone happened outside the lock; only the registry mutation is
+      // serialized, so the lock is held for milliseconds.
+      await withRegistryLock(() => {
+        const registry = readRegistry();
+        registry[entry.name] = entry;
+        writeRegistry(registry);
+      });
     });
     return entry;
   } catch (err) {
@@ -254,18 +310,53 @@ export function listRepos(): RepoEntry[] {
 }
 
 export async function removeRepo(name: string, purge: boolean): Promise<RepoEntry> {
-  const entry = await withRegistryLock(() => {
-    const registry = readRegistry();
-    const found = registry[name];
-    if (!found) throw new Error(`repo not registered: ${name}`);
-    delete registry[name];
-    writeRegistry(registry);
-    return found;
-  });
-  if (purge) {
-    const dir = repoDirFor(entry.projectId);
-    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  const entry = readRegistry()[name];
+  if (!entry) throw new Error(`repo not registered: ${name}`);
+  if (!purge) {
+    await withRegistryLock(() => {
+      const registry = readRegistry();
+      if (!registry[name]) throw new Error(`repo not registered: ${name}`);
+      delete registry[name];
+      writeRegistry(registry);
+    });
+    return entry;
   }
+  const dir = repoDirFor(entry.projectId);
+  // Purge deletes the clone (and with it every worktree admin entry), so it
+  // must prove no review is checked out there. Both checks happen under the
+  // repo lock that also gates worktree creation: a concurrent materialization
+  // either finished (its worktree is visible here) or waits for us. A failure
+  // while deleting propagates BEFORE the registry is touched — unregistering
+  // first would strand a clone nobody can find again.
+  await withRepoLock(dir, async () => {
+    if (existsSync(dir)) {
+      const admins = linkedWorktreeAdmins(dir);
+      if (admins === null) {
+        throw new Error(
+          `refusing to purge ${dir}: its linked worktrees cannot be inspected — remove it by hand once no review is running`,
+        );
+      }
+      if (admins.length > 0) {
+        throw new Error(
+          `refusing to purge ${dir}: linked worktrees ${admins.join(", ")} are still registered — let running reviews finish, ` +
+            "remove leftover worktrees (`git worktree prune` in the clone), then purge again",
+        );
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+    await withRegistryLock(() => {
+      const registry = readRegistry();
+      // Delete only the entry this purge resolved. A concurrent add of a
+      // different project under the same name is not serialized by this
+      // project's repo lock, and its registration must survive: the old
+      // clone's purge says nothing about the new project (dogfood F-1).
+      const current = registry[name];
+      if (current && current.projectId === entry.projectId) {
+        delete registry[name];
+        writeRegistry(registry);
+      }
+    });
+  });
   return entry;
 }
 
@@ -305,8 +396,13 @@ export function findRegisteredRepoByUrl(url: string): { entry: RepoEntry; dir: s
  */
 export async function fetchPullRef(dir: string, prNumber: number): Promise<string> {
   const ref = `refs/pir/pull/${prNumber}/head`;
-  await git(dir, ["fetch", "--quiet", "origin", `+refs/pull/${prNumber}/head:${ref}`]);
-  return (await git(dir, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+  // The fetch writes the shared repo (refs, packfiles), so it shares the
+  // per-repo preparation lock with materializeRegistered/addRepo/purge. The
+  // returned SHA is immutable; the caller may materialize after we release.
+  return withRepoLock(dir, async () => {
+    await git(dir, ["fetch", "--quiet", "origin", `+refs/pull/${prNumber}/head:${ref}`]);
+    return (await git(dir, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+  });
 }
 
 function looksLikeUrl(spec: string): boolean {
@@ -334,17 +430,24 @@ export async function materializeRegistered(
   projectId: string,
   options: { branch?: string; noFetch?: boolean } = {},
 ): Promise<MaterializedReview> {
-  if (!options.noFetch) {
-    try {
-      await git(dir, ["fetch", "--all", "--quiet"]);
-    } catch {
-      // Offline or no credentials: review what we already have.
+  // Fetch, ref resolution and worktree creation are one critical section: a
+  // concurrent review of the same clone would otherwise interleave fetches
+  // (shared refs/packfiles) or race a purge deleting the clone mid-checkout.
+  // The returned worktree is independent — the lock is released before the
+  // review runs.
+  return withRepoLock(dir, async () => {
+    if (!options.noFetch) {
+      try {
+        await git(dir, ["fetch", "--all", "--quiet"]);
+      } catch {
+        // Offline or no credentials: review what we already have.
+      }
     }
-  }
-  const headCommit = options.branch
-    ? (await git(dir, ["rev-parse", "--verify", `${options.branch}^{commit}`])).trim()
-    : (await git(dir, ["rev-parse", "HEAD"])).trim();
-  return materializeWorktree(dir, projectId, headCommit);
+    const headCommit = options.branch
+      ? (await git(dir, ["rev-parse", "--verify", `${options.branch}^{commit}`])).trim()
+      : (await git(dir, ["rev-parse", "HEAD"])).trim();
+    return materializeWorktree(dir, projectId, headCommit);
+  });
 }
 
 // codegraph keeps its database in files named codegraph.db plus SQLite
@@ -529,13 +632,28 @@ async function copyCodegraphDbBack(from: string, to: string): Promise<void> {
   for (const [tmp, entry] of staged) renameSync(path.join(to, tmp), path.join(to, entry));
 }
 
+/**
+ * Check out a detached review worktree. Callers hold the repo lock (see
+ * withRepoLock): the worktree admin entry is what purge and corrupt-cache
+ * healing check for, so it must be created inside that critical section.
+ * Cleanup re-acquires the lock, which also keeps a purge from deleting the
+ * clone while git is removing the worktree.
+ */
 async function materializeWorktree(repoDir: string, projectId: string, headCommit: string): Promise<MaterializedReview> {
   const workRoot = path.join(reposRoot(), "work");
   mkdirSync(workRoot, { recursive: true });
   const worktree = path.join(workRoot, randomUUID());
-  await git(repoDir, ["worktree", "add", "--quiet", "--detach", worktree, headCommit]);
-  if (process.env.PIR_CODEGRAPH === "1") {
-    await activateCodegraph(repoDir, worktree);
+  try {
+    await git(repoDir, ["worktree", "add", "--quiet", "--detach", worktree, headCommit]);
+    if (process.env.PIR_CODEGRAPH === "1") {
+      await activateCodegraph(repoDir, worktree);
+    }
+  } catch (err) {
+    // Never leak a freshly added worktree when preparation fails after the
+    // checkout exists (activation is best effort, but its own recovery can
+    // still fail on a filesystem error).
+    await removeWorktree(repoDir, worktree);
+    throw err;
   }
   return {
     worktree,
@@ -543,13 +661,43 @@ async function materializeWorktree(repoDir: string, projectId: string, headCommi
     projectId,
     cleanup: async () => {
       if (process.env.PIR_KEEP_WORKTREE === "1") return;
+      // Never reject: callers run cleanup in a finally that guards a completed
+      // review, so a busy lock must not discard the result or skip removal.
       try {
-        await git(repoDir, ["worktree", "remove", "--force", worktree]);
-      } catch {
-        rmSync(worktree, { recursive: true, force: true });
+        await withRepoLock(repoDir, () => removeWorktree(repoDir, worktree), REPO_CLEANUP_LOCK_WAIT_MS);
+        return;
+      } catch (err) {
+        process.stderr.write(
+          `pir: worktree cleanup could not take the repo lock (${err instanceof Error ? err.message : String(err)}); ` +
+            "removing without coordination\n",
+        );
       }
+      await removeWorktree(repoDir, worktree);
     },
   };
+}
+
+async function removeWorktree(repoDir: string, worktree: string): Promise<void> {
+  try {
+    await git(repoDir, ["worktree", "remove", "--force", worktree]);
+    return;
+  } catch {
+    // The clone may already be gone (operator cleanup) or git refused the
+    // admin entry: fall through to dropping the checkout by hand.
+  }
+  try {
+    rmSync(worktree, { recursive: true, force: true });
+  } catch (err) {
+    // Best effort by contract: cleanup cannot fail a finished review.
+    process.stderr.write(
+      `pir: could not remove leftover worktree ${worktree}: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+  try {
+    await git(repoDir, ["worktree", "prune"]);
+  } catch {
+    // No clone left to prune; the checkout itself is gone.
+  }
 }
 
 export interface BundleMeta {
@@ -583,7 +731,6 @@ export async function materializeFromBundle(
 ): Promise<{ review: MaterializedReview; neededFull: boolean }> {
   const projectId = projectIdFor(meta.remoteUrl, meta.rootCommit);
   const dir = repoDirFor(projectId);
-  const isNew = !existsSync(dir);
 
   // Write the bundle temp file BEFORE creating the repo dir: a failed write
   // (ENOSPC/EACCES on tmpdir) must not leave a poisoned empty repo behind.
@@ -594,8 +741,29 @@ export async function materializeFromBundle(
   } catch (err) {
     throw new Error(`failed to write bundle temp file ${bundleFile}: ${err instanceof Error ? err.message : String(err)}`);
   }
-  if (isNew) mkdirSync(dir, { recursive: true });
+  try {
+    // First contact, cache healing, the shared refs/pir/last-bundle ref, the
+    // head pin and the worktree checkout are one critical section per project.
+    // Two clients shipping different heads to the same new project otherwise
+    // both initialize it and the later fetch overwrites the ref the other is
+    // about to read. The lock is released as soon as the worktree exists; the
+    // review itself runs outside it.
+    return await withRepoLock(dir, () => materializeBundleLocked(bundleFile, dir, projectId, meta));
+  } finally {
+    rmSync(bundleFile, { force: true });
+  }
+}
 
+async function materializeBundleLocked(
+  bundleFile: string,
+  dir: string,
+  projectId: string,
+  meta: BundleMeta,
+): Promise<{ review: MaterializedReview; neededFull: boolean }> {
+  // Read under the lock: another request may have created the dir while we
+  // were writing the temp bundle.
+  const isNew = !existsSync(dir);
+  if (isNew) mkdirSync(dir, { recursive: true });
   try {
     if (isNew) await git(dir, ["init", "--quiet"]);
     const fetchBundle = (): Promise<string> =>
@@ -609,7 +777,6 @@ export async function materializeFromBundle(
         // Thin bundle but the base is unknown here — caller must resend full.
         const error = new Error("need-full") as Error & { needFull?: boolean };
         error.needFull = true;
-        if (isNew) rmSync(dir, { recursive: true, force: true });
         throw error;
       }
       // Already a full bundle, so the failure means the pre-existing cache
@@ -618,6 +785,19 @@ export async function materializeFromBundle(
       // pure rebuildable state: wipe and re-fetch from this full bundle,
       // unless the dir also backs a registered clone.
       if (isNew || isRegisteredProject(projectId)) throw err;
+      // A worktree of this project may be checked out by a review in another
+      // process. Deleting the clone would pull .git out from under it, so
+      // refuse the rebuild — leftover worktrees are never worth a live review.
+      const admins = linkedWorktreeAdmins(dir);
+      if (admins === null || admins.length > 0) {
+        const reason =
+          admins === null
+            ? "its linked worktrees cannot be inspected"
+            : `linked worktrees ${admins.join(", ")} are still registered`;
+        throw new Error(
+          `refusing to rebuild corrupt bundle cache ${dir}: ${reason} — finish those reviews first (${err instanceof Error ? err.message : String(err)})`,
+        );
+      }
       rmSync(dir, { recursive: true, force: true });
       mkdirSync(dir, { recursive: true });
       try {
@@ -666,8 +846,11 @@ export async function materializeFromBundle(
       );
     }
     return { review: await materializeWorktree(dir, projectId, head), neededFull: false };
-  } finally {
-    rmSync(bundleFile, { force: true });
+  } catch (err) {
+    // A dir created for this request holds nothing but our partial state:
+    // remove it so a failed first contact cannot poison the next attempt.
+    if (isNew) rmSync(dir, { recursive: true, force: true });
+    throw err;
   }
 }
 

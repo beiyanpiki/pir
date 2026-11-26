@@ -255,6 +255,30 @@ clone and `--repo <name>` materializes a worktree from it. These commands use
 `/v1/exec`; fetching a private registered origin requires server credentials.
 `/v1/review` rejects a bundle request carrying `--repo` with HTTP 400 and points at `/v1/exec`, so a bundle cannot re-target a registered clone. A registered `/v1/exec` target is resolved and its project id frozen before admission; an unresolved target stays globally exclusive rather than guessing a project.
 
+Either flow coordinates per project directory with an owner-aware file lock
+under `<PIR_REPOS_ROOT>/.locks/` (pid + process start time, never inside the
+project dir it protects). Fetch, the shared `refs/pir/last-bundle` read, the
+head pin and the worktree checkout are one critical section, as are worktree
+removal, clone install and purge; the review itself runs outside the lock.
+
+The lock is broken automatically only on proof that its owner is dead: same
+host, pid gone, or the pid now belongs to a different process (verified by
+the kernel's start token). A holder on another host, or an unreadable lock
+record, is never broken on an age heuristic — a waiter fails after its wait
+with the lock path for manual recovery, so a live holder is never joined by a
+second one. A leftover `.break` mutex that serializes dead-lock recovery is
+never reclaimed automatically either: proof that the dead record's owner is
+gone cannot prove no other breaker started later, and a stale unlink there can
+remove a live breaker and let two breakers delete each other's new main lock.
+If the `.break` owner is provably dead, acquisition fails immediately naming
+that path; an operator stops the related processes, confirms none are
+running, and removes the file by hand. Preparation (including a codegraph
+seed build) may therefore make a waiter queue for minutes; there is no
+degraded-timeout bound on that wait. Purging a clone or rebuilding a corrupt
+bundle cache is refused while linked worktrees are registered, and a purge
+deletes the clone before unregistering it, so a failed purge never strands an
+unreachable registration.
+
 ### Queueing, reads, and jobs
 
 `pir serve` admits mutating executor work through a bounded, process-local scheduler instead of one global serial chain. `--review-concurrency N` (`PIR_REVIEW_CONCURRENCY`) sets the global slot count and `--project-review-concurrency N` (`PIR_PROJECT_REVIEW_CONCURRENCY`) caps admitted reviews per project; both default to `1`, and both must be positive decimal safe integers with flag > corresponding env > default and an empty env treated as unset. A slot spans repository preparation/materialization, command execution, and worktree cleanup; admitted maintenance work consumes one too, but waiting tasks do not. Raising only the global cap does not admit same-project parallelism.
