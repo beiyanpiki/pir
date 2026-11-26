@@ -87,3 +87,20 @@ export function saveGiteaState(configDir: string, state: GiteaStateStore): strin
   renameSync(tmp, file);
   return file;
 }
+
+/**
+ * Synchronously read-modify-write one PR entry against the latest on-disk store, so concurrent runs for different PRs cannot clobber each other by saving a stale snapshot of the whole `prs` map. The updater receives the entry currently on disk (null when absent) and must return this run's complete entry for `key`; every other key is preserved verbatim.
+ *
+ * Synchronous on purpose: Node runs it to completion without yielding, which makes the read-modify-write atomic among callers in this process. It does not coordinate separate processes sharing the same config dir.
+ */
+export function updateGiteaPrState(
+  configDir: string,
+  key: string,
+  update: (previous: GiteaPrState | null) => GiteaPrState,
+): GiteaPrState {
+  const state = loadGiteaState(configDir);
+  const next = update(state.prs[key] ?? null);
+  state.prs[key] = next;
+  saveGiteaState(configDir, state);
+  return next;
+}

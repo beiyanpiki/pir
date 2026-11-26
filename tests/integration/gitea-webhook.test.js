@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -27,28 +27,30 @@ const CONTEXT = "pir/review";
 // fixtures
 // ---------------------------------------------------------------------------
 
+const APP_BASE = "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction gamma() { return 3; }\n";
+const APP_WITH_BETA2 =
+  "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\n";
+
 /** Origin repo with a 3-function base and a PR head inserting beta2 at line 3. */
-function originFixture() {
+function originFixture(number = 1) {
   const origin = createTempGitRepo("pir-gitea-origin-");
-  origin.write("src/app.ts", "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction gamma() { return 3; }\n");
+  origin.write("src/app.ts", APP_BASE);
   const baseSha = origin.commit("base");
-  origin.write(
-    "src/app.ts",
-    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\n",
-  );
+  origin.write("src/app.ts", APP_WITH_BETA2);
   const headSha = origin.commit("pr work");
-  git(origin.dir, ["update-ref", "refs/pull/1/head", headSha]);
+  git(origin.dir, ["update-ref", `refs/pull/${number}/head`, headSha]);
   return { origin, baseSha, headSha };
 }
 
-/** One more commit on the PR: appends delta() as line 5. */
-function pushNewHead(fixture) {
-  fixture.origin.write(
-    "src/app.ts",
-    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\n",
-  );
-  const head = fixture.origin.commit("pr work 2");
-  git(fixture.origin.dir, ["update-ref", "refs/pull/1/head", head]);
+/** One more commit on a PR, by default appending delta() as line 5 to PR 1. */
+function pushNewHead(
+  fixture,
+  number = 1,
+  content = "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\n",
+) {
+  fixture.origin.write("src/app.ts", content);
+  const head = fixture.origin.commit(`pr work ${number}`);
+  git(fixture.origin.dir, ["update-ref", `refs/pull/${number}/head`, head]);
   return head;
 }
 
@@ -163,10 +165,13 @@ function fakeGitea(hooks = {}) {
         hooks.onFirstCommentsList = null;
         await gate;
       }
-      return jsonResponse(state.comments);
+      // Comments are per-PR on Gitea; keeping them in one list but filtering
+      // by the requested issue number preserves that contract for tests that
+      // exercise several PRs in one server.
+      return jsonResponse(state.comments.filter((comment) => comment.number === Number(match[3])));
     }
     if (match && method === "POST") {
-      const comment = { id: state.nextCommentId++, body: JSON.parse(init.body).body };
+      const comment = { id: state.nextCommentId++, number: Number(match[3]), body: JSON.parse(init.body).body };
       state.comments.push(comment);
       return jsonResponse(comment, 201);
     }
@@ -179,7 +184,7 @@ function fakeGitea(hooks = {}) {
     }
     match = /^\/repos\/([^/]+)\/([^/]+)\/pulls\/(\d+)\/reviews$/.exec(pathname);
     if (match && method === "POST") {
-      const review = { id: state.nextReviewId++, ...JSON.parse(init.body) };
+      const review = { id: state.nextReviewId++, number: Number(match[3]), ...JSON.parse(init.body) };
       state.reviews.push(review);
       return jsonResponse(review, 201);
     }
@@ -204,15 +209,24 @@ function fakeGitea(hooks = {}) {
 // server + webhook helpers
 // ---------------------------------------------------------------------------
 
-function sandboxEnv(t) {
+function sandboxEnv() {
   const root = mkdtempSync(path.join(tmpdir(), "pir-gitea-test-"));
+  const keys = ["PIR_REPOS_ROOT", "PIR_STATE_ROOT", "PIR_CODEGRAPH", "PIR_MEMORY_DB", "PIR_STATE_IN_PROJECT"];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   process.env.PIR_REPOS_ROOT = path.join(root, "repos");
   process.env.PIR_STATE_ROOT = path.join(root, "state");
-  t.after(() => {
-    delete process.env.PIR_REPOS_ROOT;
-    delete process.env.PIR_STATE_ROOT;
-  });
-  return root;
+  process.env.PIR_CODEGRAPH = "0";
+  delete process.env.PIR_MEMORY_DB;
+  delete process.env.PIR_STATE_IN_PROJECT;
+  return {
+    root,
+    restore() {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    },
+  };
 }
 
 function defaultConfig() {
@@ -233,8 +247,18 @@ function defaultConfig() {
   };
 }
 
-async function withGiteaServer(t, { config = defaultConfig(), runner, fetchHooks } = {}) {
-  const root = sandboxEnv(t);
+async function withGiteaServer(
+  t,
+  {
+    config = defaultConfig(),
+    runner,
+    fetchHooks,
+    reviewConcurrency,
+    projectReviewConcurrency,
+    beforeClose,
+  } = {},
+) {
+  const { root, restore } = sandboxEnv();
   const configDir = path.join(root, "config");
   const gitea = fakeGitea(fetchHooks);
   const handle = await startServer({
@@ -243,15 +267,30 @@ async function withGiteaServer(t, { config = defaultConfig(), runner, fetchHooks
     workspace: path.join(root, "workspace"),
     tls: null,
     gitea: { config, configDir, fetchImpl: gitea.impl, ...(runner ? { runner } : {}) },
+    ...(reviewConcurrency !== undefined ? { reviewConcurrency } : {}),
+    ...(projectReviewConcurrency !== undefined ? { projectReviewConcurrency } : {}),
   });
   const port = handle.url.split(":").pop();
-  t.after(() => handle.close());
+  // Release and settle any in-flight jobs before closing the server; tests
+  // that hold a runner behind a barrier pass this hook so cleanup never races
+  // a state write against a deleted workspace.
+  t.after(async () => {
+    try {
+      if (beforeClose) await beforeClose();
+      const { jobs } = await (await fetch(`${handle.url}/v1/jobs`)).json();
+      await Promise.all(jobs.map((job) => waitForJob(handle.url, job.jobId)));
+      restore();
+      rmSync(root, { recursive: true, force: true });
+    } finally {
+      handle.close();
+    }
+  });
   assert.equal(handle.giteaEnabled, GITEA_BASE);
   return { base: `http://127.0.0.1:${port}`, configDir, gitea, root };
 }
 
 async function withBareServer(t) {
-  const root = sandboxEnv(t);
+  const { root, restore } = sandboxEnv();
   const handle = await startServer({
     host: "127.0.0.1",
     port: 0,
@@ -259,22 +298,27 @@ async function withBareServer(t) {
     tls: null,
   });
   const port = handle.url.split(":").pop();
-  t.after(() => handle.close());
+  t.after(() => {
+    handle.close();
+    restore();
+    rmSync(root, { recursive: true, force: true });
+  });
   assert.equal(handle.giteaEnabled, undefined);
   return `http://127.0.0.1:${port}`;
 }
 
 function prPayload(overrides = {}) {
+  const number = overrides.number ?? 1;
   return {
     action: overrides.action ?? "opened",
-    number: 1,
+    number,
     pull_request: {
       title: overrides.title ?? "Add feature",
       body: null,
       ...(overrides.draft !== undefined ? { draft: overrides.draft } : {}),
       base: { ref: overrides.baseRef ?? "main", sha: overrides.baseSha },
       head: { ref: "feat/thing", sha: overrides.headSha },
-      html_url: `${GITEA_BASE}/${REPO_FULL_NAME}/pulls/1`,
+      html_url: `${GITEA_BASE}/${REPO_FULL_NAME}/pulls/${number}`,
       user: { login: "dev" },
       ...(overrides.labels ? { labels: overrides.labels } : {}),
     },
@@ -320,6 +364,40 @@ async function waitForJob(base, jobId, timeoutMs = 20000) {
 const stateKey = `${REPO_FULL_NAME}#1`;
 
 const readState = (configDir) => JSON.parse(readFileSync(path.join(configDir, "gitea-state.json"), "utf8"));
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+/**
+ * Fail a test that depends on a barrier being reached instead of hanging
+ * forever. This is only a guard: concurrency is decided by the barrier
+ * itself, never by sleeping for an arbitrary interval.
+ */
+async function withDeadline(promise, ms, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const commentsFor = (gitea, number) => gitea.state.comments.filter((comment) => comment.number === number);
+const reviewsFor = (gitea, number) => gitea.state.reviews.filter((review) => review.number === number);
+const reviewPostsFor = (gitea, number) =>
+  gitea.requests.filter((request) => request.method === "POST" && request.url.endsWith(`/pulls/${number}/reviews`));
+const reviewDeletesFor = (gitea, number) =>
+  gitea.requests.filter((request) => request.method === "DELETE" && request.url.includes(`/pulls/${number}/reviews/`));
 
 // ---------------------------------------------------------------------------
 // tests
@@ -450,6 +528,316 @@ test("gitea webhook: re-review with identical findings reposts nothing and notes
   assert.equal(state.reviewId, review.id);
 });
 
+test("gitea webhook: different PRs in one project run concurrently and keep separate state, comments and reviews", async (t) => {
+  const findings = findingFixtures();
+  const entered = [];
+  const bothEntered = deferred();
+  const release = deferred();
+  const jobIds = [];
+  let base;
+  const runner = async (_worktree, args) => {
+    entered.push(args.head);
+    if (entered.length === 2) bothEntered.resolve();
+    await release.promise;
+    return { findEnvelope: findEnvelopeFor(findings), summarizeEnvelope };
+  };
+  const server = await withGiteaServer(t, {
+    runner,
+    reviewConcurrency: 2,
+    projectReviewConcurrency: 2,
+    beforeClose: async () => {
+      release.resolve();
+      await Promise.allSettled(jobIds.map((id) => waitForJob(base, id, 10000)));
+    },
+  });
+  base = server.base;
+  const { configDir, gitea } = server;
+  const fixture = originFixture(1);
+  t.after(() => fixture.origin.cleanup());
+  await addRepo(fixture.origin.dir);
+
+  // A second PR in the SAME registered project: distinct head, distinct
+  // resource key, so the two orchestrations must be admitted together.
+  const head2 = pushNewHead(
+    fixture,
+    2,
+    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction epsilon() { return 5; }\n",
+  );
+
+  const first = await postWebhook(
+    base,
+    prPayload({ number: 1, baseSha: fixture.baseSha, headSha: fixture.headSha, cloneUrl: fixture.origin.dir }),
+  );
+  assert.equal(first.status, 202);
+  jobIds.push(first.body.jobId);
+  const second = await postWebhook(
+    base,
+    prPayload({ number: 2, baseSha: fixture.baseSha, headSha: head2, cloneUrl: fixture.origin.dir, title: "Second PR" }),
+  );
+  assert.equal(second.status, 202);
+  jobIds.push(second.body.jobId);
+
+  // Neither runner is released: reaching two entries proves the scheduler
+  // admitted both PRs, not that they merely finished one after the other.
+  await withDeadline(bothEntered.promise, 20000, "both PR runners should enter before either is released");
+  assert.deepEqual(new Set(entered), new Set([fixture.headSha, head2]));
+  release.resolve();
+
+  const [job1, job2] = await Promise.all([waitForJob(base, first.body.jobId), waitForJob(base, second.body.jobId)]);
+  assert.equal(JSON.parse(job1.result.output).outcome, "reviewed");
+  assert.equal(JSON.parse(job2.result.output).outcome, "reviewed");
+
+  const key1 = `${REPO_FULL_NAME}#1`;
+  const key2 = `${REPO_FULL_NAME}#2`;
+  const prs = readState(configDir).prs;
+  assert.deepEqual(Object.keys(prs).sort(), [key1, key2].sort());
+  assert.equal(prs[key1].lastHeadSha, fixture.headSha);
+  assert.equal(prs[key2].lastHeadSha, head2);
+
+  const comments1 = commentsFor(gitea, 1);
+  const comments2 = commentsFor(gitea, 2);
+  assert.equal(comments1.length, 1);
+  assert.equal(comments2.length, 1);
+  assert.ok(comments1[0].body.startsWith(`<!-- pir:status ${key1} v1 -->`));
+  assert.ok(comments2[0].body.startsWith(`<!-- pir:status ${key2} v1 -->`));
+  assert.equal(prs[key1].statusCommentId, comments1[0].id);
+  assert.equal(prs[key2].statusCommentId, comments2[0].id);
+
+  const reviews1 = reviewsFor(gitea, 1);
+  const reviews2 = reviewsFor(gitea, 2);
+  assert.equal(reviews1.length, 1);
+  assert.equal(reviews2.length, 1);
+  assert.ok(reviews1[0].body.includes("pir review: #1"));
+  assert.ok(reviews2[0].body.includes("pir review: #2 Second PR"));
+  assert.equal(prs[key1].reviewId, reviews1[0].id);
+  assert.equal(prs[key2].reviewId, reviews2[0].id);
+
+  for (const [sha, number] of [
+    [fixture.headSha, 1],
+    [head2, 2],
+  ]) {
+    assert.deepEqual(
+      gitea.state.statuses.filter((status) => status.sha === sha).map((status) => status.state),
+      ["pending", "failure"],
+      `statuses for PR #${number}`,
+    );
+  }
+});
+
+test("gitea webhook: a newer head accepted during the model run makes the old run stand down before publishing", async (t) => {
+  const findings = findingFixtures();
+  const enteredHeads = [];
+  const oldEntered = deferred();
+  const releaseOld = deferred();
+  let oldHead;
+  const jobIds = [];
+  let base;
+  const runner = async (_worktree, args) => {
+    enteredHeads.push(args.head);
+    if (args.head === oldHead) {
+      oldEntered.resolve();
+      await releaseOld.promise;
+    }
+    return { findEnvelope: findEnvelopeFor(findings), summarizeEnvelope };
+  };
+  const server = await withGiteaServer(t, {
+    runner,
+    reviewConcurrency: 3,
+    projectReviewConcurrency: 3,
+    beforeClose: async () => {
+      releaseOld.resolve();
+      await Promise.allSettled(jobIds.map((id) => waitForJob(base, id, 10000)));
+    },
+  });
+  base = server.base;
+  const { configDir, gitea } = server;
+  const fixture = originFixture(7);
+  t.after(() => fixture.origin.cleanup());
+  await addRepo(fixture.origin.dir);
+
+  const headA = fixture.headSha;
+  const baseline = await postWebhook(
+    base,
+    prPayload({ number: 7, baseSha: fixture.baseSha, headSha: headA, cloneUrl: fixture.origin.dir }),
+  );
+  assert.equal(baseline.status, 202);
+  jobIds.push(baseline.body.jobId);
+  assert.equal(JSON.parse((await waitForJob(base, baseline.body.jobId)).result.output).outcome, "reviewed");
+  const reviewA = reviewsFor(gitea, 7)[0];
+  assert.ok(reviewA);
+
+  // The old run is parked inside its model call on head B.
+  oldHead = pushNewHead(
+    fixture,
+    7,
+    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\n",
+  );
+  const older = await postWebhook(
+    base,
+    prPayload({ number: 7, baseSha: fixture.baseSha, headSha: oldHead, cloneUrl: fixture.origin.dir, action: "synchronized", title: "Head B" }),
+    { event: "pull_request_sync", eventType: "pull_request_sync" },
+  );
+  assert.equal(older.status, 202);
+  jobIds.push(older.body.jobId);
+  await withDeadline(oldEntered.promise, 20000, "the old head's runner should be parked");
+
+  // Head C is accepted while B's model call is still running. It must queue
+  // behind the same PR; the canary PR D proves the scheduler kept draining.
+  const newHead = pushNewHead(
+    fixture,
+    7,
+    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\nfunction epsilon() { return 5; }\n",
+  );
+  const newer = await postWebhook(
+    base,
+    prPayload({ number: 7, baseSha: fixture.baseSha, headSha: newHead, cloneUrl: fixture.origin.dir, action: "synchronized", title: "Head C" }),
+    { event: "pull_request_sync", eventType: "pull_request_sync" },
+  );
+  assert.equal(newer.status, 202);
+  jobIds.push(newer.body.jobId);
+
+  const canaryHead = pushNewHead(
+    fixture,
+    8,
+    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\nfunction zeta() { return 6; }\n",
+  );
+  const canary = await postWebhook(
+    base,
+    prPayload({ number: 8, baseSha: fixture.baseSha, headSha: canaryHead, cloneUrl: fixture.origin.dir, title: "Canary PR" }),
+  );
+  assert.equal(canary.status, 202);
+  jobIds.push(canary.body.jobId);
+  assert.equal(JSON.parse((await waitForJob(base, canary.body.jobId)).result.output).outcome, "reviewed");
+
+  // The scheduler moved on to the canary while B was blocked, yet C (same PR,
+  // different head) still has not entered its runner and nothing was published
+  // for B beyond its already-posted started status.
+  assert.equal(enteredHeads.includes(newHead), false);
+  assert.equal(reviewsFor(gitea, 7).length, 1);
+  assert.equal(reviewPostsFor(gitea, 7).length, 1);
+  assert.equal(reviewDeletesFor(gitea, 7).length, 0);
+
+  releaseOld.resolve();
+  const [oldJob, newJob] = await Promise.all([waitForJob(base, older.body.jobId), waitForJob(base, newer.body.jobId)]);
+  assert.equal(JSON.parse(oldJob.result.output).outcome, "superseded");
+  assert.equal(JSON.parse(newJob.result.output).outcome, "reviewed");
+
+  // The old run did not delete the baseline review or post a review for B;
+  // only the new head's run published after deleting the baseline.
+  assert.equal(reviewPostsFor(gitea, 7).length, 2);
+  assert.equal(reviewDeletesFor(gitea, 7).length, 1);
+  assert.ok(reviewDeletesFor(gitea, 7)[0].url.endsWith(`/reviews/${reviewA.id}`));
+  const finalReview = reviewsFor(gitea, 7)[0];
+  assert.ok(finalReview.body.includes(newHead.slice(0, 7)));
+  assert.ok(!finalReview.body.includes(oldHead.slice(0, 7)));
+
+  const prs = readState(configDir).prs;
+  const key = `${REPO_FULL_NAME}#7`;
+  assert.equal(prs[key].lastHeadSha, newHead);
+  assert.equal(prs[key].reviewId, finalReview.id);
+  // B only ever reached the pending state; C owns the terminal status.
+  assert.deepEqual(
+    gitea.state.statuses.filter((status) => status.sha === oldHead).map((status) => status.state),
+    ["pending"],
+  );
+  assert.deepEqual(
+    gitea.state.statuses.filter((status) => status.sha === newHead).map((status) => status.state),
+    ["pending", "failure"],
+  );
+});
+
+test("gitea webhook: concurrent webhooks for the same head never overlap runners and keep dedupe semantics", async (t) => {
+  const findings = findingFixtures();
+  const firstEntered = deferred();
+  const releaseFirst = deferred();
+  const callsByHead = new Map();
+  let activeForHead = 0;
+  let maxActiveForHead = 0;
+  let firstCall = true;
+  let sameHead;
+  const jobIds = [];
+  let base;
+  const runner = async (_worktree, args) => {
+    callsByHead.set(args.head, (callsByHead.get(args.head) ?? 0) + 1);
+    if (args.head === sameHead) {
+      activeForHead++;
+      maxActiveForHead = Math.max(maxActiveForHead, activeForHead);
+      try {
+        if (firstCall) {
+          firstCall = false;
+          firstEntered.resolve();
+          await releaseFirst.promise;
+        }
+        return { findEnvelope: findEnvelopeFor(findings), summarizeEnvelope };
+      } finally {
+        activeForHead--;
+      }
+    }
+    return { findEnvelope: findEnvelopeFor(findings), summarizeEnvelope };
+  };
+  const server = await withGiteaServer(t, {
+    runner,
+    reviewConcurrency: 3,
+    projectReviewConcurrency: 3,
+    beforeClose: async () => {
+      releaseFirst.resolve();
+      await Promise.allSettled(jobIds.map((id) => waitForJob(base, id, 10000)));
+    },
+  });
+  base = server.base;
+  const { configDir, gitea } = server;
+  const fixture = originFixture(11);
+  t.after(() => fixture.origin.cleanup());
+  await addRepo(fixture.origin.dir);
+  sameHead = fixture.headSha;
+
+  const payload = prPayload({ number: 11, baseSha: fixture.baseSha, headSha: sameHead, cloneUrl: fixture.origin.dir });
+  const first = await postWebhook(base, payload);
+  assert.equal(first.status, 202);
+  jobIds.push(first.body.jobId);
+  await withDeadline(firstEntered.promise, 20000, "the first same-head runner should be parked");
+
+  const second = await postWebhook(base, payload);
+  assert.equal(second.status, 202);
+  jobIds.push(second.body.jobId);
+
+  // A different-PR canary run proves the queue was pumped while the same-PR
+  // job stayed blocked behind its resource key.
+  const canaryHead = pushNewHead(
+    fixture,
+    12,
+    "function alpha() { return 1; }\nfunction beta() { return 2; }\nfunction beta2() { return 22; }\nfunction gamma() { return 3; }\nfunction delta() { return 4; }\nfunction zeta() { return 6; }\n",
+  );
+  const canary = await postWebhook(
+    base,
+    prPayload({ number: 12, baseSha: fixture.baseSha, headSha: canaryHead, cloneUrl: fixture.origin.dir, title: "Canary PR" }),
+  );
+  assert.equal(canary.status, 202);
+  jobIds.push(canary.body.jobId);
+  assert.equal(JSON.parse((await waitForJob(base, canary.body.jobId)).result.output).outcome, "reviewed");
+
+  assert.equal(callsByHead.get(sameHead), 1);
+  assert.equal(maxActiveForHead, 1);
+  assert.equal(reviewsFor(gitea, 11).length, 0);
+
+  releaseFirst.resolve();
+  const [job1, job2] = await Promise.all([waitForJob(base, first.body.jobId), waitForJob(base, second.body.jobId)]);
+  assert.equal(JSON.parse(job1.result.output).outcome, "reviewed");
+  assert.equal(JSON.parse(job2.result.output).outcome, "reviewed");
+
+  // Both ran, but never at the same time; the second replaced the first and
+  // reused the unchanged fingerprints exactly like the existing re-review path.
+  assert.equal(callsByHead.get(sameHead), 2);
+  assert.equal(maxActiveForHead, 1);
+  assert.equal(reviewPostsFor(gitea, 11).length, 2);
+  assert.equal(reviewDeletesFor(gitea, 11).length, 1);
+  const finalReview = reviewsFor(gitea, 11)[0];
+  assert.ok(finalReview.body.includes("previously-reported finding(s) unchanged — not reposted"));
+  const prs = readState(configDir).prs;
+  assert.equal(prs[`${REPO_FULL_NAME}#11`].lastHeadSha, sameHead);
+  assert.equal(prs[`${REPO_FULL_NAME}#11`].reviewId, finalReview.id);
+});
+
 test("gitea webhook: policy rejections answer 200 with the reason code and create no job", async (t) => {
   const runner = async () => assert.fail("runner must not be called for rejected webhooks");
   const { base, gitea } = await withGiteaServer(t, { runner });
@@ -519,7 +907,9 @@ test("gitea webhook: a superseded run stands down without posting a review for t
   const hold = new Promise((resolve) => {
     releaseHold = resolve;
   });
-  const { base, gitea } = await withGiteaServer(t, { runner, fetchHooks: { onFirstCommentsList: hold } });
+  const { base, gitea } = await withGiteaServer(t, {
+    runner, fetchHooks: { onFirstCommentsList: hold }, beforeClose: () => releaseHold(),
+  });
   const fixture = originFixture();
   t.after(() => fixture.origin.cleanup());
   await addRepo(fixture.origin.dir);

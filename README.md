@@ -151,6 +151,9 @@ PI_DEFAULT_PROVIDER=anthropic
 PI_DEFAULT_MODEL=<model-id>
 # Optional: make serve reviews use the codegraph structural index
 PIR_CODEGRAPH=1
+# Optional: bounded review admission (both default 1 — serial)
+PIR_REVIEW_CONCURRENCY=1
+PIR_PROJECT_REVIEW_CONCURRENCY=1
 ```
 
 ```bash
@@ -396,12 +399,22 @@ run-shaping flags are rejected with a usage error instead of being ignored.
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /health` | version, TLS state, and queue status |
+| `GET /health` | version, TLS state, and admission/queue status |
 | `POST /v1/exec` | execute a non-bundled CLI invocation |
 | `POST /v1/review` | execute a repo-context command from a git bundle |
 | `POST /v1/memory/sync` | merge a local memory snapshot into the server |
 | `POST /v1/webhook/gitea` | HMAC-signed Gitea PR webhook; see the Gitea integration section |
 | `GET /v1/jobs` and `/v1/jobs/<id>` | inspect or retrieve asynchronous work |
+
+### Review concurrency
+
+`pir serve` admits reviews with bounded, process-local concurrency instead of one global serial queue. `--review-concurrency N` (`PIR_REVIEW_CONCURRENCY`) sets the number of global executor slots, and `--project-review-concurrency N` (`PIR_PROJECT_REVIEW_CONCURRENCY`) caps admitted reviews for one project. Both default to `1`, which keeps the previous serial behavior. Precedence is flag > corresponding environment variable > default; an empty environment variable counts as unset. Values must be positive decimal safe integers, and an invalid value refuses to start. For example, `pir serve --review-concurrency 4 --project-review-concurrency 2` allows four reviews in flight with at most two from the same project; a first rollout at `2/2` is a reasonable conservative step.
+
+A global slot covers repository preparation/materialization, review execution, and worktree cleanup; admitted maintenance work occupies one too, but waiting tasks do not. Raising only the global cap does not enable same-project parallelism: raise both caps. This is admission control, not a global model-session or request cap — each run's `--verify-concurrency` and `--angles` fan-out can multiply model requests, and provider rate limits still apply. Bundle `find`/`audit`, registered `--repo` `find`/`audit`, and different Gitea PRs can overlap within those caps. The full lifecycle of one Gitea PR stays mutually exclusive (status, review publication and per-PR state), repeated same-head webhooks keep the existing re-review/dedup behavior, and an old head replaced during model execution rechecks before publishing and stands down. Project memory maintenance (`bootstrap`, `refresh`, `feedback`, `remember`, `verify-fix`, `memory sync`) is exclusive with review of the same project. `repos add`/`remove`, direct-workspace work, and targets whose project is unknown stay globally exclusive. The proven read-only fast lane keeps its separate concurrency limit (16) outside this pool.
+
+`GET /health` keeps its existing wire shape: `executor.pending` counts running plus waiting tasks and `oldestPendingMs` is the oldest admission age, with no new field. The scheduler is process-local: a restart loses queued and running work (durable run rows and checkpoints remain), separate `pir serve` processes do not coordinate, and this design does not add a persistent queue, restart resume, a global model limiter, or automatic PR cancellation. `/v1/review` rejects `--repo` with HTTP 400 and points at `/v1/exec`, so a bundle request cannot re-target a registered repository; registered targets resolve and freeze their project identity before admission.
+
+Do not share `PIR_REPOS_ROOT` across PID namespaces. For a containerized service, run repository administration inside the service container with `docker compose exec pir`, not from the host or a sidecar against the same volume.
 
 Remote audits sent from a checkout are asynchronous jobs by default.
 `pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
@@ -518,7 +531,7 @@ Per-repo overrides in `repos` replace only the keys they set; array and scalar v
 
 Private repositories: the registered clone must be able to fetch the PR head — either register with the token embedded in the URL (`pir repos add https://<user>:<token>@git.example.com/owner/repo.git`) or configure a git credential helper on the serve host. Treat the token like any other secret: keep it out of command history and logs.
 
-The webhook answers `202 {accepted:true, jobId}` for accepted triggers (poll `GET /v1/jobs/<id>`; the job output is `{outcome:"reviewed"|"superseded"|"failed", detail}`), `200 {accepted:false, reason}` for every policy rejection so Gitea does not retry, `401` for a bad signature and `503` when the integration is not configured. Reviews run on serve's serial queue — one review at a time per process, queued behind any bundle review — and a newer push supersedes an older queued run for the same PR.
+The webhook answers `202 {accepted:true, jobId}` for accepted triggers (poll `GET /v1/jobs/<id>`; the job output is `{outcome:"reviewed"|"superseded"|"failed", detail}`), `200 {accepted:false, reason}` for every policy rejection so Gitea does not retry, `401` for a bad signature and `503` when the integration is not configured. Gitea reviews share serve's bounded admission: with the default concurrency of one they remain serial, and raising `--review-concurrency`/`--project-review-concurrency` lets different PRs overlap within those caps. One PR's whole orchestrate-and-publish lifecycle stays mutually exclusive, and a newer push supersedes an older run for the same PR; a run whose head is replaced during model execution rechecks before publishing and stands down.
 
 Troubleshooting:
 
@@ -527,7 +540,7 @@ Troubleshooting:
 | Webhook answers `401 invalid or missing webhook signature` | the webhook secret differs between the Gitea webhook and the config — retype it in one place |
 | Status comment says the repository is not registered | `pir repos add <clone-url>` on the serve host; the registration must name the same repository the webhook payload carries |
 | Webhook answers `503 gitea integration not configured` | no `gitea.json` and no `PIR_GITEA_JSON`, or serve was started before the config existed — write the config and restart |
-| Review sits queued for a long time | another review holds the serial queue (check `GET /health`'s executor queue stats); webhook reviews share it with bundle reviews |
+| Review sits queued for a long time | admission slots are occupied (check `GET /health`'s `executor.pending`/`oldestPendingMs`); webhook reviews share the same bounded pool as bundle reviews, and only one runs per project until `--project-review-concurrency` is raised |
 | pir reacts to actions performed by the bot itself | the startup `GET /user` lookup failed, so the bot-sender skip rule is off — check the serve log and restart; the login is cached once per serve process |
 | An `edited` PR is never reviewed | `edited` triggers only when the WIP prefix is removed from the title; also align `wipPrefixes` with Gitea's server-side `WORK_IN_PROGRESS_PREFIXES` |
 | A finding appears in the table instead of inline | its anchor is not inside a diff hunk's new-side span — demoted to the overview by design |

@@ -234,7 +234,7 @@ function loadGiteaConfigFrom(value) {
   }
 }
 
-const { giteaStateFile, giteaStateKey, loadGiteaState, saveGiteaState } = await import(
+const { giteaStateFile, giteaStateKey, loadGiteaState, saveGiteaState, updateGiteaPrState } = await import(
   "../../dist/gitea/state.js"
 );
 
@@ -270,6 +270,48 @@ test("gitea state: save/load roundtrip, owner-only mode, tmp file gone", (t) => 
   saveGiteaState(dir, state);
   assert.equal(loadGiteaState(dir).prs[key].reviewId, 1003);
   assert.throws(() => statSync(`${file}.tmp`), /ENOENT/);
+});
+
+test("gitea state: per-key update rebases on the latest file and preserves other PRs", (t) => {
+  const dir = withTempDir(t);
+  const keyA = giteaStateKey("beiyan/pir-demo", 1);
+  const keyB = giteaStateKey("beiyan/pir-demo", 2);
+  const entry = (lastHeadSha, reviewId) => ({
+    lastHeadSha,
+    reviewId,
+    statusCommentId: reviewId + 1,
+    lastPostedFingerprints: [`${lastHeadSha}:fp`],
+    updatedAt: "2026-11-25T00:00:00.000Z",
+  });
+
+  // Run A loads (empty) before run B writes its own key. Its update must not
+  // write back the stale snapshot it started from.
+  assert.deepEqual(loadGiteaState(dir), { prs: {} });
+  const a = updateGiteaPrState(dir, keyA, (previous) => {
+    assert.equal(previous, null);
+    return entry("a".repeat(40), 100);
+  });
+  assert.deepEqual(loadGiteaState(dir).prs[keyA], a);
+
+  // B adds its own key while A's "run" is still between its started and final writes.
+  saveGiteaState(dir, { prs: { ...loadGiteaState(dir).prs, [keyB]: entry("b".repeat(40), 200) } });
+
+  // A's next update rebases on the file that now contains B and touches only A.
+  const a2 = updateGiteaPrState(dir, keyA, (previous) => {
+    assert.deepEqual(previous, a); // latest value of its OWN key
+    return { ...previous, reviewId: 101, updatedAt: "2026-11-25T00:01:00.000Z" };
+  });
+  const stored = loadGiteaState(dir);
+  assert.deepEqual(stored.prs[keyA], a2);
+  assert.equal(stored.prs[keyA].reviewId, 101);
+  assert.deepEqual(stored.prs[keyB], entry("b".repeat(40), 200));
+
+  // An update for a new key also leaves both existing entries untouched.
+  updateGiteaPrState(dir, giteaStateKey("beiyan/other", 3), () => entry("c".repeat(40), 300));
+  const all = loadGiteaState(dir).prs;
+  assert.deepEqual(all[keyA], a2);
+  assert.deepEqual(all[keyB], entry("b".repeat(40), 200));
+  assert.equal(all[giteaStateKey("beiyan/other", 3)].reviewId, 300);
 });
 
 test("gitea state: corrupt or wrong-shape files are tolerated as empty", (t) => {

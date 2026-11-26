@@ -111,6 +111,9 @@ PI_DEFAULT_PROVIDER=anthropic
 PI_DEFAULT_MODEL=<model-id>
 # 可选：让服务端评审使用 CodeGraph 结构索引
 PIR_CODEGRAPH=1
+# 可选：有界评审并发（两者默认都是 1，即串行）
+PIR_REVIEW_CONCURRENCY=1
+PIR_PROJECT_REVIEW_CONCURRENCY=1
 ```
 
 ```bash
@@ -231,11 +234,21 @@ reviewer prompt 把该文本放在保留的 `<user_background>` 区段里——�
 
 | 端点 | 用途 |
 | --- | --- |
-| `GET /health` | 版本、TLS 状态和队列状态 |
+| `GET /health` | 版本、TLS 状态和准入/队列状态 |
 | `POST /v1/exec` | 执行不使用 bundle 的 CLI 调用 |
 | `POST /v1/review` | 基于 git bundle 执行仓库命令 |
 | `POST /v1/memory/sync` | 将本地记忆快照与服务端合并 |
 | `GET /v1/jobs` 和 `/v1/jobs/<id>` | 查看或取回异步任务 |
+
+### 评审并发
+
+`pir serve` 不再用一个全局串行队列执行所有评审，而是采用进程内有界准入。`--review-concurrency N`（`PIR_REVIEW_CONCURRENCY`）设置全局执行槽数量，`--project-review-concurrency N`（`PIR_PROJECT_REVIEW_CONCURRENCY`）限制单个项目同时准入的评审数。两者默认都是 `1`，即保持原有串行行为。优先级为 flag > 对应环境变量 > 默认值；环境变量为空视为未设置。取值必须是正的十进制安全整数，非法值会让 serve 拒绝启动。例如 `pir serve --review-concurrency 4 --project-review-concurrency 2` 允许同时跑四个评审、同项目最多两个；首次灰度建议从 `2/2` 开始。
+
+一个全局槽覆盖仓库准备/物化、评审执行和工作区清理，已获准执行的维护任务也占一个槽，仍在等待的任务不占槽；只调大全局上限并不能让同项目评审并行，两个上限都要调大。这是执行准入控制，不是模型会话或请求的全局上限——单次运行中的 `--verify-concurrency` 验证并发与 `--angles` 角度扇出仍会放大模型请求量，提供商限流也照常生效。在上述上限内，bundle `find`/`audit`、注册 `--repo` 的 `find`/`audit` 以及不同 Gitea PR 可以并行。同一个 Gitea PR 的整个状态、发布与 per-PR 状态流程仍然互斥；重复同 head 的 webhook 沿用既有的重新评审与指纹去重行为；旧 head 在模型执行期间被新 head 取代时，会在发布前再次检查并主动退出本轮发布。项目记忆维护（`bootstrap`、`refresh`、`feedback`、`remember`、`verify-fix`、`memory sync`）与同项目评审互斥。`repos add`/`remove`、直接工作区以及无法确定项目的目标仍按全局独占处理。经过验证的只读快车道保持独立的 16 并发上限，不占用这个评审池。
+
+`GET /health` 的返回结构保持不变：`executor.pending` 统计运行中加等待中的任务，`oldestPendingMs` 是最早的准入等待年龄，不新增字段。调度器是进程内的：重启会丢失排队中与运行中的工作（持久化的 run 记录和 checkpoint 仍在），多个 `pir serve` 进程之间不协调；本设计不提供持久队列、重启续跑、全局模型限流或 PR 自动取消。`/v1/review` 会以 HTTP 400 拒绝 `--repo` 并提示改用 `/v1/exec`，因此 bundle 请求不能改指向已注册仓库；注册目标会在入队前解析并冻结项目身份。
+
+不要在不同 PID 命名空间之间共享 `PIR_REPOS_ROOT`。如果服务运行在容器中，用 `docker compose exec pir` 在服务容器内管理仓库，不要从宿主机或 sidecar 操作同一个卷。
 
 从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。`find`/`audit --detach` 提交后立即返回（#53）：stdout 输出携带完整任务 id 与后续命令的提交信封，本地回执是持久记录——退出码 `0` 表示**已受理**，不表示评审成功。等待期间（`jobs wait` 或提交后的轮询）状态行在状态变化和约每分钟各打印一次（#55）：只报告连接存活，不虚构评审进度。
 
@@ -318,7 +331,7 @@ web 层凭据与执行 token 相互独立（#50）：`--viewer-token` > `PIR_VIE
 
 私有仓库：注册的 clone 必须能拉取 PR head——要么用内嵌 token 的 URL 注册（`pir repos add https://<user>:<token>@git.example.com/owner/repo.git`），要么在 serve 主机上配置 git credential helper。token 按普通 secret 对待：不要进命令历史和日志。
 
-webhook 对接受的触发回答 `202 {accepted:true, jobId}`（用 `GET /v1/jobs/<id>` 轮询；任务输出是 `{outcome:"reviewed"|"superseded"|"failed", detail}`）；所有策略性拒绝回答 `200 {accepted:false, reason}`，Gitea 因此不会重试；签名错误回答 `401`，集成未配置回答 `503`。评审运行在 serve 的串行队列上——每个进程一次只跑一个评审，排在 bundle 评审之后——同一 PR 的更新 push 会取代排队中的旧运行。
+webhook 对接受的触发回答 `202 {accepted:true, jobId}`（用 `GET /v1/jobs/<id>` 轮询；任务输出是 `{outcome:"reviewed"|"superseded"|"failed", detail}`）；所有策略性拒绝回答 `200 {accepted:false, reason}`，Gitea 因此不会重试；签名错误回答 `401`，集成未配置回答 `503`。Gitea 评审与其他评审共享 serve 的有界准入：默认并发为 1 时仍然串行；调大 `--review-concurrency`/`--project-review-concurrency` 后，不同 PR 可在上限内并行。单个 PR 的整个 orchestrate 与发布流程仍然互斥，同一 PR 的更新 push 会取代旧运行；如果旧 head 在模型执行期间被新 head 取代，它会在发布前重新检查并主动退出。
 
 问题排查：
 
@@ -327,7 +340,7 @@ webhook 对接受的触发回答 `202 {accepted:true, jobId}`（用 `GET /v1/job
 | webhook 回答 `401 invalid or missing webhook signature` | Gitea webhook 与配置里的 secret 不一致——在其中一处重新填写 |
 | 状态评论提示仓库未注册 | 在 serve 主机执行 `pir repos add <clone-url>`；注册的必须是 webhook payload 携带的同一仓库 |
 | webhook 回答 `503 gitea integration not configured` | 没有 `gitea.json` 也没有 `PIR_GITEA_JSON`，或 serve 先于配置启动——写好配置后重启 |
-| 评审长时间排队 | 串行队列被其他评审占用（看 `GET /health` 的 executor queue 统计）；webhook 评审与 bundle 评审共用队列 |
+| 评审长时间排队 | 准入槽被其他评审占用（看 `GET /health` 的 `executor.pending`/`oldestPendingMs`）；webhook 评审与 bundle 评审共用同一个有界池，未调大 `--project-review-concurrency` 时同项目一次只跑一个 |
 | pir 对 bot 自己的动作起了反应 | 启动时 `GET /user` 查询失败，bot-sender 跳过规则未生效——查 serve 日志并重启；bot 登录名每进程只取一次 |
 | `edited` 的 PR 一直没有被评审 | `edited` 仅在 WIP 前缀被移除时触发；同时把 `wipPrefixes` 与 Gitea 服务端的 `WORK_IN_PROGRESS_PREFIXES` 对齐 |
 | finding 出现在表格里而不是行内 | 它的 anchor 不在 diff hunk 的新侧区间内——按设计降级到总览表 |

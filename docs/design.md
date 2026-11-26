@@ -205,7 +205,7 @@ projectId = sha256((normalizedRemote ?? "local") + "\0" + rootCommit)
 ```
 
 Branches and checkout paths are absent from the key. Different clones share
-memory identity when their normalized remote and root commit match.
+memory identity when their normalized remote and root commit match. Concurrency does not change that key or split the database: all branches and PRs of one project share its memory database, while run rows, findings, audit coverage, and transcripts stay isolated by run id. A bundle review and a registered Gitea PR for the same project therefore share memory but never a run record or transcript directory.
 
 For ordinary local opens, database resolution is:
 
@@ -241,7 +241,7 @@ commands normally use `/v1/review`:
    reviews when a base is available; other repo commands send full history.
    `find --uncommitted` is the one local-write exception — it records
    working-tree objects in the source repo before packing.
-3. The service imports the bundle and creates a detached temporary worktree.
+3. The service imports the bundle and creates a detached temporary worktree at the pinned head in a fresh UUID-named directory.
 4. The shared executor runs against that worktree and the central database.
 5. The worktree is cleaned up; the result and durable state remain.
 
@@ -253,6 +253,7 @@ synthetic working-tree commits, so the service needs no origin credentials.
 Registered repositories are an alternative: `repos add` creates a server-side
 clone and `--repo <name>` materializes a worktree from it. These commands use
 `/v1/exec`; fetching a private registered origin requires server credentials.
+`/v1/review` rejects a bundle request carrying `--repo` with HTTP 400 and points at `/v1/exec`, so a bundle cannot re-target a registered clone. A registered `/v1/exec` target is resolved and its project id frozen before admission; an unresolved target stays globally exclusive rather than guessing a project.
 
 Either flow coordinates per project directory with an owner-aware file lock
 under `<PIR_REPOS_ROOT>/.locks/` (pid + process start time, never inside the
@@ -260,34 +261,23 @@ project dir it protects). Fetch, the shared `refs/pir/last-bundle` read, the
 head pin and the worktree checkout are one critical section, as are worktree
 removal, clone install and purge; the review itself runs outside the lock.
 
-The lock is broken automatically only on proof that its owner is dead: same
-host, pid gone, or the pid now belongs to a different process (verified by
-the kernel's start token). A holder on another host, or an unreadable lock
-record, is never broken on an age heuristic — a waiter fails after its wait
-with the lock path for manual recovery, so a live holder is never joined by a
-second one. A leftover `.break` mutex that serializes dead-lock recovery is
-never reclaimed automatically either: proof that the dead record's owner is
-gone cannot prove no other breaker started later, and a stale unlink there can
-remove a live breaker and let two breakers delete each other's new main lock.
-If the `.break` owner is provably dead, acquisition fails immediately naming
-that path; an operator stops the related processes, confirms none are
-running, and removes the file by hand. Preparation (including a codegraph
-seed build) may therefore make a waiter queue for minutes; there is no
-degraded-timeout bound on that wait. Purging a clone or rebuilding a corrupt
-bundle cache is refused while linked worktrees are registered, and a purge
-deletes the clone before unregistering it, so a failed purge never strands an
-unreachable registration.
+Repository operations sharing one `PIR_REPOS_ROOT` must run on the same host and in the same PID namespace. A matching hostname alone does not identify that namespace. Within this deployment boundary, a lock can be reclaimed if the owner PID is gone or belongs to a different process (verified by the kernel's start token). An unreadable owner record is never broken on an age heuristic.
+
+A leftover `.break` mutex is never reclaimed automatically: a stale deletion could remove a live recovery mutex and let two processes delete each other's newly acquired main locks. If the `.break` owner is provably dead, acquisition fails immediately and names the path. Stop the related processes and confirm none are running before removing the file by hand. Preparation, including a CodeGraph seed build, can make a waiter queue for minutes; there is no degraded-mode fallback for that wait.
+
+Purging a clone or rebuilding a corrupt bundle cache is refused while linked worktrees are registered. A purge deletes the clone before unregistering it, so a failed purge never strands an unreachable registration.
 
 ### Queueing, reads, and jobs
 
-The serve process serializes mutating executor work, including bundle
-materialization, execution, and cleanup. Proven read-only commands can run
-outside that queue with a bounded concurrency limit. SQLite reads use a
-read-only WAL connection and avoid migrations and index synchronization.
+`pir serve` admits mutating executor work through a bounded, process-local scheduler instead of one global serial chain. `--review-concurrency N` (`PIR_REVIEW_CONCURRENCY`) sets the global slot count and `--project-review-concurrency N` (`PIR_PROJECT_REVIEW_CONCURRENCY`) caps admitted reviews per project; both default to `1`, and both must be positive decimal safe integers with flag > corresponding env > default and an empty env treated as unset. A slot spans repository preparation/materialization, command execution, and worktree cleanup; admitted maintenance work consumes one too, but waiting tasks do not. Raising only the global cap does not admit same-project parallelism.
+
+The scheduler distinguishes three scopes. A `review` task is charged to its project and may run alongside different-project reviews up to the global cap; a Gitea PR also carries a `resourceKey`, so its whole orchestrate-and-publish lifecycle is mutually exclusive. A `project-exclusive` task (`memory bootstrap`/`refresh`/`feedback`/`remember`/`verify-fix`/`sync`) blocks review and maintenance for the same project. A `global-exclusive` task (`repos add`/`remove`, direct-workspace commands, unknown targets) waits for the pool to drain and blocks new admissions while it runs. Bundle `find`/`audit`, registered `--repo` `find`/`audit`, and different Gitea PRs can overlap within those caps; repeated same-head webhooks keep the existing re-review/dedupe behavior, and a run replaced by a newer head rechecks before publishing and stands down. Verified read-only commands still run outside this pool under their separate 16-request cap. SQLite reads use a read-only WAL connection and avoid migrations and index synchronization.
+
+Workspace isolation is independent of concurrency: bundle and registered materializations use a fresh UUID-named linked worktree at an immutable pinned SHA, so overlapping runs of one project never share a checkout. The repository layer serializes shared mutations (registry, refs, seed index) with cross-process locks, and refuses to purge a project or rebuild a corrupt bundle cache while an active linked worktree still depends on it. CodeGraph keeps a private index in each worktree and a shared per-project seed protected by its existing cross-process lock.
 
 Remote `findings list` and `findings show` first send only repository identity
 to `/v1/review`. They read an existing database without uploading a bundle or
-waiting for the review queue. On first contact or an old database schema, the
+waiting for review admission. On first contact or an old database schema, the
 client resends a bundle through the normal path.
 
 Every queued `/v1/review` request has a job. With `async: true`, the service
@@ -295,6 +285,8 @@ responds with HTTP 202 and a job ID; clients poll `/v1/jobs/<id>` for the
 result. A synchronous client's disconnect also leaves the job running and its
 result available. Bundled remote audits use asynchronous submission by default.
 In remote mode, `--detach` makes any find/audit submission asynchronous and returns right after acceptance (#53): stdout carries a submission envelope with the full job id; exit 0 attests acceptance, never review success. Wait paths render a poll-liveness line on state changes and about once a minute (#55) — connection alive and log growth, explicitly not review progress.
+
+`GET /health` keeps its existing executor contract: `pending` counts running plus waiting admissions and `oldestPendingMs` is the oldest admission age; no new wire field was added. The admission scheduler is process-local, so a restart loses queued and running work; durable run rows and checkpoints remain, and separate serve processes do not coordinate.
 
 In local mode the same flag keeps the run alive without a server (ADR 0016 Part IV). The CLI re-executes itself with `detached: true` and `stdio: ["ignore", logFd, logFd]` bound to `~/.pir/logs/<jobId>.log` (0600, directory 0700), writes a schemaVersion-1 receipt before the spawn, and the child settles that receipt from its exit hook (`settledAt`, `exitCode`). A signal death runs no exit hook, so an unsettled receipt plus a log that stopped growing is exactly how a killed detach is identified; there is no watchdog and nothing resumes it. The local receipt reuses the #52 layer instead of introducing a second record: `mode: "local"` carries `logPath`, no origin and no run id, and `pir receipts show` prints local follow-up commands instead of the remote jobs lane.
 
@@ -389,11 +381,7 @@ worktree index is stripped and the review runs degraded rather than blocked or
 served from a suspect index. Without the opt-in, serve reviews stay degraded
 even when the CLI is installed in the image.
 
-One known cost: activation runs inside the server's single serial request
-queue, so the first review of a project (full index build, minutes on large
-repos) head-of-line blocks unrelated queued reviews, and re-seeding after a
-dropped seed repeats it. That is the documented tradeoff of the opt-in; a
-per-project queue lane would remove it if serve ever grows one.
+One known cost: activation runs inside the review's admission slot, so with the default single global slot the first review of a project (full index build, minutes on large repos) head-of-line blocks unrelated queued reviews, and re-seeding after a dropped seed repeats it. Additional global slots let unrelated projects proceed; raising both concurrency caps also permits same-project review execution to overlap after coordinated preparation. Worktree-private indexes and the shared seed lock are unchanged; preparation can still wait for the repository resource lock.
 
 Built-in `frontend`, `golang` and `typescript` packs activate from marker files
 at the selected head, or from `--plugins`. Markers are repo-relative literal
@@ -452,6 +440,7 @@ repository and global layers keep working from the bundle.
 - [Layered project rule file and rule introspection](adr/0010-project-rules-and-introspection.md)
 - [Deferred and rejected directions](adr/0011-deferred-and-rejected-directions.md)
 - [Invocation inputs, outputs and long-running execution](adr/0016-invocation-inputs-outputs-and-long-runs.md)
+- [Bounded parallel review admission on `pir serve`](adr/0024-parallel-server-reviews.md)
 
 The ADRs record decisions at the time they were made. Current module behavior
 is described above and in the source files.

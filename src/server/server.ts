@@ -16,13 +16,15 @@ import { redactUserBackgroundArgv } from "../core/user-background.js";
 import { pirStateBase } from "./web-store.js";
 import { isGitRepo } from "../changes/git.js";
 import { pirConfigDir } from "../rules/project-rules.js";
-import { findRegisteredRepoByUrl } from "../app/repos.js";
+import { findRegisteredRepoByUrl, projectIdFor, resolveRepo } from "../app/repos.js";
 import { parseGiteaEvent, parsePullRequestPayload, verifyGiteaSignature } from "../gitea/webhook.js";
 import { evaluateTrigger } from "../gitea/policy.js";
 import { loadGiteaConfig, resolveTriggerPolicy, type GiteaIntegrationConfig } from "../gitea/config.js";
 import { createGiteaClient, type GiteaFetch } from "../gitea/client.js";
 import { giteaStateKey } from "../gitea/state.js";
 import { orchestrateGiteaReview, type GiteaReviewRunner } from "../gitea/orchestrator.js";
+import type { AgentSessionFactory } from "../agents/types.js";
+import { ExecutorScheduler, type ExecutorScope } from "./executor-scheduler.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +38,8 @@ export interface ServeOptions {
   workspace?: string;
   /** Serve the read-only web UI (same as PIR_WEB_UI=1). */
   web?: boolean;
+  reviewConcurrency?: number;
+  projectReviewConcurrency?: number;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -82,17 +86,11 @@ export const NEEDFULL_MARKER = "needFull: the shipped thin bundle could not be a
 const REPO_CONTEXT_COMMANDS = new Set(["find", "audit", "memory", "findings", "feedback", "remember", "verify-fix"]);
 
 /**
- * HTTPS wrapper around the shared command executor. One request = one pir
- * invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns
- * {code, output, log}. Mutating commands run serially — review sessions and
- * the sqlite store assume single-writer access per workspace — but provably
- * read-only ones (version, models, repos list) skip the queue entirely, and
- * pure sqlite reads (memory status, findings list/show) run as WAL readers
- * alongside the writer. Both fast lanes share a small concurrency cap. See
- * classifyExecLane.
+ * HTTPS wrapper around the shared command executor. One request = one pir invocation: POST /v1/exec {"argv": ["find", "--json", ...]} returns {code, output, log}. Isolated reviews share bounded admission; project maintenance and unclassified workspace commands retain exclusive access. Proven reads use a separately bounded fast lane. See classifyExecLane.
  */
 export async function runServe(argv: string[]): Promise<void> {
   const options = parseServeArgs(argv);
+  const concurrency = resolveServeConcurrency(options);
   const host = options.host ?? "0.0.0.0";
   const port = options.port ?? 8790;
   const token = options.token ?? process.env.PIR_SERVER_TOKEN;
@@ -115,6 +113,7 @@ export async function runServe(argv: string[]): Promise<void> {
     port,
     token,
     workspace,
+    ...concurrency,
     tls: await resolveTls(options),
     ...(webUi ? { webUi } : {}),
     ...loadGiteaServeInput(),
@@ -185,32 +184,24 @@ export async function startServer(input: {
   webUi?: { token?: string; stateRoot: string; webRoot: string };
   /** Gitea webhook integration; absent (or a null config) keeps the route mounted but 503. */
   gitea?: { config: GiteaIntegrationConfig; configDir: string; fetchImpl?: GiteaFetch; runner?: GiteaReviewRunner };
+  /** Programmatic model-free execution seam; HTTP callers cannot set this. */
+  sessionFactory?: AgentSessionFactory;
+  /** Executor capacity, including preparation and cleanup; defaults to one. */
+  reviewConcurrency?: number;
+  /** Maximum admitted reviews for one project; defaults to one. */
+  projectReviewConcurrency?: number;
 }): Promise<ServerHandle> {
   const log = (message: string): void => {
     process.stderr.write(`[pir-serve ${new Date().toISOString()}] ${message}\n`);
   };
 
-  let queue: Promise<unknown> = Promise.resolve();
-  // Tasks that have been enqueued but not settled yet, with their arrival
-  // time — the basis for the /health queue observability.
-  const queuedAt = new Map<object, number>();
-  const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
-    const id = {};
-    queuedAt.set(id, Date.now());
-    const run = queue.then(task, task);
-    // The chain tail never rejects and drops the bookkeeping entry on
-    // settle, whichever way the task went.
-    queue = run.then(
-      () => queuedAt.delete(id),
-      () => queuedAt.delete(id),
-    );
-    return run;
-  };
-  const executorStats = (): { pending: number; oldestPendingMs: number } => {
-    let oldest: number | null = null;
-    for (const at of queuedAt.values()) if (oldest === null || at < oldest) oldest = at;
-    return { pending: queuedAt.size, oldestPendingMs: oldest === null ? 0 : Date.now() - oldest };
-  };
+  const scheduler = new ExecutorScheduler({
+    concurrency: input.reviewConcurrency,
+    projectConcurrency: input.projectReviewConcurrency,
+  });
+  const enqueue = <T>(task: () => Promise<T>, scope: ExecutorScope = { kind: "global-exclusive" }): Promise<T> =>
+    scheduler.run(scope, task);
+  const executorStats = () => scheduler.stats();
 
   // Fast-lane requests (unqueued + readonly) run outside the serial queue,
   // so they need their own bound: each one spawns git/codegraph subprocesses
@@ -343,7 +334,7 @@ export async function startServer(input: {
    * POST /v1/webhook/gitea — the Gitea PR-review ingress. HMAC-verified (no
    * bearer token: Gitea signs the raw body with the configured shared
    * secret), then routed through the pure policy gate. Accepted PR triggers
-   * answer 202 immediately and run the orchestration on the serial queue as
+   * answer 202 immediately and run the orchestration on the executor as
    * a job; every rejection answers 200 with the machine-readable reason so
    * Gitea does not retry unwatched events. An unconfigured integration
    * answers 503 — the route itself is the constant surface.
@@ -404,6 +395,7 @@ export async function startServer(input: {
         return;
       }
 
+      const registered = findRegisteredRepoByUrl(view.cloneUrl);
       const prKey = giteaStateKey(view.repoFullName, view.number);
       const job = jobs.create({ command: "gitea-review", argv: [prKey, view.headSha] });
       // Registering the head AFTER job creation, BEFORE responding: the
@@ -413,6 +405,9 @@ export async function startServer(input: {
       json(202, { accepted: true, reason: "accepted", jobId: job.jobId });
       log(`gitea webhook ${prKey}@${view.headSha.slice(0, 10)} accepted (job ${job.jobId})`);
 
+      const scope: ExecutorScope = registered
+        ? { kind: "review", projectId: registered.entry.projectId, resourceKey: prKey }
+        : { kind: "global-exclusive" };
       void enqueue(async () => {
         job.start();
         const logLines: string[] = [];
@@ -422,7 +417,6 @@ export async function startServer(input: {
           log(`gitea ${prKey} :: ${message}`);
         };
         try {
-          const registered = findRegisteredRepoByUrl(view.cloneUrl);
           const outcome = await orchestrateGiteaReview({
             config,
             configDir: input.gitea!.configDir,
@@ -448,7 +442,7 @@ export async function startServer(input: {
           job.fail(message);
           log(`gitea job ${job.jobId} failed: ${message}`);
         }
-      });
+      }, scope);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log(`gitea webhook error: ${message}`);
@@ -496,9 +490,13 @@ export async function startServer(input: {
       // Whitelist the command: parseArgs is the authority on what the first
       // positional is (it skips value-flag arguments, so a URL after --repo
       // can't masquerade as the command).
-      const command = parseArgs(argv).positional[0] ?? "find";
+      const reviewArgs = parseArgs(argv);
+      const command = reviewArgs.positional[0] ?? "find";
       if (!REVIEW_ENDPOINT_COMMANDS.has(command)) {
         throw new Error(`command not allowed on /v1/review: ${command} (use /v1/exec for repos/models)`);
+      }
+      if (reviewArgs.flags.has("--repo")) {
+        throw new Error("--repo is not accepted on /v1/review; use /v1/exec for registered repositories");
       }
 
       // Force the review into the worktree; drop any client --cwd (both the
@@ -538,9 +536,7 @@ export async function startServer(input: {
         head: parsed.head,
       };
 
-      // Bundle-free read lane: pure db reads answered while the serial queue
-      // is busy with an audit. Falls through to the queued materialize path
-      // on first contact (db missing or not yet migrated), which creates it.
+      // Pure database reads bypass executor admission; first contact falls through to materialization to create or migrate the database.
       if (isBundleFreeReadArgv(cleanedArgv)) {
         const { projectIdFor, reviewDbPath } = await import("../app/repos.js");
         const { dbCurrentForRead } = await import("../memory/index.js");
@@ -560,6 +556,7 @@ export async function startServer(input: {
           };
           const result = await fastLane.run(() =>
             executePirCommand(["--cwd", input.workspace, ...cleanedArgv], {
+              factory: input.sessionFactory,
               cwdGuard: input.workspace,
               dbPath,
               readOnlyMemory: true,
@@ -585,9 +582,11 @@ export async function startServer(input: {
       const bundle = Buffer.from(parsed.bundleBase64, "base64");
       const { materializeFromBundle, reviewDbPath } = await import("../app/repos.js");
       const job = jobs.create({ command, argv: cleanedArgv });
-      // Materialization, command execution and worktree cleanup share one
-      // queue slot: the bundle fetch and the worktree operate on the shared
-      // per-project repo directory, which no other in-flight task may touch.
+      const projectId = projectIdFor(meta.remoteUrl, meta.rootCommit);
+      const scope: ExecutorScope = command === "find" || command === "audit"
+        ? { kind: "review", projectId }
+        : { kind: "project-exclusive", projectId };
+      // Admission spans materialization through cleanup; the repository layer separately coordinates shared Git mutations.
       const runQueued = (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> =>
         enqueue(async (): Promise<{ needFull: true } | { needFull: false; code: number; output: string }> => {
           job.start();
@@ -610,6 +609,7 @@ export async function startServer(input: {
             });
             const effectiveArgv = ["--cwd", materialized.worktree, ...pinnedArgv];
             const result = await executePirCommand(effectiveArgv, {
+              factory: input.sessionFactory,
               cwdGuard: materialized.worktree,
               dbPath: reviewDbPath(materialized.projectId),
               onLog: (message) => {
@@ -622,7 +622,7 @@ export async function startServer(input: {
           } finally {
             await materialized?.cleanup();
           }
-        });
+        }, scope);
 
       if (parsed.async) {
         res.writeHead(202, { "content-type": "application/json" });
@@ -806,7 +806,7 @@ export async function startServer(input: {
         } finally {
           store.close();
         }
-      });
+      }, { kind: "project-exclusive", projectId: derived });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(payload));
     } catch (err) {
@@ -878,7 +878,23 @@ export async function startServer(input: {
             : "queued"
           : cheap;
       const logLines: string[] = [];
+      let registeredRepo: ReturnType<typeof resolveRepo> | undefined;
+      if (lane === "queued" && !flags.has("--help") && typeof flags.get("--repo") === "string"
+        && ["find", "audit", "memory", "findings", "verify-fix"].includes(command ?? "")) {
+        try {
+          registeredRepo = resolveRepo(flags.get("--repo") as string);
+        } catch {
+          // Preserve executor validation and queued registry creation semantics when there is no resolvable target yet.
+        }
+      }
+      const scope: ExecutorScope = registeredRepo
+        ? command === "find" || command === "audit"
+          ? { kind: "review", projectId: registeredRepo.entry.projectId }
+          : { kind: "project-exclusive", projectId: registeredRepo.entry.projectId }
+        : { kind: "global-exclusive" };
       const execOptions = {
+        factory: input.sessionFactory,
+        registeredRepo,
         cwdGuard: input.workspace,
         ...(lane === "readonly" ? { readOnlyMemory: true } : {}),
         onLog: (message: string) => {
@@ -886,10 +902,9 @@ export async function startServer(input: {
           log(`${redactUserBackgroundArgv(argv!).join(" ")} :: ${message}`);
         },
       };
-      // Only the queued lane joins the serial chain; the other two run
-      // alongside whatever the queue is busy with, under the fast-lane cap.
+      // Unresolved/direct-workspace commands remain globally exclusive; only isolated registered targets may share admission.
       const result = await (lane === "queued"
-        ? enqueue(() => executePirCommand(effectiveArgv, execOptions))
+        ? enqueue(() => executePirCommand(effectiveArgv, execOptions), scope)
         : fastLane.run(() => executePirCommand(effectiveArgv, execOptions)));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ code: result.code, output: result.output, log: logLines }));
@@ -973,10 +988,7 @@ export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Pr
 }
 
 /**
- * Scheduling decision for a /v1/exec request. The serial queue exists
- * because review sessions, worktree materialization and the memory db
- * assume single-writer access — but that assumption only covers commands
- * that write. Three groups don't need the queue:
+ * Scheduling decision for a /v1/exec request. The queued lane uses resource-aware admission; unclassified commands remain exclusive. The proven read groups bypass admission:
  *
  * - "unqueued" — commands that touch no review worktree and no memory db:
  *   version, help, models, and `repos list` (a pure registry read; the
@@ -989,9 +1001,7 @@ export function createFastLaneLimiter(capacity: number): { run<T>(task: () => Pr
  * - everything else — "queued". That deliberately includes `repos add` /
  *   `repos remove`: the registry writes are lock-protected, but add/remove
  *   also clone into, fetch into and rmSync the shared per-project dirs
- *   under PIR_REPOS_ROOT — the same dirs bundle reviews materialize from —
- *   so un-queuing them without per-project locks could break an in-flight
- *   review.
+ *   under PIR_REPOS_ROOT; they remain globally exclusive even though the repository layer also coordinates its shared mutations.
  *
  * Exported for tests; the lane only picks a scheduling order, never
  * validation (usage errors surface from the queued executor path).
@@ -1066,10 +1076,35 @@ function parseServeArgs(argv: string[]): ServeOptions {
       else if (token === "--key") options.key = value();
       else if (token === "--token") options.token = value();
       else if (token === "--workspace") options.workspace = value();
-      else if (token === "--web") options.web = true;
-      else throw new UsageError(`unknown serve option: ${token}`);
+       else if (token === "--web") options.web = true;
+       else if (token === "--review-concurrency") options.reviewConcurrency = concurrencyValue(value(), token);
+       else if (token === "--project-review-concurrency") options.projectReviewConcurrency = concurrencyValue(value(), token);
+       else throw new UsageError(`unknown serve option: ${token}`);
   }
   return options;
+}
+
+function concurrencyValue(raw: string, name: string): number {
+  const value = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new UsageError(`${name} must be a positive decimal safe integer`);
+  }
+  return value;
+}
+
+/** Flags override their corresponding environment variable; absent or blank environment values preserve serial defaults. */
+export function resolveServeConcurrency(
+  options: Pick<ServeOptions, "reviewConcurrency" | "projectReviewConcurrency">,
+  env: Partial<Pick<NodeJS.ProcessEnv, "PIR_REVIEW_CONCURRENCY" | "PIR_PROJECT_REVIEW_CONCURRENCY">> = process.env,
+): { reviewConcurrency: number; projectReviewConcurrency: number } {
+  const read = (flag: number | undefined, raw: string | undefined, name: string): number => {
+    if (flag !== undefined) return concurrencyValue(String(flag), name);
+    return raw === undefined || raw.trim() === "" ? 1 : concurrencyValue(raw, name);
+  };
+  return {
+    reviewConcurrency: read(options.reviewConcurrency, env.PIR_REVIEW_CONCURRENCY, "--review-concurrency / PIR_REVIEW_CONCURRENCY"),
+    projectReviewConcurrency: read(options.projectReviewConcurrency, env.PIR_PROJECT_REVIEW_CONCURRENCY, "--project-review-concurrency / PIR_PROJECT_REVIEW_CONCURRENCY"),
+  };
 }
 
 interface TlsMaterial {

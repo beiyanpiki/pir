@@ -175,6 +175,8 @@ are routed as follows:
 | `models`, `repos`, or commands using `--repo` | `/v1/exec` |
 | `memory sync` | local database plus `/v1/memory/sync` |
 
+A bundle request to `/v1/review` cannot carry `--repo`: the server answers HTTP 400 and directs the caller to `/v1/exec`, so a bundle cannot re-target a registered project. Registered targets are resolved and their project identity frozen before admission.
+
 The client pins refs to SHAs and ships unpushed code. Bundles are packed in a
 temporary bare repository that reads the checkout's objects (#46) — the source
 repo is never written, so a read-only `.git` works. `--uncommitted` ships a
@@ -544,10 +546,7 @@ PI_DEFAULT_MODEL=<model-id>
 PIR_PORT=8790
 ```
 
-Optional: `PI_DEFAULT_THINKING`, `PIR_TRANSCRIPTS=1`, `PIR_WEB_UI=1`, and a
-separate `PIR_WEB_UI_TOKEN`. Set `PIR_TRANSCRIPTS=1` explicitly when historical
-timelines are needed: Compose passes this variable even when empty, which
-prevents the web-enabled service from assigning its unset-variable default.
+Optional: `PI_DEFAULT_THINKING`, `PIR_TRANSCRIPTS=1`, `PIR_WEB_UI=1`, a separate `PIR_WEB_UI_TOKEN`, and review concurrency `PIR_REVIEW_CONCURRENCY`/`PIR_PROJECT_REVIEW_CONCURRENCY` (both default 1). Set `PIR_TRANSCRIPTS=1` explicitly when historical timelines are needed: Compose passes this variable even when empty, which prevents the web-enabled service from assigning its unset-variable default.
 Discover catalog IDs without making model calls:
 
 ```bash
@@ -577,6 +576,16 @@ TLS resolution: explicit pair > `PIR_TLS_CERT`/`PIR_TLS_KEY` > generated
 self-signed pair under `PIR_CERT_DIR` (default `/tmp/pir-certs`). Both members
 of a configured pair are required. Plain HTTP fallback is allowed only with
 `PIR_ALLOW_HTTP=1` when certificate generation is unavailable.
+
+### Review concurrency
+
+`pir serve` admission is bounded and process-local. `--review-concurrency N` (`PIR_REVIEW_CONCURRENCY`) sets global slots; `--project-review-concurrency N` (`PIR_PROJECT_REVIEW_CONCURRENCY`) caps admitted reviews per project. Both default to `1` (serial); precedence is flag > corresponding env > default, an empty env counts as unset, and values must be positive decimal safe integers or serve refuses to start. A slot covers repository preparation/materialization, execution, and worktree cleanup; admitted maintenance occupies one, but waiting tasks do not. Raise both caps for same-project parallelism; `pir serve --review-concurrency 4 --project-review-concurrency 2` is the documented shape, and `2/2` is the conservative first rollout.
+
+The caps admit work, not model requests: per-run `--verify-concurrency` and `--angles` can multiply sessions, and provider rate limits remain. Bundle `find`/`audit`, registered `--repo` `find`/`audit`, and different Gitea PRs can overlap within the caps. One Gitea PR's whole lifecycle stays mutually exclusive; repeated same-head deliveries keep the existing re-review/dedupe behavior, and an old head replaced during model execution rechecks before publishing and stands down. Project memory maintenance is exclusive with same-project review; `repos add`/`remove`, direct-workspace commands, and unknown targets are globally exclusive; the proven read-only fast lane keeps its separate 16-request cap. Memory identity is unchanged: one project keeps one database keyed by remote URL plus root commit, and runs/findings/audit state/transcripts stay isolated per run rather than per PR or branch.
+
+`GET /health` is unchanged on the wire: `executor.pending` counts running plus waiting and `oldestPendingMs` is the oldest admission age. A restart loses queued and running work (durable runs remain); multiple serve processes do not coordinate, and there is no persistent queue, restart resume, global model limiter, or automatic PR cancellation.
+
+Keep `PIR_REPOS_ROOT` within one host and PID namespace. For Compose deployments use `docker compose exec pir` for repository administration; do not mount the service repository volume into a host CLI or sidecar with a different PID namespace.
 
 Service endpoints use bearer auth when a token is configured; `/health` is
 public. The optional web explorer has its own viewer token and cannot execute
@@ -612,7 +621,7 @@ Prefer the CLI for bundles and job handling. Direct callers use:
 
 | Endpoint | Request / result |
 | --- | --- |
-| `GET /health` | `{ok, version, tls, executor:{pending, oldestPendingMs}}` |
+| `GET /health` | `{ok, version, tls, executor:{pending, oldestPendingMs}}` — `pending` counts running plus waiting; no new field |
 | `POST /v1/exec` | `{argv:["models","--json"]}` -> `{code,output,log}` |
 | `POST /v1/review` | bundle request below -> result or async acceptance |
 | `GET /v1/jobs` | `{jobs:[...]}` summaries |
@@ -682,7 +691,7 @@ review job (poll `GET /v1/jobs/<id>`; the job output is
 `unwatched-event`, `unwatched-action`, `wip`, `base-branch`, `skip-label`,
 `bot-sender` — no job is created); `401` invalid signature; `400` malformed
 body or routing headers. A newer webhook for the same PR supersedes the older
-run's job. The full setup walkthrough, per-repo override semantics and a
+run's job. Different PRs can run in parallel once both serve concurrency caps are raised; one PR's orchestrate-and-publish lifecycle stays mutually exclusive, repeated same-head deliveries keep existing re-review/dedupe, and an old head replaced during model execution stands down before publishing. The full setup walkthrough, per-repo override semantics and a
 troubleshooting table live in the Gitea integration section of `README.md`
 (and `docs/README.zh-CN.md`).
 
@@ -698,6 +707,8 @@ troubleshooting table live in the Gitea integration section of `README.md`
 | `PIR_STATE_IN_PROJECT=1` | local state in `<repo>/.pir/` |
 | `PIR_STATE_ROOT` | central state root with project-ID subdirectories |
 | `PIR_REPOS_ROOT` | server repository registry/materialization root |
+| `PIR_REVIEW_CONCURRENCY` | global serve review-admission slots; default `1`; `--review-concurrency` wins over this env |
+| `PIR_PROJECT_REVIEW_CONCURRENCY` | per-project review-admission cap; default `1`; `--project-review-concurrency` wins over this env; raise both caps together |
 | `PIR_TRANSCRIPTS=1` | retained session snapshots and run manifest beside memory DB |
 | `PIR_KEEP_WORKTREE=1` | retain materialized review worktrees for debugging |
 | `PIR_WEB_UI=1`, `PIR_WEB_UI_TOKEN` | read-only explorer and separate viewer auth |
