@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync, chmodSync, truncateSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -345,6 +345,169 @@ test("findRegisteredRepoByUrl matches across transports and returns null for unk
     }
 
     assert.equal(findRegisteredRepoByUrl("https://other.example.com/x/y.git"), null);
+  } finally {
+    origin.cleanup();
+  }
+});
+
+test("a corrupt bundle cache is not rebuilt while another review worktree is live", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-heal-live-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    repo.commit("base");
+    repo.write("src/b.ts", "export const b = 2;\n");
+    const headCommit = repo.commit("head");
+
+    const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+    const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+    const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+    const meta = { remoteUrl, rootCommit, base: null, head: headCommit };
+    const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+
+    const first = await materializeFromBundle(bundle, meta);
+    try {
+      const cacheDir = path.join(reposRoot, projectIdFor(remoteUrl, rootCommit));
+      for (const pack of readdirSync(path.join(cacheDir, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))) {
+        const packPath = path.join(cacheDir, ".git", "objects", "pack", pack);
+        chmodSync(packPath, 0o644);
+        truncateSync(packPath, 100);
+      }
+      // A second review of the same project must not "heal" the cache by
+      // deleting the repo the first review's worktree lives in.
+      await assert.rejects(materializeFromBundle(bundle, meta), /refusing to rebuild corrupt bundle cache/);
+      assert.ok(existsSync(cacheDir), "the shared cache survives");
+      assert.equal(
+        readFileSync(path.join(first.review.worktree, "src", "b.ts"), "utf8"),
+        "export const b = 2;\n",
+        "the live worktree is still readable",
+      );
+    } finally {
+      await first.review.cleanup();
+    }
+    // Once no worktree is registered, the rebuild is allowed again.
+    const healed = await materializeFromBundle(bundle, meta);
+    try {
+      assert.equal(healed.review.headCommit, headCommit);
+    } finally {
+      await healed.review.cleanup();
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("a failed first bundle contact removes the partial cache and releases the repo lock", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-fail-clean-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    const headCommit = repo.commit("head");
+    const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+    const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+    const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+    const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+    const forged = "f".repeat(40);
+    const cacheDir = path.join(reposRoot, projectIdFor(remoteUrl, rootCommit));
+
+    await assert.rejects(
+      materializeFromBundle(bundle, { remoteUrl, rootCommit, base: null, head: forged }),
+      /does not contain the claimed head/,
+    );
+    assert.ok(!existsSync(cacheDir), "the partial first-contact project dir was removed");
+    assert.equal(existsSync(path.join(reposRoot, "work")) ? readdirSync(path.join(reposRoot, "work")).length : 0, 0, "no worktree leaked");
+
+    // An immediate retry reaches the same, real error instead of a busy lock:
+    // the failed attempt released its resource lock.
+    await assert.rejects(
+      materializeFromBundle(bundle, { remoteUrl, rootCommit, base: null, head: forged }),
+      /does not contain the claimed head/,
+    );
+    const ok = await materializeFromBundle(bundle, { remoteUrl, rootCommit, base: null, head: headCommit });
+    try {
+      assert.equal(ok.review.headCommit, headCommit);
+    } finally {
+      await ok.review.cleanup();
+    }
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("a failed registered materialization releases the lock and leaves no worktree", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-fail-reg-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    repo.commit("head");
+    const { addRepo, materializeRegistered } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(repo.dir, "demo");
+    const dir = path.join(reposRoot, entry.projectId);
+
+    await assert.rejects(
+      materializeRegistered(dir, entry.projectId, { branch: "does-not-exist", noFetch: true }),
+      /rev-parse/,
+    );
+    assert.equal(existsSync(path.join(reposRoot, "work")) ? readdirSync(path.join(reposRoot, "work")).length : 0, 0);
+
+    const review = await materializeRegistered(dir, entry.projectId, { noFetch: true });
+    await review.cleanup();
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("cleanup still removes the worktree after the clone disappears", async (t) => {
+  const { reposRoot } = sandbox(t);
+  const repo = createTempGitRepo("pir-cleanup-gone-");
+  try {
+    repo.write("src/a.ts", "export const a = 1;\n");
+    const headCommit = repo.commit("head");
+    const { createBundle, materializeFromBundle, projectIdFor } = await import("../../dist/app/repos.js");
+    const { getRootCommit, getRemoteUrl } = await import("../../dist/changes/git.js");
+    const [rootCommit, remoteUrl] = await Promise.all([getRootCommit(repo.dir), getRemoteUrl(repo.dir)]);
+    const bundle = await createBundle(repo.dir, { base: null, head: headCommit });
+    const materialized = await materializeFromBundle(bundle, { remoteUrl, rootCommit, base: null, head: headCommit });
+
+    // A human deleting the clone must not leave cleanup to guess: the
+    // worktree is dropped even though git worktree remove cannot run.
+    rmSync(path.join(reposRoot, projectIdFor(remoteUrl, rootCommit)), { recursive: true, force: true });
+    await materialized.review.cleanup();
+    assert.ok(!existsSync(materialized.review.worktree), "the worktree directory is gone");
+    assert.equal(readdirSync(path.join(reposRoot, "work")).length, 0);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test("the Gitea pull-ref flow prepares sequentially and reviews the SHA it fetched", async (t) => {
+  sandbox(t);
+  const origin = createTempGitRepo("pir-pull-flow-");
+  try {
+    origin.write("src/who.txt", "one\n");
+    const head = origin.commit("head");
+    await git(origin.dir, ["update-ref", "refs/pull/7/head", head]);
+    const { addRepo, fetchPullRef, materializeRegistered } = await import("../../dist/app/repos.js");
+    const entry = await addRepo(origin.dir);
+    const dir = path.join(process.env.PIR_REPOS_ROOT, entry.projectId);
+
+    // fetchPullRef releases its lock before materializeRegistered takes it
+    // again; a different push moving the pull ref in between must not change
+    // which commit the pinned SHA reviews.
+    const fetched = await fetchPullRef(dir, 7);
+    assert.equal(fetched, head);
+    origin.write("src/who.txt", "two\n");
+    const nextHead = origin.commit("next");
+    await git(origin.dir, ["update-ref", "refs/pull/7/head", nextHead]);
+
+    const review = await materializeRegistered(dir, entry.projectId, { branch: fetched });
+    try {
+      assert.equal(review.headCommit, head);
+      assert.equal(readFileSync(path.join(review.worktree, "src", "who.txt"), "utf8"), "one\n");
+    } finally {
+      await review.cleanup();
+    }
+    assert.equal(await fetchPullRef(dir, 7), nextHead);
   } finally {
     origin.cleanup();
   }
