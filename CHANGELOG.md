@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v0.9.0 - 2026-11-26
+
+### Highlights
+
+- Added bounded parallel server review admission for API and Gitea requests, with global and per-project concurrency controls. Repository preparation, execution, and cleanup share the admission slot; maintenance work remains exclusive at the appropriate scope.
+- Isolated concurrent reviews in fresh worktrees pinned to immutable commits, and serialized shared repository mutations with owner-aware cross-process resource locks. Purge and bundle-cache recovery refuse to remove repositories with active worktrees.
+- Made finding display-ID allocation and insertion atomic to prevent collisions between concurrent writers.
+
+### Upgrade notes
+
+Both `--review-concurrency` (`PIR_REVIEW_CONCURRENCY`) and `--project-review-concurrency` (`PIR_PROJECT_REVIEW_CONCURRENCY`) default to `1`, preserving serial execution. Raise both for same-project parallelism; `2/2` is the recommended first rollout. These limits control admitted runs, not model requests: verifier concurrency and review angles can multiply provider traffic and cost.
+
+Admission is process-local and queued work is not durable. Do not share state, repository, or config volumes between multiple serve instances. An orphaned repository `.break` mutex is never reclaimed automatically; stop the related processes and confirm none are running before removing the named file manually.
+
+两个并发上限默认均为 `1`，保持原有串行行为；同项目并行需同时调高，首次灰度建议从 `2/2` 开始。它们限制准入运行数而非模型请求数，请留意验证并发和评审角度带来的流量与费用放大。准入队列仅存在于进程内，不支持重启恢复；多个 serve 实例不得共享状态、仓库或配置卷。遗留的 `.break` 互斥文件不会自动回收，需停止相关进程并确认无进程运行后，才可手动删除报错中指明的文件。
+
 ## v0.8.0 - 2026-11-24
 
 ### Highlights
