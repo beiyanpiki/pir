@@ -265,11 +265,18 @@ host, pid gone, or the pid now belongs to a different process (verified by
 the kernel's start token). A holder on another host, or an unreadable lock
 record, is never broken on an age heuristic — a waiter fails after its wait
 with the lock path for manual recovery, so a live holder is never joined by a
-second one. Preparation (including a codegraph seed build) may therefore make
-a waiter queue for minutes; there is no degraded-timeout bound on that wait.
-Purging a clone or rebuilding a corrupt bundle cache is refused while linked
-worktrees are registered, and a purge deletes the clone before unregistering
-it, so a failed purge never strands an unreachable registration.
+second one. A leftover `.break` mutex that serializes dead-lock recovery is
+never reclaimed automatically either: proof that the dead record's owner is
+gone cannot prove no other breaker started later, and a stale unlink there can
+remove a live breaker and let two breakers delete each other's new main lock.
+If the `.break` owner is provably dead, acquisition fails immediately naming
+that path; an operator stops the related processes, confirms none are
+running, and removes the file by hand. Preparation (including a codegraph
+seed build) may therefore make a waiter queue for minutes; there is no
+degraded-timeout bound on that wait. Purging a clone or rebuilding a corrupt
+bundle cache is refused while linked worktrees are registered, and a purge
+deletes the clone before unregistering it, so a failed purge never strands an
+unreachable registration.
 
 ### Queueing, reads, and jobs
 
