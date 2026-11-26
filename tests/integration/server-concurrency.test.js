@@ -206,12 +206,14 @@ test("registered execution cleans its worktree when database initialization fail
 
 test("bundle find and audit of one project overlap with isolated heads, runs, and transcripts", { timeout: 30000 }, async (t) => {
   const fixture = await sandbox(t, { reviewConcurrency: 2, projectReviewConcurrency: 2 }, { findings: true });
+  git(fixture.repo.dir, ["remote", "add", "origin", "https://example.invalid/shared-project.git"]);
   const events = [];
   t.after(onRunEvent((event) => events.push(event)));
   fixture.repo.write("src/value.ts", 'export const value = "two";\n');
   const head2 = fixture.repo.commit("second change");
-  const first = fixture.post("/v1/review", await fixture.reviewBody(fixture.head));
-  const second = fixture.post("/v1/review", await fixture.reviewBody(head2, ["audit", "--json"]));
+  // Legacy non-SHA metadata forces each materialization to resolve its own imported bundle ref; first-contact origin initialization is shared too.
+  const first = fixture.post("/v1/review", { ...await fixture.reviewBody(fixture.head), head: "HEAD" });
+  const second = fixture.post("/v1/review", { ...await fixture.reviewBody(head2, ["audit", "--json"]), head: "HEAD" });
   await Promise.all([fixture.factory.waitFor(fixture.head), fixture.factory.waitFor(head2)]);
   const firstRead = fixture.factory.reads.get(fixture.head);
   const secondRead = fixture.factory.reads.get(head2);
