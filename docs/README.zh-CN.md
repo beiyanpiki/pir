@@ -248,6 +248,8 @@ reviewer prompt 把该文本放在保留的 `<user_background>` 区段里——�
 
 `GET /health` 的返回结构保持不变：`executor.pending` 统计运行中加等待中的任务，`oldestPendingMs` 是最早的准入等待年龄，不新增字段。调度器是进程内的：重启会丢失排队中与运行中的工作（持久化的 run 记录和 checkpoint 仍在），多个 `pir serve` 进程之间不协调；本设计不提供持久队列、重启续跑、全局模型限流或 PR 自动取消。`/v1/review` 会以 HTTP 400 拒绝 `--repo` 并提示改用 `/v1/exec`，因此 bundle 请求不能改指向已注册仓库；注册目标会在入队前解析并冻结项目身份。
 
+不要在不同 PID 命名空间之间共享 `PIR_REPOS_ROOT`。如果服务运行在容器中，用 `docker compose exec pir` 在服务容器内管理仓库，不要从宿主机或 sidecar 操作同一个卷。
+
 从本地 checkout 提交的远程 audit 默认使用异步任务，可以用 `pir jobs list`、`status`、`wait` 和 `fetch` 查看。任务注册表在内存中，保留最近 100 个已结束的任务；评审运行与 findings 保存在 SQLite 中。`PIR_REMOTE_ASYNC=1` 可以让其他评审命令也走异步提交。`find`/`audit --detach` 提交后立即返回（#53）：stdout 输出携带完整任务 id 与后续命令的提交信封，本地回执是持久记录——退出码 `0` 表示**已受理**，不表示评审成功。等待期间（`jobs wait` 或提交后的轮询）状态行在状态变化和约每分钟各打印一次（#55）：只报告连接存活，不虚构评审进度。
 
 bundle 在一个临时 bare 仓库中打包，该仓库通过 alternates 只读取 checkout 的对象库（#46）：源仓库的 refs、index、config 和对象零写入，只读 `.git` 也可用。唯一例外是 `find --uncommitted`——它按设计先在源仓库记录工作区对象再打包。

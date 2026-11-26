@@ -585,6 +585,8 @@ The caps admit work, not model requests: per-run `--verify-concurrency` and `--a
 
 `GET /health` is unchanged on the wire: `executor.pending` counts running plus waiting and `oldestPendingMs` is the oldest admission age. A restart loses queued and running work (durable runs remain); multiple serve processes do not coordinate, and there is no persistent queue, restart resume, global model limiter, or automatic PR cancellation.
 
+Keep `PIR_REPOS_ROOT` within one host and PID namespace. For Compose deployments use `docker compose exec pir` for repository administration; do not mount the service repository volume into a host CLI or sidecar with a different PID namespace.
+
 Service endpoints use bearer auth when a token is configured; `/health` is
 public. The optional web explorer has its own viewer token and cannot execute
 reviews. Without that viewer token, it is enabled only on loopback binds.

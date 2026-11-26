@@ -414,6 +414,8 @@ A global slot covers repository preparation/materialization, review execution, a
 
 `GET /health` keeps its existing wire shape: `executor.pending` counts running plus waiting tasks and `oldestPendingMs` is the oldest admission age, with no new field. The scheduler is process-local: a restart loses queued and running work (durable run rows and checkpoints remain), separate `pir serve` processes do not coordinate, and this design does not add a persistent queue, restart resume, a global model limiter, or automatic PR cancellation. `/v1/review` rejects `--repo` with HTTP 400 and points at `/v1/exec`, so a bundle request cannot re-target a registered repository; registered targets resolve and freeze their project identity before admission.
 
+Do not share `PIR_REPOS_ROOT` across PID namespaces. For a containerized service, run repository administration inside the service container with `docker compose exec pir`, not from the host or a sidecar against the same volume.
+
 Remote audits sent from a checkout are asynchronous jobs by default.
 `pir jobs list`, `status`, `wait`, and `fetch` inspect them. The registry is in
 memory and retains the latest 100 settled jobs; runs and findings remain in

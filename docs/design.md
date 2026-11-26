@@ -261,23 +261,11 @@ project dir it protects). Fetch, the shared `refs/pir/last-bundle` read, the
 head pin and the worktree checkout are one critical section, as are worktree
 removal, clone install and purge; the review itself runs outside the lock.
 
-The lock is broken automatically only on proof that its owner is dead: same
-host, pid gone, or the pid now belongs to a different process (verified by
-the kernel's start token). A holder on another host, or an unreadable lock
-record, is never broken on an age heuristic — a waiter fails after its wait
-with the lock path for manual recovery, so a live holder is never joined by a
-second one. A leftover `.break` mutex that serializes dead-lock recovery is
-never reclaimed automatically either: proof that the dead record's owner is
-gone cannot prove no other breaker started later, and a stale unlink there can
-remove a live breaker and let two breakers delete each other's new main lock.
-If the `.break` owner is provably dead, acquisition fails immediately naming
-that path; an operator stops the related processes, confirms none are
-running, and removes the file by hand. Preparation (including a codegraph
-seed build) may therefore make a waiter queue for minutes; there is no
-degraded-timeout bound on that wait. Purging a clone or rebuilding a corrupt
-bundle cache is refused while linked worktrees are registered, and a purge
-deletes the clone before unregistering it, so a failed purge never strands an
-unreachable registration.
+Repository operations sharing one `PIR_REPOS_ROOT` must run on the same host and in the same PID namespace. A matching hostname alone does not identify that namespace. Within this deployment boundary, a lock can be reclaimed if the owner PID is gone or belongs to a different process (verified by the kernel's start token). An unreadable owner record is never broken on an age heuristic.
+
+A leftover `.break` mutex is never reclaimed automatically: a stale deletion could remove a live recovery mutex and let two processes delete each other's newly acquired main locks. If the `.break` owner is provably dead, acquisition fails immediately and names the path. Stop the related processes and confirm none are running before removing the file by hand. Preparation, including a CodeGraph seed build, can make a waiter queue for minutes; there is no degraded-mode fallback for that wait.
+
+Purging a clone or rebuilding a corrupt bundle cache is refused while linked worktrees are registered. A purge deletes the clone before unregistering it, so a failed purge never strands an unreachable registration.
 
 ### Queueing, reads, and jobs
 
